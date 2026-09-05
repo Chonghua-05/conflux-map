@@ -100,7 +100,12 @@ final class FullscreenMapLocationMenu {
         if (action == Action.SHARE_WAYPOINT) {
             return true;
         }
-        return action == Action.TELEPORT ? teleportCommandAvailable : estimatedHeightKnown;
+        // Height data is an optimization for staging and waypoint defaults, not a
+        // safety gate.  Unknown columns are common in the End void and while a
+        // predicted tile is still composing; callers provide a fallback Y and the
+        // ground-teleport service rechecks loaded terrain before sending the final
+        // command.
+        return action == Action.TELEPORT ? teleportCommandAvailable : true;
     }
 
     static boolean actionEnabled(

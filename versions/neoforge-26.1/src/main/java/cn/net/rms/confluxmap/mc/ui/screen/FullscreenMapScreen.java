@@ -1995,26 +1995,22 @@ public final class FullscreenMapScreen extends ConfluxScreen {
                 }
             }
             case CLEAR_PLAYER_HIGHLIGHT -> serverPlayerRadar.clearHighlight();
-            case SET_WAYPOINT -> target.blockY().ifPresent(y -> MinecraftAccess.setScreen(Minecraft.getInstance(),
+            case SET_WAYPOINT -> MinecraftAccess.setScreen(Minecraft.getInstance(),
                 WaypointEditScreen.forCreate(
                     this,
                     viewSession().dimension(),
                     target.blockX(),
-                    y,
+                    locationTargetY(target),
                     target.blockZ(),
                     this::viewWaypointStore
                 )
-            ));
+            );
             case EDIT_WAYPOINT -> {
                 if (waypoint != null) {
                     openWaypointFromLocationMenu(waypoint);
                 }
             }
-            case SHARE_LOCATION -> {
-                if (target.blockY().isPresent()) {
-                    shareTemporaryLocation(target);
-                }
-            }
+            case SHARE_LOCATION -> shareTemporaryLocation(target);
             case SHARE_WAYPOINT -> {
                 if (waypoint != null) {
                     shareWaypoint(waypoint);
@@ -2023,7 +2019,7 @@ public final class FullscreenMapScreen extends ConfluxScreen {
             case TELEPORT -> {
                 final SessionGuard.Session viewed = viewSession();
                 groundTeleport.teleport(
-                    target.blockX(), target.blockZ(), target.blockY(),
+                    target.blockX(), target.blockZ(), OptionalInt.of(locationTargetY(target)),
                     viewed.dimension(), viewed.world(), !viewingLiveSession()
                 );
             }
@@ -2041,7 +2037,7 @@ public final class FullscreenMapScreen extends ConfluxScreen {
 
     private void shareTemporaryLocation(final FullscreenMapLocationMenu.Target target) {
         final Minecraft client = Minecraft.getInstance();
-        if (client.player == null || target.blockY().isEmpty()) {
+        if (client.player == null) {
             return;
         }
         final String name = Texts.translatable("confluxmap.map.location_menu.temporary_name").getString();
@@ -2050,7 +2046,7 @@ public final class FullscreenMapScreen extends ConfluxScreen {
             name,
             viewSession().dimension(),
             target.blockX(),
-            target.blockY().getAsInt(),
+            locationTargetY(target),
             target.blockZ(),
             TEMPORARY_LOCATION_COLOR,
             "",
@@ -2061,6 +2057,17 @@ public final class FullscreenMapScreen extends ConfluxScreen {
         MinecraftAccess.setScreen(client, new WaypointShareConfirmScreen(
             this, temporary, WaypointShareConfirmScreen.Target.CHAT
         ));
+    }
+
+    /**
+     * Returns the Y used when a cursor column has no captured/predicted surface yet.  The value
+     * is only a waypoint/staging hint: live teleports resolve the loaded target chunk before the
+     * final command, while a missing End surface remains a valid cursor location for annotations.
+     */
+    private int locationTargetY(final FullscreenMapLocationMenu.Target target) {
+        return target.blockY().orElseGet(() -> this.minecraft.player != null
+            ? this.minecraft.player.blockPosition().getY()
+            : FullscreenMapScreen.DEFAULT_CANDIDATE_WAYPOINT_Y);
     }
 
     private void shareWaypoint(final WaypointRenderEntry waypoint) {

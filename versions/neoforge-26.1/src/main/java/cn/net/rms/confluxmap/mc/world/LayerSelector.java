@@ -84,7 +84,10 @@ public final class LayerSelector {
         final int eyeY = (int) Math.floor(viewpoint.eyeY());
         refreshPivot(eyeY);
 
-        final DimensionKind kind = classify(world.dimensionType());
+        // The End has a dedicated map plane.  Some NeoForge/Minecraft builds expose
+        // skylight metadata differently for custom End dimension types, so the
+        // canonical dimension key takes precedence over that metadata.
+        final DimensionKind kind = classify(world);
         final MapLayer layer;
         switch (kind) {
             case HAS_CEILING:
@@ -117,7 +120,7 @@ public final class LayerSelector {
     /** Keybind entry point ({@code key.confluxmap.cycle_layer}): advances the override for the current dimension. */
     public void cycleOverride() {
         final ClientLevel world = client.level;
-        final DimensionKind kind = world != null ? classify(world.dimensionType()) : DimensionKind.SKY_LIT;
+        final DimensionKind kind = world != null ? classify(world) : DimensionKind.SKY_LIT;
         config.layerOverride = nextOverride(kind, config.layerOverride);
     }
 
@@ -195,6 +198,13 @@ public final class LayerSelector {
             default:
                 return debouncedPivotY;
         }
+    }
+
+    /** Classifies a live level, pinning the vanilla End to its dedicated surface layer. */
+    private static DimensionKind classify(final ClientLevel world) {
+        return world.dimension().equals(net.minecraft.world.level.Level.END)
+            ? DimensionKind.NO_SKY_NO_CEILING
+            : classify(world.dimensionType());
     }
 
     /** §1's generic classification: has_ceiling, else no-sky-light, else ordinary sky-lit. */
