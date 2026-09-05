@@ -72,7 +72,7 @@ tasks.register('checkPlatformIsolation') {
     description = 'Rejects platform APIs and version preprocessing from the shared Java module.'
     doLast {
         final List<String> violations = []
-        final def forbidden = ~/^import\s+(static\s+)?(com\.mojang|io\.papermc|net\.fabricmc|net\.minecraft|org\.bukkit|org\.lwjgl|org\.spongepowered)/
+        final def forbidden = ~/^import\s+(static\s+)?(com\.mojang|io\.papermc|net\.fabricmc|net\.minecraft|net\.neoforged|org\.bukkit|org\.lwjgl|org\.spongepowered)/
         final def preprocessorDirective = ~/^\/\/(#(?:if|elseif|else|endif)|\$\$)/
         fileTree('src/main/java').matching { include '**/*.java' }.each { final File file ->
             file.readLines().eachWithIndex { final String line, final int index ->

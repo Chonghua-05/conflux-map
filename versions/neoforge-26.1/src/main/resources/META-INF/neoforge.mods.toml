@@ -1,0 +1,27 @@
+license="${mod_license}"
+issueTrackerURL="https://github.com/Conflux-Union/conflux-map/issues"
+
+[[mods]]
+modId="${mod_id}"
+version="${mod_version}"
+displayName="${mod_name}"
+authors="Conflux Union"
+displayURL="https://github.com/Conflux-Union/conflux-map"
+logoFile="assets/confluxmap/icon.png"
+description='''
+Conflux Map minimap and world map. NeoForge 26.1 port bootstrap.
+'''
+
+[[dependencies.${mod_id}]]
+modId="neoforge"
+type="required"
+versionRange="[${neo_version},)"
+ordering="NONE"
+side="BOTH"
+
+[[dependencies.${mod_id}]]
+modId="minecraft"
+type="required"
+versionRange="${minecraft_version_range}"
+ordering="NONE"
+side="BOTH"

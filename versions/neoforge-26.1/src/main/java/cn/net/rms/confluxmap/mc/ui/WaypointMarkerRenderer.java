@@ -1,0 +1,185 @@
+package cn.net.rms.confluxmap.mc.ui;
+
+import cn.net.rms.confluxmap.compat.Ids;
+import cn.net.rms.confluxmap.compat.Regs;
+import cn.net.rms.confluxmap.core.util.Argb;
+import cn.net.rms.confluxmap.core.waypoint.WaypointRenderEntry;
+import cn.net.rms.confluxmap.core.waypoint.WaypointVerticalRelation;
+import cn.net.rms.confluxmap.mc.render.RenderUtil;
+import net.minecraft.client.Minecraft;
+import net.minecraft.client.gui.Font;
+import com.mojang.blaze3d.vertex.PoseStack;
+import net.minecraft.world.item.ItemStack;
+import net.minecraft.util.Mth;
+
+/**
+ * VoxelMap-style waypoint marker drawing shared by {@code MinimapHudRenderer} and
+ * {@code FullscreenMapScreen} (deliverable D) so both surfaces render identical marker
+ * shapes - only their size, alpha and hover handling differ per surface. Every waypoint
+ * uses the player-selected color as its plate and a contrasting first-name character,
+ * keeping the minimap and fullscreen map visually consistent.
+ */
+public final class WaypointMarkerRenderer {
+    private static final int OUTER_CONTRAST = 0xFF101010;
+    private static final int WHITE_TEXT = 0xFFFFFFFF;
+    private static final int LIGHT_BACKGROUND_LUMINANCE = 186;
+    private static final int SHARED_OUTLINE = 0xFF55DDE0;
+    private static final int HEIGHT_BADGE_OUTLINE = 0xFF101010;
+    private static final int HEIGHT_BADGE_FILL = 0xFFFFFFFF;
+    /** 50% white overlay used to brighten a hovered marker's fill color (fullscreen map only). */
+    private static final int HOVER_TINT = 0x80FFFFFF;
+
+    private WaypointMarkerRenderer() {
+    }
+
+    /**
+     * In-range marker at a fixed screen position, upright - the caller is responsible for
+     * counter-rotating the *position* in rotate mode (see {@code drawCardinals}'s rotate ->
+     * translate -> counter-rotate mechanism); this method never applies its own rotation.
+     *
+     * <p>The plate scales with {@code halfSize}; the glyph is scaled down when necessary,
+     * so different surfaces can choose different sizes without changing the icon style.
+     */
+    public static void draw(
+        final GuiDraw draw,
+        final Font textRenderer,
+        final WaypointRenderEntry waypoint,
+        final float x,
+        final float y,
+        final float halfSize,
+        final float alpha,
+        final boolean hovered,
+        final WaypointVerticalRelation verticalRelation
+    ) {
+        final PoseStack matrices = draw.matrices();
+        final int fill = fillColor(waypoint.colorArgb(), alpha, hovered);
+        final int outer = withAlpha(outlineColor(waypoint), alpha);
+        final float plateSize = halfSize * 2f;
+        RenderUtil.fillRect(matrices, x - halfSize - 1f, y - halfSize - 1f, plateSize + 2f, plateSize + 2f, outer);
+        RenderUtil.fillRect(matrices, x - halfSize, y - halfSize, plateSize, plateSize, fill);
+
+        final ItemStack itemIcon = itemIcon(waypoint.iconItemId());
+        if (!itemIcon.isEmpty()) {
+            draw.drawItemIcon(
+                Minecraft.getInstance(),
+                itemIcon,
+                x,
+                y,
+                Math.max(1f, plateSize - 2f)
+            );
+            drawHeightBadge(matrices, verticalRelation, x, y, halfSize, alpha);
+            return;
+        }
+
+        final String markerText = markerText(waypoint.name(), waypoint.markerLabel());
+        final int textWidth = textRenderer.width(markerText);
+        final float available = Math.max(1f, plateSize - 2f);
+        final float textScale = Math.min(1f, available / Math.max(textWidth, textRenderer.lineHeight));
+        matrices.pushPose();
+        matrices.translate(x, y, 0);
+        matrices.scale(textScale, textScale, 1f);
+        draw.drawTextWithShadow(
+            textRenderer,
+            markerText,
+            -textWidth / 2f,
+            -textRenderer.lineHeight / 2f,
+            withAlpha(textColorFor(fill), alpha)
+        );
+        matrices.popPose();
+        drawHeightBadge(matrices, verticalRelation, x, y, halfSize, alpha);
+    }
+
+    public static String markerText(final String name, final String markerLabel) {
+        return markerLabel == null || markerLabel.isBlank()
+            ? initial(name)
+            : markerLabel;
+    }
+
+    public static ItemStack itemIcon(final String itemId) {
+        if (itemId == null || itemId.isEmpty()) {
+            return ItemStack.EMPTY;
+        }
+        try {
+            return Regs.item(Ids.of(itemId))
+                .map(ItemStack::new)
+                .filter(stack -> !stack.isEmpty())
+                .orElse(ItemStack.EMPTY);
+        } catch (final IllegalArgumentException e) {
+            return ItemStack.EMPTY;
+        }
+    }
+
+    /**
+     * First non-blank code point of the name; validation normally prevents the fallback.
+     * Skips all Unicode whitespace and space separators (including NBSP and ideographic
+     * space, which {@code trim()}/{@code strip()} keep or miss) so the marker initial is
+     * always a visible glyph when the name has one.
+     */
+    static String initial(final String name) {
+        if (name == null) {
+            return "?";
+        }
+        final int[] visible = name.codePoints()
+            .filter(cp -> !Character.isWhitespace(cp) && !Character.isSpaceChar(cp))
+            .limit(1)
+            .toArray();
+        if (visible.length == 0) {
+            return "?";
+        }
+        return new String(visible, 0, 1);
+    }
+
+    /** Select black on light marker plates and white on dark plates. */
+    public static int textColorFor(final int markerColorArgb) {
+        return Argb.luminance(markerColorArgb) >= LIGHT_BACKGROUND_LUMINANCE
+            ? Argb.OPAQUE_BLACK
+            : WHITE_TEXT;
+    }
+
+    private static int fillColor(final int colorArgb, final float alpha, final boolean hovered) {
+        final int opaque = colorArgb | 0xFF000000;
+        final int base = hovered ? Argb.blendOver(opaque, HOVER_TINT) : opaque;
+        return withAlpha(base, alpha);
+    }
+
+    private static int outlineColor(final WaypointRenderEntry waypoint) {
+        if (!waypoint.shared()) {
+            return OUTER_CONTRAST;
+        }
+        return SHARED_OUTLINE;
+    }
+
+    /** Two-tone geometry stays readable over every user-selected waypoint color. */
+    private static void drawHeightBadge(
+        final PoseStack matrices,
+        final WaypointVerticalRelation relation,
+        final float x,
+        final float y,
+        final float halfSize,
+        final float alpha
+    ) {
+        if (relation == WaypointVerticalRelation.NONE) {
+            return;
+        }
+        final float centerX = x - halfSize;
+        final float centerY = y - halfSize;
+        final int outline = withAlpha(HEIGHT_BADGE_OUTLINE, alpha);
+        final int fill = withAlpha(HEIGHT_BADGE_FILL, alpha);
+        if (relation == WaypointVerticalRelation.LEVEL) {
+            RenderUtil.fillRect(matrices, centerX - 2.5f, centerY - 2.5f, 5f, 5f, outline);
+            RenderUtil.fillRect(matrices, centerX - 1.5f, centerY - 1.5f, 3f, 3f, fill);
+            return;
+        }
+        final float tipY = relation == WaypointVerticalRelation.ABOVE ? centerY - 2.5f : centerY + 2.5f;
+        final float baseY = relation == WaypointVerticalRelation.ABOVE ? centerY + 2f : centerY - 2f;
+        RenderUtil.fillTriangle(matrices, centerX, tipY, centerX - 2.5f, baseY, centerX + 2.5f, baseY, outline);
+        final float innerTipY = relation == WaypointVerticalRelation.ABOVE ? centerY - 1.2f : centerY + 1.2f;
+        final float innerBaseY = relation == WaypointVerticalRelation.ABOVE ? centerY + 1f : centerY - 1f;
+        RenderUtil.fillTriangle(matrices, centerX, innerTipY, centerX - 1.2f, innerBaseY, centerX + 1.2f, innerBaseY, fill);
+    }
+
+    private static int withAlpha(final int argb, final float alpha) {
+        final int a = Math.round(Argb.alpha(argb) * Mth.clamp(alpha, 0f, 1f));
+        return (a << 24) | (argb & 0x00FFFFFF);
+    }
+}

@@ -12,6 +12,10 @@ pluginManagement {
             name = 'JitpackOrigin'
             url = 'https://jitpack.io'
         }
+        maven {
+            name = 'NeoForged'
+            url = 'https://maven.neoforged.net/releases'
+        }
         mavenCentral()
         gradlePluginPortal()
     }
@@ -43,7 +47,12 @@ plugins {
 }
 include ':common'
 include ':paper'
+include ':neoforge-26.1'
+project(':neoforge-26.1').projectDir = file('versions/neoforge-26.1')
 file('versions').eachDir { final File dir ->
+    if (dir.name.startsWith('neoforge-')) {
+        return
+    }
     final String version = ":$dir.name"
     include version
     final ProjectDescriptor projectDescriptor = project version

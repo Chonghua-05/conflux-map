@@ -1,0 +1,854 @@
+package cn.net.rms.confluxmap.mc.snapshot;
+
+import cn.net.rms.confluxmap.core.color.LightTint;
+import cn.net.rms.confluxmap.core.model.ChunkSnapshot;
+import cn.net.rms.confluxmap.core.model.MapLayer;
+import cn.net.rms.confluxmap.core.model.SurfaceKind;
+import cn.net.rms.confluxmap.core.util.Argb;
+import cn.net.rms.confluxmap.mc.color.BiomeTintResolver;
+import cn.net.rms.confluxmap.mc.color.SpriteColorSampler;
+import cn.net.rms.confluxmap.core.terrain.CaveChunkResult;
+import cn.net.rms.confluxmap.core.terrain.TerrainResult;
+import net.minecraft.world.level.block.Block;
+import net.minecraft.world.level.block.state.BlockState;
+import net.minecraft.world.level.block.Blocks;
+import net.minecraft.world.level.block.CarpetBlock;
+import net.minecraft.world.level.block.FlowerBlock;
+import net.minecraft.world.level.block.LeavesBlock;
+import net.minecraft.world.level.block.SnowLayerBlock;
+import net.minecraft.world.level.block.TallFlowerBlock;
+import net.minecraft.world.level.block.DoublePlantBlock;
+import net.minecraft.client.Minecraft;
+import net.minecraft.client.player.LocalPlayer;
+import net.minecraft.client.multiplayer.ClientLevel;
+import net.minecraft.world.level.material.FluidState;
+import net.minecraft.world.level.block.state.properties.BlockStateProperties;
+import net.minecraft.tags.BlockTags;
+import net.minecraft.core.BlockPos;
+import net.minecraft.core.Direction;
+import net.minecraft.util.Mth;
+import net.minecraft.world.level.levelgen.Heightmap;
+import net.minecraft.world.level.LightLayer;
+import net.minecraft.world.level.chunk.status.ChunkStatus;
+import net.minecraft.world.level.chunk.LevelChunk;
+
+/**
+ * Builds immutable {@link ChunkSnapshot}s from live client chunks, per
+ * surface-color-sampling.md §1-§3 (top-down surface/color/tint) for
+ * {@link MapLayer.Type#SURFACE}/{@link MapLayer.Type#END_SURFACE}, and per
+ * cave-nether-layers.md §2 (bounded pivot-relative floor scan) for every other
+ * layer. Must only be called on the main thread; the produced snapshot is safe
+ * to hand to worker threads.
+ */
+public final class McChunkSnapshotFactory {
+    /** Brightness of the solid-rock cross-section drawn where the floor scan finds no opening. */
+    private static final float CROSS_SECTION_DARKEN = 0.4f;
+    /** cave-nether-layers.md §2.1: the upward branch's fixed search window above the pivot. */
+    private static final int UPWARD_SCAN_CAP = 10;
+
+    private final Minecraft client;
+    private final SpriteColorSampler sampler;
+    private final ChunkTintSampler tints;
+
+    public McChunkSnapshotFactory(
+        final Minecraft client,
+        final SpriteColorSampler sampler,
+        final BiomeTintResolver tintResolver
+    ) {
+        this.client = client;
+        this.sampler = sampler;
+        this.tints = new ChunkTintSampler(client, tintResolver);
+    }
+
+    /**
+     * Null if the chunk is not currently loaded. {@code pivotY} is only consulted for
+     * layers using the cave-nether-layers.md §2 floor scan (ignored for SURFACE/END_SURFACE,
+     * which keep using the world heightmap); see {@link cn.net.rms.confluxmap.mc.world.LayerSelector}
+     * for how callers derive it (debounced viewpoint Y, a slice's fixed Y, or the nether-roof pivot).
+     */
+    public ChunkSnapshot snapshot(final int chunkX, final int chunkZ, final MapLayer layer, final int pivotY, final long sessionToken) {
+        final ClientLevel world = client.level;
+        if (world == null) {
+            return null;
+        }
+        final LevelChunk chunk = (LevelChunk) world.getChunkSource().getChunk(chunkX, chunkZ, ChunkStatus.FULL, false);
+        if (chunk == null) {
+            return null;
+        }
+
+        final short[] surfaceY = new short[ChunkSnapshot.COLUMNS];
+        final String[] biomeId = new String[ChunkSnapshot.COLUMNS];
+        final byte[] fluidDepth = new byte[ChunkSnapshot.COLUMNS];
+        final int[] baseArgb = new int[ChunkSnapshot.COLUMNS];
+        final int[] xaeroBaseArgb = new int[ChunkSnapshot.COLUMNS];
+        final int[] tintArgb = new int[ChunkSnapshot.COLUMNS];
+        final int[] overlayArgb = new int[ChunkSnapshot.COLUMNS];
+        final int[] xaeroOverlayArgb = new int[ChunkSnapshot.COLUMNS];
+        final byte[] kind = new byte[ChunkSnapshot.COLUMNS];
+        final byte[] light = new byte[ChunkSnapshot.COLUMNS];
+
+        final BlockPos.MutableBlockPos pos = new BlockPos.MutableBlockPos();
+        final int baseX = chunkX << 4;
+        final int baseZ = chunkZ << 4;
+        tints.beginChunk(world, chunkX, chunkZ);
+
+        if (layer.type() == MapLayer.Type.SURFACE || layer.type() == MapLayer.Type.END_SURFACE) {
+            final LocalPlayer player = client.player;
+            final int playerY = player != null ? player.blockPosition().getY() : world.getMinY();
+            final Heightmap heightmap = chunk.getOrCreateHeightmapUnprimed(Heightmap.Types.MOTION_BLOCKING);
+            final int bottomY = world.getMinY();
+            final int topY = world.getMaxY();
+            for (int z = 0; z < 16; z++) {
+                for (int x = 0; x < 16; x++) {
+                    sampleColumn(
+                        chunk, world, pos, baseX, baseZ, x, z, bottomY, topY, playerY, heightmap, z * 16 + x,
+                        surfaceY, fluidDepth, baseArgb, tintArgb, overlayArgb, kind, light,
+                        xaeroBaseArgb, xaeroOverlayArgb
+                    );
+                }
+            }
+        } else {
+            final boolean netherAmbient = isNetherLayer(layer.type());
+            final boolean deferBlockLight = layer.type() == MapLayer.Type.NETHER_CEILING;
+            final int worldMinY = world.getMinY();
+            final int worldMaxY = world.getMaxY();
+            for (int z = 0; z < 16; z++) {
+                for (int x = 0; x < 16; x++) {
+                    sampleFloorColumn(
+                        chunk, world, pos, baseX, baseZ, x, z, pivotY, worldMinY, worldMaxY,
+                        netherAmbient, deferBlockLight, z * 16 + x,
+                        surfaceY, fluidDepth, baseArgb, tintArgb, overlayArgb, kind, light
+                    );
+                }
+            }
+            System.arraycopy(baseArgb, 0, xaeroBaseArgb, 0, ChunkSnapshot.COLUMNS);
+            System.arraycopy(overlayArgb, 0, xaeroOverlayArgb, 0, ChunkSnapshot.COLUMNS);
+        }
+        BiomeIdentityCapture.capture(
+            world, pos, baseX, baseZ, surfaceY, biomeId, tints.biomeIdentityWindow()
+        );
+        return new ChunkSnapshot(
+            chunkX, chunkZ, sessionToken, world.getGameTime(), surfaceY, biomeId, fluidDepth,
+            baseArgb, xaeroBaseArgb, tintArgb, overlayArgb, xaeroOverlayArgb, kind, light
+        );
+    }
+
+    /**
+     * Finishes a worker-selected cave chunk without repeating its vertical scan. Only the
+     * selected floor and optional overlay positions touch Minecraft state, tint, models and
+     * lighting here; a concurrent block change rejects the result so the dirty queue can retry.
+     */
+    public ChunkSnapshot finishFloorSelection(
+        final TerrainResult envelope, final MapLayer layer, final long sessionToken
+    ) {
+        final ClientLevel world = client.level;
+        if (world == null || envelope.sessionToken() != sessionToken) {
+            return null;
+        }
+        final CaveChunkResult selection = envelope.result();
+        final LevelChunk chunk = (LevelChunk) world.getChunkSource().getChunk(
+            selection.chunkX(), selection.chunkZ(), ChunkStatus.FULL, false
+        );
+        if (chunk == null) {
+            return null;
+        }
+
+        final short[] surfaceY = selection.surfaceY().clone();
+        final String[] biomeId = new String[ChunkSnapshot.COLUMNS];
+        final byte[] fluidDepth = new byte[ChunkSnapshot.COLUMNS];
+        final int[] baseArgb = new int[ChunkSnapshot.COLUMNS];
+        final int[] xaeroBaseArgb = new int[ChunkSnapshot.COLUMNS];
+        final int[] tintArgb = new int[ChunkSnapshot.COLUMNS];
+        final int[] overlayArgb = new int[ChunkSnapshot.COLUMNS];
+        final int[] xaeroOverlayArgb = new int[ChunkSnapshot.COLUMNS];
+        final byte[] kind = new byte[ChunkSnapshot.COLUMNS];
+        final byte[] light = new byte[ChunkSnapshot.COLUMNS];
+        java.util.Arrays.fill(tintArgb, 0xFFFFFFFF);
+
+        final BlockPos.MutableBlockPos pos = new BlockPos.MutableBlockPos();
+        final int baseX = selection.chunkX() << 4;
+        final int baseZ = selection.chunkZ() << 4;
+        final int worldMaxY = world.getMaxY();
+        final boolean netherAmbient = isNetherLayer(layer.type());
+        tints.beginChunk(world, selection.chunkX(), selection.chunkZ());
+        for (int z = 0; z < 16; z++) {
+            for (int x = 0; x < 16; x++) {
+                final int index = z * 16 + x;
+                final int expectedFloor = selection.floorStateId()[index];
+                if (expectedFloor < 0) {
+                    writeVoid(
+                        index, selection.pivotY(), surfaceY, kind, baseArgb, tintArgb,
+                        overlayArgb, fluidDepth, light
+                    );
+                    continue;
+                }
+                final int y = surfaceY[index];
+                final int worldX = baseX + x;
+                final int worldZ = baseZ + z;
+                pos.set(worldX, y, worldZ);
+                final BlockState rawFloor = chunk.getBlockState(pos);
+                if (Block.getId(rawFloor) != expectedFloor) {
+                    return null;
+                }
+                final BlockState floor = collapse(rawFloor);
+                final int floorTint = tints.resolve(floor, world, worldX, y, worldZ);
+                int color = Argb.multiply(sampler.colorFor(floor, world, pos), floorTint);
+                if (selection.crossSection()[index]) {
+                    color = Argb.scale(color, CROSS_SECTION_DARKEN);
+                } else {
+                    color = applyLight(color, pos, world, floor.getBlock(), netherAmbient);
+                }
+
+                int overlayColor = Argb.TRANSPARENT;
+                final int expectedOverlay = selection.overlayStateId()[index];
+                if (expectedOverlay >= 0 && y + 1 < worldMaxY) {
+                    pos.set(worldX, y + 1, worldZ);
+                    final BlockState rawOverlay = chunk.getBlockState(pos);
+                    if (Block.getId(rawOverlay) != expectedOverlay) {
+                        return null;
+                    }
+                    final BlockState overlay = collapse(rawOverlay);
+                    final int overlayTint = tints.resolve(
+                        overlay, world, worldX, y + 1, worldZ
+                    );
+                    overlayColor = applyLight(
+                        Argb.multiply(sampler.colorFor(overlay, world, pos), overlayTint),
+                        pos, world, overlay.getBlock(), netherAmbient
+                    );
+                }
+                baseArgb[index] = color;
+                overlayArgb[index] = overlayColor;
+                kind[index] = (byte) classifySurfaceKind(floor.getBlock()).ordinal();
+                light[index] = sampleBlockLightAbove(
+                    world, pos, worldX, y, worldZ, worldMaxY
+                );
+            }
+        }
+        System.arraycopy(baseArgb, 0, xaeroBaseArgb, 0, ChunkSnapshot.COLUMNS);
+        System.arraycopy(overlayArgb, 0, xaeroOverlayArgb, 0, ChunkSnapshot.COLUMNS);
+        BiomeIdentityCapture.capture(
+            world, pos, baseX, baseZ, surfaceY, biomeId, tints.biomeIdentityWindow()
+        );
+        return new ChunkSnapshot(
+            selection.chunkX(), selection.chunkZ(), sessionToken, selection.revision(),
+            surfaceY, biomeId, fluidDepth, baseArgb, xaeroBaseArgb, tintArgb,
+            overlayArgb, xaeroOverlayArgb, kind, light
+        );
+    }
+
+    private void sampleColumn(
+        final LevelChunk chunk,
+        final ClientLevel world,
+        final BlockPos.MutableBlockPos pos,
+        final int baseX,
+        final int baseZ,
+        final int localX,
+        final int localZ,
+        final int bottomY,
+        final int topY,
+        final int playerY,
+        final Heightmap heightmap,
+        final int index,
+        final short[] surfaceY,
+        final byte[] fluidDepth,
+        final int[] baseArgb,
+        final int[] tintArgb,
+        final int[] overlayArgb,
+        final byte[] kind,
+        final byte[] light,
+        final int[] xaeroBaseArgb,
+        final int[] xaeroOverlayArgb
+    ) {
+        final int worldX = baseX + localX;
+        final int worldZ = baseZ + localZ;
+
+        int y = heightmap.getFirstAvailable(localX, localZ) - 1;
+        if (y < bottomY) {
+            writeVoid(index, playerY, surfaceY, kind, baseArgb, tintArgb, overlayArgb, fluidDepth, light);
+            return;
+        }
+        pos.set(worldX, y, worldZ);
+        BlockState state = collapse(chunk.getBlockState(pos));
+
+        BlockState topOverlay = null;
+        int topOverlayY = 0;
+        BlockState bottomOverlay = null;
+        int bottomOverlayY = 0;
+        boolean descended = false;
+
+        while (!isOpaque(state, world, pos) && y > bottomY) {
+            if (!descended) {
+                topOverlay = state;
+                topOverlayY = y;
+            }
+            bottomOverlay = state;
+            bottomOverlayY = y;
+            descended = true;
+            y--;
+            pos.setY(y);
+            state = collapse(chunk.getBlockState(pos));
+        }
+        if (!isOpaque(state, world, pos)) {
+            // World bottom reached and never found an opaque block: §1 void fallback.
+            writeVoid(index, playerY, surfaceY, kind, baseArgb, tintArgb, overlayArgb, fluidDepth, light);
+            return;
+        }
+
+        BlockState surfaceState = state;
+        int surfaceYVal = y;
+        BlockState transparentOverlay = null;
+        int transparentOverlayY = 0;
+        BlockState foliageOverlay = null;
+        int foliageOverlayY = 0;
+
+        if (!descended) {
+            pos.set(worldX, surfaceYVal + 1, worldZ);
+            final BlockState above = collapse(chunk.getBlockState(pos));
+            if (isPromotedSurfaceCover(above)) {
+                surfaceState = above;
+                surfaceYVal++;
+            } else if (!above.isAir()) {
+                foliageOverlay = above;
+                foliageOverlayY = surfaceYVal + 1;
+            }
+        } else if (isPromotedSurfaceCover(bottomOverlay)) {
+            // Thin surface-cover promotion: the foliage candidate becomes the surface itself.
+            surfaceState = bottomOverlay;
+            surfaceYVal = bottomOverlayY;
+            if (topOverlayY != bottomOverlayY) {
+                transparentOverlay = topOverlay;
+                transparentOverlayY = topOverlayY;
+            }
+        } else {
+            transparentOverlay = topOverlay;
+            transparentOverlayY = topOverlayY;
+            if (topOverlayY != bottomOverlayY) {
+                foliageOverlay = bottomOverlay;
+                foliageOverlayY = bottomOverlayY;
+            }
+        }
+
+        final Block surfaceBlock = surfaceState.getBlock();
+        final SurfaceKind resolvedKind = classifySurfaceKind(surfaceBlock);
+        final boolean seafloorScan = resolvedKind == SurfaceKind.WATER || resolvedKind == SurfaceKind.ICE;
+
+        BlockState seafloorState = null;
+        int seafloorY = 0;
+        boolean bottomless = false;
+
+        if (seafloorScan) {
+            int scanY = surfaceYVal - 1;
+            pos.set(worldX, scanY, worldZ);
+            BlockState scan = collapse(chunk.getBlockState(pos));
+            while (scanY > bottomY && seafloorContinues(scan, world, pos)) {
+                if (isSeafloorCapturable(scan)) {
+                    if (transparentOverlay == null) {
+                        transparentOverlay = scan;
+                        transparentOverlayY = scanY;
+                    } else if (foliageOverlay == null && !scan.equals(transparentOverlay)) {
+                        foliageOverlay = scan;
+                        foliageOverlayY = scanY;
+                    }
+                }
+                scanY--;
+                pos.setY(scanY);
+                scan = collapse(chunk.getBlockState(pos));
+            }
+            if (scanY <= bottomY && seafloorContinues(scan, world, pos)) {
+                bottomless = true;
+            } else {
+                seafloorState = scan;
+                seafloorY = scanY;
+            }
+        }
+
+        writeSurface(
+            index, worldX, worldZ, topY, pos, world,
+            surfaceState, surfaceYVal, resolvedKind,
+            transparentOverlay, transparentOverlayY, foliageOverlay, foliageOverlayY,
+            seafloorState, seafloorY, bottomless,
+            surfaceY, fluidDepth, baseArgb, tintArgb, overlayArgb, kind, light,
+            xaeroBaseArgb, xaeroOverlayArgb
+        );
+    }
+
+    private void writeSurface(
+        final int index,
+        final int worldX,
+        final int worldZ,
+        final int topY,
+        final BlockPos.MutableBlockPos pos,
+        final ClientLevel world,
+        final BlockState surfaceState,
+        final int surfaceYVal,
+        final SurfaceKind resolvedKind,
+        final BlockState transparentOverlay,
+        final int transparentOverlayY,
+        final BlockState foliageOverlay,
+        final int foliageOverlayY,
+        final BlockState seafloorState,
+        final int seafloorY,
+        final boolean bottomless,
+        final short[] surfaceY,
+        final byte[] fluidDepth,
+        final int[] baseArgb,
+        final int[] tintArgb,
+        final int[] overlayArgb,
+        final byte[] kind,
+        final byte[] light,
+        final int[] xaeroBaseArgb,
+        final int[] xaeroOverlayArgb
+    ) {
+        pos.set(worldX, surfaceYVal, worldZ);
+        final int surfaceBaseColor = sampler.colorFor(surfaceState, world, pos);
+        final int xaeroSurfaceBaseColor = sampler.xaeroColorFor(surfaceState, world, pos);
+        final int surfaceTintColor = tints.resolve(surfaceState, world, worldX, surfaceYVal, worldZ);
+        light[index] = sampleBlockLightAbove(world, pos, worldX, surfaceYVal, worldZ, topY);
+
+        if (resolvedKind == SurfaceKind.WATER || resolvedKind == SurfaceKind.ICE) {
+            // baseArgb/tintArgb hold the water/ice surface's own color; overlayArgb is repurposed to
+            // hold the pre-composited floor (seafloor + underwater overlays) beneath it - see §5.
+            int waterColor = Argb.multiply(surfaceBaseColor, surfaceTintColor);
+            if (transparentOverlay != null) {
+                waterColor = Argb.over(coloredLayer(transparentOverlay, transparentOverlayY, worldX, worldZ, pos, world), waterColor);
+            }
+            baseArgb[index] = waterColor;
+            xaeroBaseArgb[index] = Argb.multiply(xaeroSurfaceBaseColor, surfaceTintColor);
+            tintArgb[index] = 0xFFFFFFFF;
+
+            int floorComposite = Argb.TRANSPARENT;
+            int xaeroFloorComposite = Argb.TRANSPARENT;
+            int depth = 0;
+            if (!bottomless && seafloorState != null) {
+                floorComposite = coloredLayer(seafloorState, seafloorY, worldX, worldZ, pos, world);
+                xaeroFloorComposite = xaeroColoredLayer(seafloorState, seafloorY, worldX, worldZ, pos, world);
+                if (foliageOverlay != null) {
+                    floorComposite = Argb.over(
+                        coloredLayer(foliageOverlay, foliageOverlayY, worldX, worldZ, pos, world), floorComposite
+                    );
+                    if (!isXaeroInvisible(foliageOverlay)) {
+                        xaeroFloorComposite = Argb.over(
+                            xaeroColoredLayer(foliageOverlay, foliageOverlayY, worldX, worldZ, pos, world),
+                            xaeroFloorComposite
+                        );
+                    }
+                }
+                depth = surfaceYVal - seafloorY;
+            }
+            overlayArgb[index] = floorComposite;
+            xaeroOverlayArgb[index] = xaeroFloorComposite;
+            fluidDepth[index] = (byte) Math.min(Math.max(depth, 0), 127);
+        } else {
+            baseArgb[index] = surfaceBaseColor;
+            xaeroBaseArgb[index] = xaeroSurfaceBaseColor;
+            tintArgb[index] = surfaceTintColor;
+
+            int overlayComposite = Argb.TRANSPARENT;
+            int xaeroOverlayComposite = Argb.TRANSPARENT;
+            if (foliageOverlay != null) {
+                overlayComposite = coloredLayer(foliageOverlay, foliageOverlayY, worldX, worldZ, pos, world);
+                if (!isXaeroInvisible(foliageOverlay)) {
+                    xaeroOverlayComposite = xaeroColoredLayer(
+                        foliageOverlay, foliageOverlayY, worldX, worldZ, pos, world
+                    );
+                }
+            }
+            if (transparentOverlay != null) {
+                final int top = coloredLayer(transparentOverlay, transparentOverlayY, worldX, worldZ, pos, world);
+                overlayComposite = overlayComposite == Argb.TRANSPARENT ? top : Argb.over(top, overlayComposite);
+                if (!isXaeroInvisible(transparentOverlay)) {
+                    final int xaeroTop = xaeroColoredLayer(
+                        transparentOverlay, transparentOverlayY, worldX, worldZ, pos, world
+                    );
+                    xaeroOverlayComposite = xaeroOverlayComposite == Argb.TRANSPARENT
+                        ? xaeroTop
+                        : Argb.over(xaeroTop, xaeroOverlayComposite);
+                }
+            }
+            overlayArgb[index] = overlayComposite;
+            xaeroOverlayArgb[index] = xaeroOverlayComposite;
+            fluidDepth[index] = 0;
+        }
+        surfaceY[index] = clampSurfaceY(surfaceYVal);
+        kind[index] = (byte) resolvedKind.ordinal();
+    }
+
+    /** Sampled base color x its own tint, already composited, for one overlay/seafloor layer. */
+    private int coloredLayer(
+        final BlockState state,
+        final int y,
+        final int worldX,
+        final int worldZ,
+        final BlockPos.MutableBlockPos pos,
+        final ClientLevel world
+    ) {
+        pos.set(worldX, y, worldZ);
+        final int base = sampler.colorFor(state, world, pos);
+        final int tint = tints.resolve(state, world, worldX, y, worldZ);
+        return Argb.multiply(base, tint);
+    }
+
+    /** Xaero uses the raw top-quad texture average and its normal biome tint without Conflux detail noise. */
+    private int xaeroColoredLayer(
+        final BlockState state,
+        final int y,
+        final int worldX,
+        final int worldZ,
+        final BlockPos.MutableBlockPos pos,
+        final ClientLevel world
+    ) {
+        pos.set(worldX, y, worldZ);
+        final int base = sampler.xaeroColorFor(state, world, pos);
+        final int tint = tints.resolve(state, world, worldX, y, worldZ);
+        return Argb.multiply(base, tint);
+    }
+
+    /** Mirrors Xaero's default surface scan exclusions for decoration above the real terrain. */
+    private static boolean isXaeroInvisible(final BlockState state) {
+        final Block block = state.getBlock();
+        //#if MC>=12100
+        final boolean shortGrass = block == Blocks.SHORT_GRASS;
+        //#else
+        //$$ final boolean shortGrass = block == Blocks.GRASS;
+        //#endif
+        if (block == Blocks.TORCH || shortGrass || block == Blocks.GLASS || block == Blocks.GLASS_PANE) {
+            return true;
+        }
+        final boolean flower = block instanceof FlowerBlock || block instanceof TallFlowerBlock
+            || state.is(BlockTags.FLOWERS)
+            //#if MC>=12000
+            || block instanceof net.minecraft.world.level.block.PitcherCropBlock
+            //#endif
+            ;
+        return block instanceof DoublePlantBlock && !flower;
+    }
+
+    /**
+     * cave-nether-layers.md §2.1's bounded nearest-floor scan around {@code pivotY}:
+     * unbounded downward when the pivot itself sits in open space, or capped {@link
+     * #UPWARD_SCAN_CAP} blocks upward when the pivot starts inside solid/lava material.
+     * Shared by every layer that isn't a top-down surface scan (CAVE_AUTO/CAVE_SLICE,
+     * NETHER_CURRENT/NETHER_SLICE, NETHER_CEILING) - only the pivot Y and whether the
+     * nether ambient-light floor applies (§5.2, via {@link #isNetherLayer}) differ.
+     *
+     * <p>Unlike the surface scan, {@link ChunkSnapshot#surfaceY} here stores the actual
+     * solid/lava block's Y (not the spec's own "one above" return convention) to match
+     * every other layer's "surfaceY = the ground block" contract, since {@link
+     * cn.net.rms.confluxmap.core.tile.TileService}'s height/slope shading reads that
+     * field generically regardless of layer.
+     */
+    private void sampleFloorColumn(
+        final LevelChunk chunk,
+        final ClientLevel world,
+        final BlockPos.MutableBlockPos pos,
+        final int baseX,
+        final int baseZ,
+        final int localX,
+        final int localZ,
+        final int pivotY,
+        final int worldMinY,
+        final int worldMaxY,
+        final boolean netherAmbient,
+        final boolean deferBlockLight,
+        final int index,
+        final short[] surfaceY,
+        final byte[] fluidDepth,
+        final int[] baseArgb,
+        final int[] tintArgb,
+        final int[] overlayArgb,
+        final byte[] kind,
+        final byte[] light
+    ) {
+        final int worldX = baseX + localX;
+        final int worldZ = baseZ + localZ;
+        final int clampedPivot = Mth.clamp(pivotY, worldMinY, worldMaxY - 1);
+
+        pos.set(worldX, clampedPivot, worldZ);
+        final boolean pivotOpen = isOpenForFloorScan(collapse(chunk.getBlockState(pos)), world, pos);
+
+        final int openY;
+        if (pivotOpen) {
+            int y = clampedPivot;
+            boolean found = false;
+            while (y > worldMinY) {
+                y--;
+                pos.setY(y);
+                if (!isOpenForFloorScan(collapse(chunk.getBlockState(pos)), world, pos)) {
+                    found = true;
+                    break;
+                }
+            }
+            openY = found ? y + 1 : worldMinY;
+        } else {
+            final int upperBound = Math.min(clampedPivot + UPWARD_SCAN_CAP, worldMaxY - 1);
+            int y = clampedPivot;
+            boolean found = false;
+            while (y < upperBound) {
+                y++;
+                pos.setY(y);
+                if (isOpenForFloorScan(collapse(chunk.getBlockState(pos)), world, pos)) {
+                    found = true;
+                    break;
+                }
+            }
+            if (!found) {
+                // Solid rock throughout the window: render a darkened cross-section of the
+                // block at the pivot instead of the spec's transparent sentinel - a mostly
+                // blank map reads as broken, and the cross-section shows ores near the
+                // pivot Y as colored specks (Xaero-style cave view, deliberate deviation).
+                pos.set(worldX, clampedPivot, worldZ);
+                final BlockState rockState = collapse(chunk.getBlockState(pos));
+                final int rockBase = sampler.colorFor(rockState, world, pos);
+                final int rockTint = tints.resolve(rockState, world, worldX, clampedPivot, worldZ);
+                final int crossSection = Argb.scale(
+                    Argb.multiply(rockBase, rockTint), CROSS_SECTION_DARKEN
+                );
+                surfaceY[index] = clampSurfaceY(clampedPivot);
+                kind[index] = (byte) SurfaceKind.LAND.ordinal();
+                baseArgb[index] = deferBlockLight
+                    ? applyAmbientLight(crossSection, netherAmbient)
+                    : crossSection;
+                tintArgb[index] = 0xFFFFFFFF;
+                overlayArgb[index] = Argb.TRANSPARENT;
+                fluidDepth[index] = 0;
+                light[index] = sampleBlockLightAbove(world, pos, worldX, clampedPivot, worldZ, worldMaxY);
+                return;
+            }
+            openY = y;
+        }
+
+        final int solidY = openY - 1;
+        if (solidY < worldMinY) {
+            // Only reachable if the downward scan ran all the way to the world floor without
+            // finding anything solid (an all-air column) - treat exactly like "no floor found".
+            writeVoid(index, pivotY, surfaceY, kind, baseArgb, tintArgb, overlayArgb, fluidDepth, light);
+            return;
+        }
+
+        pos.set(worldX, solidY, worldZ);
+        final BlockState solidState = collapse(chunk.getBlockState(pos));
+        final Block solidBlock = solidState.getBlock();
+
+        final int solidBase = sampler.colorFor(solidState, world, pos);
+        final int solidTint = tints.resolve(solidState, world, worldX, solidY, worldZ);
+        // Floor layers normally bake visible light directly into baseArgb. NETHER_CEILING keeps
+        // only the zero-light Nether ambient tint here and applies light[] during composition;
+        // synchronized roof pixels use that same representation and calculation.
+        final int litColor;
+        if (deferBlockLight) {
+            litColor = applyAmbientLight(Argb.multiply(solidBase, solidTint), netherAmbient);
+            light[index] = sampleBlockLightAbove(
+                world, pos, worldX, solidY, worldZ, worldMaxY
+            );
+        } else {
+            litColor = applyLight(
+                Argb.multiply(solidBase, solidTint), pos, world, solidBlock, netherAmbient
+            );
+            light[index] = sampleBlockLightAbove(
+                world, pos, worldX, solidY, worldZ, worldMaxY
+            );
+        }
+
+        int overlayColor = Argb.TRANSPARENT;
+        if (solidY + 1 < worldMaxY) {
+            pos.set(worldX, solidY + 1, worldZ);
+            final BlockState above = collapse(chunk.getBlockState(pos));
+            if (isFloorOverlayCandidate(above)) {
+                final int overlayBase = sampler.colorFor(above, world, pos);
+                final int overlayTint = tints.resolve(above, world, worldX, solidY + 1, worldZ);
+                overlayColor = deferBlockLight
+                    ? applyAmbientLight(Argb.multiply(overlayBase, overlayTint), netherAmbient)
+                    : applyLight(Argb.multiply(overlayBase, overlayTint), pos, world, above.getBlock(), netherAmbient);
+            }
+        }
+
+        surfaceY[index] = clampSurfaceY(solidY);
+        kind[index] = (byte) classifySurfaceKind(solidBlock).ordinal();
+        baseArgb[index] = litColor;
+        tintArgb[index] = 0xFFFFFFFF;
+        overlayArgb[index] = overlayColor;
+        fluidDepth[index] = 0;
+    }
+
+    /** §2.1's pivot-scan open test: non-opaque (§1's opacity test) and not lava. */
+    static boolean isOpenForFloorScan(final BlockState state, final ClientLevel world, final BlockPos pos) {
+        return !isOpaque(state, world, pos) && state.getBlock() != Blocks.LAVA;
+    }
+
+    /** §2.1's overhang/foliage overlay eligibility: snow, or anything that isn't air/lava/water. */
+    static boolean isFloorOverlayCandidate(final BlockState state) {
+        if (state.getBlock() instanceof SnowLayerBlock) {
+            return true;
+        }
+        return !state.isAir() && state.getBlock() != Blocks.LAVA && state.getBlock() != Blocks.WATER;
+    }
+
+    /** Thin snow and carpets remain the visible top even when MOTION_BLOCKING ignores them. */
+    private static boolean isPromotedSurfaceCover(final BlockState state) {
+        final Block block = state.getBlock();
+        return block instanceof SnowLayerBlock || block instanceof CarpetBlock;
+    }
+
+    /** §2/§6 unified block-type classification, shared by the surface scan and the floor scan. */
+    private static SurfaceKind classifySurfaceKind(final Block surfaceBlock) {
+        if (surfaceBlock == Blocks.LAVA) {
+            return SurfaceKind.LAVA;
+        } else if (surfaceBlock == Blocks.WATER) {
+            return SurfaceKind.WATER;
+        } else if (surfaceBlock == Blocks.ICE) {
+            return SurfaceKind.ICE;
+        } else if (surfaceBlock instanceof SnowLayerBlock) {
+            return SurfaceKind.SNOW;
+        } else if (surfaceBlock instanceof LeavesBlock) {
+            return SurfaceKind.FOLIAGE;
+        } else if (surfaceBlock == Blocks.SAND || surfaceBlock == Blocks.RED_SAND) {
+            return SurfaceKind.SAND;
+        } else {
+            return SurfaceKind.LAND;
+        }
+    }
+
+    /**
+     * cave-nether-layers.md §5.1/§5.2: darken/tint {@code argb} by the block+sky light at
+     * {@code pos}, with lava/magma's block-light forced to 14 (§3's lava-glow override) and
+     * the dimension ambient/readability floor retained when both channels are zero. A column
+     * where the floor scan found nothing is handled separately by {@link #writeVoid}; sampled
+     * terrain must never become indistinguishable from an unknown column merely because it is
+     * unlit. See {@link LightTint} for the (simplified) block-light/sky-light -> color curve.
+     */
+    private static int applyLight(
+        final int argb,
+        final BlockPos pos,
+        final ClientLevel world,
+        final Block block,
+        final boolean netherAmbient
+    ) {
+        //#if MC>=260100
+        final int skyLevel = world.getBrightness(LightLayer.SKY, pos);
+        final int blockLevel = block == Blocks.LAVA || block == Blocks.MAGMA_BLOCK
+            ? 14
+            : world.getBrightness(LightLayer.BLOCK, pos);
+        //#else
+        //$$ final int skyLevel = world.getLightLevel(LightType.SKY, pos);
+        //$$ final int blockLevel = block == Blocks.LAVA || block == Blocks.MAGMA_BLOCK
+        //$$     ? 14
+        //$$     : world.getLightLevel(LightType.BLOCK, pos);
+        //#endif
+        return Argb.multiply(argb, LightTint.multiplier(blockLevel, skyLevel, netherAmbient));
+    }
+
+    private static int applyAmbientLight(final int argb, final boolean netherAmbient) {
+        return Argb.multiply(argb, LightTint.multiplier(0, 0, netherAmbient));
+    }
+
+    /** Whether {@code type} is one of the Nether's floor-scan layers, for §5.2's ambient-light floor. */
+    private static boolean isNetherLayer(final MapLayer.Type type) {
+        return type == MapLayer.Type.NETHER_CURRENT || type == MapLayer.Type.NETHER_CEILING || type == MapLayer.Type.NETHER_SLICE;
+    }
+
+    /**
+     * {@link ChunkSnapshot#light}: block-light (0-15) at the air block directly above {@code y}
+     * (clamped to stay under the world's build limit), the same position whose color was just
+     * sampled. Mutates {@code pos}; callers must not rely on its value afterward.
+     */
+    private static byte sampleBlockLightAbove(
+        final ClientLevel world,
+        final BlockPos.MutableBlockPos pos,
+        final int worldX,
+        final int y,
+        final int worldZ,
+        final int topY
+    ) {
+        pos.set(worldX, Math.min(y + 1, topY - 1), worldZ);
+        //#if MC>=260100
+        return (byte) Mth.clamp(world.getBrightness(LightLayer.BLOCK, pos), 0, 15);
+        //#else
+        //$$ return (byte) MathHelper.clamp(world.getLightLevel(LightType.BLOCK, pos), 0, 15);
+        //#endif
+    }
+
+    private void writeVoid(
+        final int index,
+        final int playerY,
+        final short[] surfaceY,
+        final byte[] kind,
+        final int[] baseArgb,
+        final int[] tintArgb,
+        final int[] overlayArgb,
+        final byte[] fluidDepth,
+        final byte[] light
+    ) {
+        surfaceY[index] = clampSurfaceY(playerY + 1);
+        kind[index] = (byte) SurfaceKind.VOID.ordinal();
+        baseArgb[index] = Argb.TRANSPARENT;
+        tintArgb[index] = 0xFFFFFFFF;
+        overlayArgb[index] = Argb.TRANSPARENT;
+        fluidDepth[index] = 0;
+        light[index] = 0;
+    }
+
+    private static short clampSurfaceY(final int v) {
+        if (v >= Short.MAX_VALUE) {
+            return Short.MAX_VALUE;
+        }
+        if (v <= ChunkSnapshot.NO_SURFACE) {
+            return ChunkSnapshot.NO_SURFACE + 1;
+        }
+        return (short) v;
+    }
+
+    /** §1 opacity test: light-dampening > 0, else a full-square occlusion shape on the top or bottom face. */
+    private static boolean isOpaque(final BlockState state, final ClientLevel world, final BlockPos pos) {
+        //#if MC>=260100
+        if (state.getLightDampening() > 0) {
+        //#elseif MC>=12103
+        //$$ if (state.getOpacity() > 0) {
+        //#else
+        //$$ if (state.getOpacity(world, pos) > 0) {
+        //#endif
+            return true;
+        }
+        if (!state.canOcclude()) {
+            return false;
+        }
+        return state.isFaceSturdy(world, pos, Direction.DOWN)
+            || state.isFaceSturdy(world, pos, Direction.UP);
+    }
+
+    /** §1 seafloor-scan continuation: dampening < 5 and not leaves. */
+    private static boolean seafloorContinues(final BlockState state, final ClientLevel world, final BlockPos pos) {
+        //#if MC>=260100
+        return state.getLightDampening() < 5 && !(state.getBlock() instanceof LeavesBlock);
+        //#elseif MC>=12103
+        //$$ return state.getOpacity() < 5 && !(state.getBlock() instanceof LeavesBlock);
+        //#else
+        //$$ return state.getOpacity(world, pos) < 5 && !(state.getBlock() instanceof LeavesBlock);
+        //#endif
+    }
+
+    /** §1 seafloor-scan capture eligibility: not water/ice/air/bubble-column, and counts on the motion-blocking heightmap. */
+    static boolean isSeafloorCapturable(final BlockState state) {
+        final Block block = state.getBlock();
+        if (state.isAir() || block == Blocks.WATER || block == Blocks.ICE || block == Blocks.BUBBLE_COLUMN) {
+            return false;
+        }
+        return Heightmap.Types.MOTION_BLOCKING.isOpaque().test(state);
+    }
+
+    /**
+     * §1 waterlogged/submerged-greenery collapse. Kelp and seagrass are deliberately normalized
+     * to their water fluid so dense underwater vegetation does not become green map noise; coral
+     * and other submerged decoration stay eligible for the seafloor overlay scan.
+     */
+    static BlockState collapse(final BlockState state) {
+        final boolean submergedGreenery = state.is(Blocks.KELP) || state.is(Blocks.KELP_PLANT)
+            || state.is(Blocks.SEAGRASS) || state.is(Blocks.TALL_SEAGRASS);
+        final boolean waterlogged = state.hasProperty(BlockStateProperties.WATERLOGGED)
+            && state.getValue(BlockStateProperties.WATERLOGGED);
+        if (!submergedGreenery && !waterlogged) {
+            return state;
+        }
+        final FluidState fluid = state.getFluidState();
+        return fluid.isEmpty() ? state : fluid.createLegacyBlock();
+    }
+}

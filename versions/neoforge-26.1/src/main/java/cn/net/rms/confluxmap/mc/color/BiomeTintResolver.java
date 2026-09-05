@@ -1,0 +1,126 @@
+package cn.net.rms.confluxmap.mc.color;
+
+import net.minecraft.world.level.block.Block;
+import net.minecraft.world.level.block.state.BlockState;
+import net.minecraft.world.level.block.Blocks;
+import net.minecraft.client.Minecraft;
+//#if MC>=260100
+import net.minecraft.client.color.block.BlockTintSource;
+//#endif
+import net.minecraft.client.renderer.BiomeColors;
+import net.minecraft.world.level.FoliageColor;
+import net.minecraft.client.multiplayer.ClientLevel;
+import net.minecraft.tags.FluidTags;
+import net.minecraft.core.BlockPos;
+import cn.net.rms.confluxmap.core.predict.SyncedMaterialPalette;
+
+/**
+ * Live per-position biome tint resolution, per surface-color-sampling.md §3's
+ * "live" path (single-point sample; the game's own biome-blend client setting
+ * provides whatever smoothing is visible, not this pipeline). Only the "live"
+ * path is implemented in this slice - the cached/world-map pass's 3x3 average
+ * belongs to the persisted-map slice.
+ *
+ * <p>Redstone wire is deliberately not routed through here (§6): its color is
+ * baked directly into the base color by the sprite sampler.
+ */
+public final class BiomeTintResolver {
+    /** §3: fixed reference colors, not biome-sampled at all (matches the base game's own special-casing). */
+    //#if MC>=12104
+    private static final int SPRUCE_LEAVES_ARGB = 0xFF000000 | FoliageColor.FOLIAGE_EVERGREEN;
+    private static final int BIRCH_LEAVES_ARGB = 0xFF000000 | FoliageColor.FOLIAGE_BIRCH;
+    //#else
+    //$$ private static final int SPRUCE_LEAVES_ARGB = 0xFF000000 | FoliageColors.getSpruceColor();
+    //$$ private static final int BIRCH_LEAVES_ARGB = 0xFF000000 | FoliageColors.getBirchColor();
+    //#endif
+    private static final int NO_TINT = 0xFFFFFFFF;
+
+    private final Minecraft client;
+
+    public BiomeTintResolver(final Minecraft client) {
+        this.client = client;
+    }
+
+    /** The tint color (opaque ARGB, white = no tint) for {@code state} at {@code pos}. */
+    public int resolve(final BlockState state, final ClientLevel world, final BlockPos pos) {
+        final Block block = state.getBlock();
+        if (block == Blocks.SPRUCE_LEAVES) {
+            return SPRUCE_LEAVES_ARGB;
+        }
+        if (block == Blocks.BIRCH_LEAVES) {
+            return BIRCH_LEAVES_ARGB;
+        }
+        if (isWater(state)) {
+            return 0xFF000000 | BiomeColors.getAverageWaterColor(world, pos);
+        }
+        if (isFoliageTinted(block)) {
+            return 0xFF000000 | BiomeColors.getAverageFoliageColor(world, pos);
+        }
+        if (isGrassTinted(block)) {
+            return 0xFF000000 | BiomeColors.getAverageGrassColor(world, pos);
+        }
+        // §3/§6: anything outside the fixed set (including modded blocks) still gets probed
+        // through the game's own tint provider registry; unregistered blocks report NO_COLOR.
+        //#if MC>=260100
+        // 26.1 split BlockColors.getColor into a per-tint-index source object, and a block with
+        // no registered provider has no source at all rather than a blank one - the lookup
+        // returns null. Vanilla's own ClientLevel probe answers -1 there, which is the same
+        // NO_COLOR sentinel getColor used to return, so the check below still covers it.
+        final BlockTintSource tintSource = client.getBlockColors().getTintSource(state, 0);
+        final int color = tintSource == null ? -1 : tintSource.colorInWorld(state, world, pos);
+        //#else
+        //$$ final int color = client.getBlockColors().getColor(state, world, pos, 0);
+        //#endif
+        return color == -1 ? NO_TINT : (0xFF000000 | color);
+    }
+
+    /** Tint category retained when a synchronized material is sampled away from its source chunk. */
+    public SyncedMaterialPalette.Tint syncedTint(final BlockState state) {
+        final Block block = state.getBlock();
+        if (block == Blocks.SPRUCE_LEAVES || block == Blocks.BIRCH_LEAVES) {
+            return SyncedMaterialPalette.Tint.FIXED;
+        }
+        if (isWater(state)) {
+            return SyncedMaterialPalette.Tint.WATER;
+        }
+        if (isFoliageTinted(block)) {
+            return SyncedMaterialPalette.Tint.FOLIAGE;
+        }
+        if (isGrassTinted(block)) {
+            return SyncedMaterialPalette.Tint.GRASS;
+        }
+        return SyncedMaterialPalette.Tint.NONE;
+    }
+
+    public int fixedSyncedTint(final BlockState state) {
+        if (state.getBlock() == Blocks.SPRUCE_LEAVES) {
+            return SPRUCE_LEAVES_ARGB;
+        }
+        if (state.getBlock() == Blocks.BIRCH_LEAVES) {
+            return BIRCH_LEAVES_ARGB;
+        }
+        return NO_TINT;
+    }
+
+    private static boolean isWater(final BlockState state) {
+        //#if MC>=260100
+        return !state.getFluidState().isEmpty() && state.getFluidState().is(FluidTags.WATER);
+        //#else
+        //$$ return !state.getFluidState().isEmpty() && state.getFluidState().isIn(FluidTags.WATER);
+        //#endif
+    }
+
+    /** §3: oak/jungle/acacia/dark oak leaves plus vines use the generic foliage function. */
+    private static boolean isFoliageTinted(final Block block) {
+        return block == Blocks.OAK_LEAVES || block == Blocks.JUNGLE_LEAVES
+            || block == Blocks.ACACIA_LEAVES || block == Blocks.DARK_OAK_LEAVES
+            || block == Blocks.VINE;
+    }
+
+    /** §3: the grass-top block, short/tall grass and fern, reeds and lily pads use the grass function. */
+    private static boolean isGrassTinted(final Block block) {
+        return block == Blocks.GRASS_BLOCK || block == Blocks.SHORT_GRASS || block == Blocks.FERN
+            || block == Blocks.TALL_GRASS || block == Blocks.LARGE_FERN
+            || block == Blocks.SUGAR_CANE || block == Blocks.LILY_PAD;
+    }
+}

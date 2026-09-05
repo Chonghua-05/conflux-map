@@ -1,0 +1,210 @@
+package cn.net.rms.confluxmap.mc.predict;
+
+import cn.net.rms.confluxmap.ConfluxMapMod;
+import cn.net.rms.confluxmap.core.config.ManualSeedConfig;
+import cn.net.rms.confluxmap.core.model.DimensionId;
+import cn.net.rms.confluxmap.core.net.HelloPolicyS2C;
+import cn.net.rms.confluxmap.core.predict.FlatBaseline;
+import cn.net.rms.confluxmap.core.predict.PredictionDimensions;
+import cn.net.rms.confluxmap.core.predict.PredictionState;
+import cn.net.rms.confluxmap.core.predict.WorldPreset;
+import cn.net.rms.confluxmap.core.task.SessionGuard;
+import cn.net.rms.confluxmap.mc.net.CompanionSession;
+import cn.net.rms.confluxmap.nativepredict.McVersions;
+import cn.net.rms.confluxmap.compat.MinecraftVersion;
+import cn.net.rms.confluxmap.server.FlatWorldBaseline;
+import cn.net.rms.confluxmap.server.WorldPresetDetector;
+import java.util.Optional;
+import java.util.OptionalLong;
+import net.minecraft.client.Minecraft;
+import net.minecraft.server.level.ServerLevel;
+import net.minecraft.resources.ResourceKey;
+import net.minecraft.world.level.Level;
+
+/**
+ * Session listener that publishes everything prediction knows about the new session into {@link
+ * PredictionState}: the per-dimension generator preset, the world seed when one is known, and -
+ * for a superflat overworld - the uniform {@link FlatBaseline} that predicts without a seed.
+ *
+ * <p>Sources per mode:
+ * <ul>
+ *   <li>Singleplayer: presets/flat surface from the integrated server's live generators
+ *       ({@link WorldPresetDetector}/{@link FlatWorldBaseline}), seed from the save properties
+ *       unless an explicit client-side seed override is configured.</li>
+ *   <li>Multiplayer with an ACTIVE companion: presets/flat surface from the handshake
+ *       (HELLO_POLICY dim entries + FLAT_BASELINE), seed from the overworld dim entry when
+ *       granted. A pre-preset companion advertises defaults, matching its old behavior.</li>
+ *   <li>Multiplayer without a companion: an optional client-entered seed and target version are
+ *       read from the current world identity. Without that explicit setting, state stays cleared.</li>
+ * </ul>
+ *
+ * <p>The worldgen-version string ("1.17.1" for this subproject) is mapped to the cubiomes
+ * {@code MCVersion} int via {@link McVersions}; an unmappable version drops the seed (flat
+ * prediction is version-independent and survives).
+ */
+public final class PredictionBootstrap {
+    /** This subproject compiles for exactly one Minecraft version; see {@code McVersions} for the worldgen-version string table. */
+    private static final String MC_VERSION_STRING = MinecraftVersion.current();
+
+    private final Minecraft client;
+    private final PredictionState state;
+    private final CompanionSession companion;
+    private final ManualSeedConfig manualSeeds;
+
+    public PredictionBootstrap(
+        final Minecraft client,
+        final PredictionState state,
+        final CompanionSession companion,
+        final ManualSeedConfig manualSeeds
+    ) {
+        this.client = client;
+        this.state = state;
+        this.companion = companion;
+        this.manualSeeds = manualSeeds;
+    }
+
+    /** Main thread, from the session tracker. */
+    public void onSessionChanged(final SessionGuard.Session session) {
+        state.clear();
+        if (!session.active()) {
+            return;
+        }
+        final boolean singleplayer = client.isLocalServer() && client.getSingleplayerServer() != null;
+        final OptionalLong seedOpt;
+        final String worldgenVersion;
+        final WorldPreset overworldPreset;
+        final WorldPreset netherPreset;
+        final WorldPreset endPreset;
+        final Optional<FlatBaseline> flatBaseline;
+        final boolean manual;
+        if (singleplayer) {
+            //#if MC>=260100
+            // 26.1 dropped WorldData.getGeneratorOptions; the seed now hangs off the level itself.
+            final Optional<ManualSeedConfig.Entry> manualEntry = manualSeeds.get(session.world());
+            if (manualEntry.isPresent()) {
+                seedOpt = OptionalLong.of(manualEntry.get().seed());
+                worldgenVersion = manualEntry.get().worldgenVersion();
+                manual = true;
+            } else {
+                seedOpt = OptionalLong.of(client.getSingleplayerServer().overworld().getSeed());
+                worldgenVersion = MC_VERSION_STRING;
+                manual = false;
+            }
+            //#else
+            //$$ seedOpt = OptionalLong.of(client.getServer().getSaveProperties().getGeneratorOptions().getSeed());
+            //$$ worldgenVersion = MC_VERSION_STRING;
+            //$$ manual = false;
+            //#endif
+            // The client jar's own worldgen is the only worldgen an integrated server can run.
+            overworldPreset = detectLocal(Level.OVERWORLD);
+            netherPreset = detectLocal(Level.NETHER);
+            endPreset = detectLocal(Level.END);
+            flatBaseline = overworldPreset == WorldPreset.FLAT ? localFlatBaseline() : Optional.empty();
+        } else if (companion.isActive()) {
+            // The companion publishes the same vanilla seed for every dim (research R6 confirms
+            // vanilla threads one long through every dimension); read it from the overworld entry.
+            final OptionalLong companionSeed = companion.seedFor(PredictionDimensions.OVERWORLD);
+            final Optional<ManualSeedConfig.Entry> manualEntry = manualSeeds.get(session.world());
+            if (manualEntry.isPresent()) {
+                // A client-entered value is an explicit recovery/override choice. Prefer it over
+                // the companion value until the user clears it, then fall back to the server seed.
+                seedOpt = OptionalLong.of(manualEntry.get().seed());
+                worldgenVersion = manualEntry.get().worldgenVersion();
+                manual = true;
+            } else if (companionSeed.isPresent()) {
+                seedOpt = companionSeed;
+                // Plan: worldgen version comes from the handshake. A 1.17.1 client predicting
+                // against a different-version server's seed uses cubiomes' params for the
+                // server's version.
+                worldgenVersion = companion.policy() != null
+                    ? companion.policy().worldgenVersion() : MC_VERSION_STRING;
+                manual = false;
+            } else {
+                seedOpt = OptionalLong.empty();
+                worldgenVersion = companion.policy() != null
+                    ? companion.policy().worldgenVersion() : MC_VERSION_STRING;
+                manual = false;
+            }
+            overworldPreset = advertisedPreset(DimensionId.OVERWORLD);
+            netherPreset = advertisedPreset(DimensionId.NETHER);
+            endPreset = advertisedPreset(DimensionId.END);
+            flatBaseline = overworldPreset == WorldPreset.FLAT
+                ? companion.flatBaselineFor(PredictionDimensions.OVERWORLD)
+                : Optional.empty();
+        } else {
+            final Optional<ManualSeedConfig.Entry> configured = manualSeeds.get(session.world());
+            if (configured.isEmpty()) {
+                return;
+            }
+            final ManualSeedConfig.Entry entry = configured.get();
+            seedOpt = OptionalLong.of(entry.seed());
+            worldgenVersion = entry.worldgenVersion();
+            overworldPreset = WorldPreset.DEFAULT;
+            netherPreset = WorldPreset.DEFAULT;
+            endPreset = WorldPreset.DEFAULT;
+            flatBaseline = Optional.empty();
+            manual = true;
+        }
+        state.setPresets(overworldPreset, netherPreset, endPreset);
+        flatBaseline.ifPresent(state::setFlatBaseline);
+        if (seedOpt.isPresent()) {
+            final java.util.OptionalInt mcVersion = McVersions.toCubiomes(worldgenVersion);
+            if (mcVersion.isPresent()) {
+                if (manual) {
+                    state.setManualSeed(seedOpt.getAsLong(), mcVersion.getAsInt());
+                } else {
+                    state.setSeed(seedOpt.getAsLong(), mcVersion.getAsInt());
+                }
+            } else {
+                ConfluxMapMod.LOGGER.warn(
+                    "prediction: server advertised unmappable worldgen version '{}', seeded prediction disabled",
+                    worldgenVersion
+                );
+            }
+        }
+        ConfluxMapMod.LOGGER.debug(
+            "prediction: session bootstrapped (source={} worldgen={} overworld={} nether={} end={} seed={} flat={})",
+            singleplayer ? "singleplayer" : manual ? "manual" : "companion",
+            worldgenVersion, overworldPreset, netherPreset, endPreset,
+            state.seedKnown() ? "known" : "none", flatBaseline.isPresent()
+        );
+        if (overworldPreset == WorldPreset.FLAT) {
+            ConfluxMapMod.LOGGER.info(
+                "prediction: superflat overworld, underlay {} (uniform surface {})",
+                flatBaseline.isPresent() ? "uses the flat baseline" : "disabled (no surface info)",
+                flatBaseline.map(Object::toString).orElse("-")
+            );
+        } else if (!overworldPreset.predictable()) {
+            ConfluxMapMod.LOGGER.info(
+                "prediction: overworld generator recognized as {}, predicted underlay disabled there", overworldPreset
+            );
+        }
+    }
+
+    /** Integrated server only: classify one dimension's live generator; a missing world is CUSTOM. */
+    private WorldPreset detectLocal(final ResourceKey<Level> key) {
+        final ServerLevel world = client.getSingleplayerServer().getLevel(key);
+        return world == null ? WorldPreset.CUSTOM : WorldPresetDetector.detect(world);
+    }
+
+    /** Integrated server only: the superflat overworld's uniform surface. */
+    private Optional<FlatBaseline> localFlatBaseline() {
+        final ServerLevel world = client.getSingleplayerServer().getLevel(Level.OVERWORLD);
+        return world == null ? Optional.empty() : FlatWorldBaseline.of(world);
+    }
+
+    /** The companion-advertised preset for {@code dimension}; DEFAULT when absent (pre-preset server). */
+    private WorldPreset advertisedPreset(final DimensionId dimension) {
+        final HelloPolicyS2C policy = companion.policy();
+        if (policy == null) {
+            return WorldPreset.DEFAULT;
+        }
+        final String dimId = dimension.toString();
+        for (final HelloPolicyS2C.DimDescriptor dim : policy.dims()) {
+            if (dimId.equals(dim.dimId())) {
+                return dim.preset() == null ? WorldPreset.DEFAULT : dim.preset();
+            }
+        }
+        return WorldPreset.DEFAULT;
+    }
+}

@@ -17,6 +17,9 @@ preprocess {
     strictExtraMappings = false
     final ArrayList<Node> versions = []
     file('versions').eachDir { final File dir ->
+        if (dir.name.startsWith('neoforge-')) {
+            return
+        }
         final int mcVersion = mcVersionOf(dir.name)
         // An unobfuscated version has no intermediary namespace to resolve names through, so its
         // node carries a null mappings namespace: the link into it applies only the explicit

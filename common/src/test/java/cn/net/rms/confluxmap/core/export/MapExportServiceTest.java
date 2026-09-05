@@ -86,6 +86,25 @@ final class MapExportServiceTest {
     }
 
     @Test
+    void wrappedCancellationPreservesTheOriginalFailureReason() throws Exception {
+        final SessionGuard guard = new SessionGuard();
+        final SessionGuard.Session session = guard.begin(
+            new WorldIdentity("server", "world"), DimensionId.OVERWORLD
+        );
+        final CancellationException wrapper = new CancellationException("get");
+        wrapper.initCause(new CancellationException("Map tile snapshot was superseded"));
+        try (MapExportService service = new MapExportService(temp, guard, request -> key ->
+            CompletableFuture.failedFuture(wrapper)
+        )) {
+            service.start(request(session));
+            final MapExportStatus status = waitForTerminal(service);
+
+            assertEquals(MapExportStatus.State.FAILED, status.state());
+            assertEquals("Map tile snapshot was superseded", status.error());
+        }
+    }
+
+    @Test
     void explicitUserCancellationIsReportedAsCancelled() throws Exception {
         final SessionGuard guard = new SessionGuard();
         final SessionGuard.Session session = guard.begin(
