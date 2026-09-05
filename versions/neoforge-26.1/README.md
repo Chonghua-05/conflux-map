@@ -43,6 +43,9 @@ extension are bundled with NeoForge Jar-in-Jar metadata.
 - NeoForge metadata, client/server development runs and shared-core packaging.
 - Native predictor initialization through the common setup event.
 - Existing JSON client configuration and the complete client service graph source.
+- Manual seed configuration is available in singleplayer as well as multiplayer;
+  a saved singleplayer entry explicitly overrides the integrated world's seed for
+  client-side prediction.
 - Native NeoForge HUD layer registration for the minimap and waypoint item HUD.
 - Native NeoForge key mappings under the "Conflux Map" controls category.
 - NeoForge mod-list configuration screen extension backed by `ConfigScreen`.
@@ -72,7 +75,8 @@ Verified on Windows x64 with Temurin Java 25.0.4.1 and Gradle 9.1.0:
   Fabric API classes or Fabric metadata are bundled.
 - `runServer`: successful dedicated-server startup through world generation;
   logs reached `Conflux Map ... NeoForge adapter loaded`, `companion ready` and
-  `web map listening`. The process was then stopped cleanly.
+  `web map listening`. A development server with the mod is currently available
+  on `127.0.0.1:25565` from the NeoForge run directory.
 - `runClient`: successful client startup, resource loading and integrated-world
   login; logs reached `Conflux Map client services started (6 workers)`, sent both
   Conflux Map HELLO packets and started a map session without client errors before
