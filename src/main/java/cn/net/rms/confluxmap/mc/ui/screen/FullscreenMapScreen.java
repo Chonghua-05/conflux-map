@@ -4026,21 +4026,13 @@ public final class FullscreenMapScreen extends ConfluxScreen {
         );
     }
 
-    /** Keeps map overlays below every visible fullscreen-map control. */
+    /** Keeps map overlays out of persistent controls; the location menu draws over them instead. */
     private boolean mapOverlayIntersectsUi(
         final float left,
         final float top,
         final float right,
         final float bottom
     ) {
-        if (locationMenuBounds != null && intersects(
-            left, top, right, bottom,
-            locationMenuBounds.x(), locationMenuBounds.y(),
-            locationMenuBounds.x() + locationMenuBounds.width(),
-            locationMenuBounds.y() + locationMenuBounds.height()
-        )) {
-            return true;
-        }
         final TargetDropdown dropdown = targetDropdown();
         if (dropdown != null && intersects(
             left, top, right, bottom,
@@ -4051,7 +4043,8 @@ public final class FullscreenMapScreen extends ConfluxScreen {
             return true;
         }
         for (final var child : children()) {
-            if (!(child instanceof ClickableWidget widget) || !widget.visible) {
+            if (!(child instanceof ClickableWidget widget) || !widget.visible
+                || locationActionTooltips.containsKey(widget)) {
                 continue;
             }
             if (intersects(

@@ -11,12 +11,46 @@ import cn.net.rms.confluxmap.core.waypoint.Waypoint;
 import cn.net.rms.confluxmap.core.waypoint.WaypointRenderEntry;
 import cn.net.rms.confluxmap.mc.ui.world.WaypointHighlightState;
 import cn.net.rms.confluxmap.mc.world.LayerSelector;
+import java.io.IOException;
+import java.nio.file.Files;
+import java.nio.file.Path;
 import java.util.List;
 import java.util.OptionalInt;
 import java.util.UUID;
 import org.junit.jupiter.api.Test;
 
 class FullscreenMapLocationMenuTest {
+    @Test
+    void locationMenuCoversMapOverlaysWithoutSuppressingThem() throws IOException {
+        final String source = Files.readString(projectRoot().resolve(
+            "src/main/java/cn/net/rms/confluxmap/mc/ui/screen/FullscreenMapScreen.java"
+        )).replace("\r\n", "\n");
+        final String occlusion = between(
+            source,
+            "private boolean mapOverlayIntersectsUi(\n        final float left",
+            "    private static boolean intersects"
+        );
+
+        assertFalse(
+            occlusion.contains("locationMenuBounds"),
+            "the location menu must cover map overlays instead of suppressing them"
+        );
+        assertTrue(
+            occlusion.contains("locationActionTooltips.containsKey(widget)"),
+            "location-menu buttons must be excluded from generic widget avoidance"
+        );
+
+        final String render = between(
+            source,
+            "protected void renderContents(",
+            "    private void drawExportSelection"
+        );
+        final int menu = render.indexOf("drawLocationMenu(draw);");
+        assertTrue(render.indexOf("drawStructures(draw, mouseX, mouseY);") < menu);
+        assertTrue(render.indexOf("drawRadar(draw, tickDelta, mouseX, mouseY);") < menu);
+        assertTrue(render.indexOf("drawWaypoints(draw, mouseX, mouseY, radarObserver);") < menu);
+    }
+
     @Test
     void keepsTheExistingDisplayOrderWhenTeleportIsUnavailable() {
         assertEquals(List.of(
@@ -265,5 +299,24 @@ class FullscreenMapLocationMenuTest {
         assertTrue(bounds.y() >= FullscreenMapLocationMenu.SCREEN_MARGIN);
         assertTrue(bounds.x() + bounds.width() <= viewportWidth - FullscreenMapLocationMenu.SCREEN_MARGIN);
         assertTrue(bounds.y() + bounds.height() <= viewportHeight - FullscreenMapLocationMenu.SCREEN_MARGIN);
+    }
+
+    private static String between(final String source, final String start, final String end) {
+        final int startIndex = source.indexOf(start);
+        final int endIndex = source.indexOf(end, startIndex);
+        assertTrue(startIndex >= 0 && endIndex > startIndex, "expected source section must exist");
+        return source.substring(startIndex, endIndex);
+    }
+
+    private static Path projectRoot() {
+        Path current = Path.of("").toAbsolutePath().normalize();
+        while (current != null) {
+            if (Files.isRegularFile(current.resolve("common.gradle"))
+                && Files.isDirectory(current.resolve("src/main/java"))) {
+                return current;
+            }
+            current = current.getParent();
+        }
+        throw new IllegalStateException("Could not locate the Conflux Map project root");
     }
 }
