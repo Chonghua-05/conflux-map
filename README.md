@@ -4,30 +4,31 @@
 
 [![CurseForge downloads](https://img.shields.io/curseforge/dt/1663891?logo=curseforge&label=CurseForge&color=f16436)](https://www.curseforge.com/minecraft/mc-mods/conflux-map) [![MC百科 ID](https://img.shields.io/badge/MC%E7%99%BE%E7%A7%91_ID-30075-3f85c6?logo=data%3Aimage%2Fpng%3Bbase64%2CiVBORw0KGgoAAAANSUhEUgAAAA4AAAAOCAYAAAAfSC3RAAAACXBIWXMAAAAAAAAAAQCEeRdzAAACfklEQVR4nHVS7UtTURy%2BHyoCP5TQfxN9DMt0vrSXu0VfAvsQCBmGVL5MdDrLyiB6IYgWFJSUM%2B%2Fm3K7bdTqzmQudd%2FfmnLqXtmmb07vmbsR8OndEH8IOPDz8OM9zzvM7v0NVVB6m2t7WdNz20ZsmTv2zb0ojHwRlb8BnyNwYrjJVVB6iFFPbXb8BvR41iOC%2FME3RMHPVMH7sRKPFZqIGZnWJPk5bMk%2FTpf4pbVmksNlLo9%2BrI7WWsB6D0zVo527t0wxfop2xbcrEaSSjW4V2tgo9XENZrHA7ewZGdy16OTU62NO44riJ6pEgzjMr0Nt4mepxN%2B5axSEEUhN46m9B52Q1Hs81YyFlByM8wZ1pGjNRK7h4BlziB0zzUajH%2BCJldNVLQtYHZS0kHWh1nMTcBlOuV1OL8Kes%2BC4DzPo2RtcyaHKtQGMTZarb1SAtZlxI70SRlsMY8jYhKUWwuScgEF9DIFfAy%2BUkTg0vof5DCDqbCL2dGI1OcmNuBrMRBpH8Z4S3lpCQluBed%2BBLKodP2V94EVSMQWLkoRrlQSvGrgmVFM0T4epr2MPPyhHfr4iwkFvC2QLYb3nEJRmPFlN4JW7hfiAJmgmRqGz9rjf2Bu%2F4QTzwXYKYS6PZHUP%2FfBwjkSwus2H403kI23sI78gYj%2B5AN7ZcJOPQ5rs9dejjzuIqe49ECUJL%2BtAwAhrGBKgJn7PyqCURawjqyn0KMvkAmpiZq91vmXxY0trXoR8nc7ILygP8hWH8K0GZ92lbqGRwRjLKl7t23fecnLxGmhb%2BQDwQOiaEi54Y6izuLupo5TFKZfG0XnBGNshpRSIoEOz9gwKJVySaBDF1HDl%2BgvoNorIyyNSoGRkAAAAASUVORK5CYII%3D)](https://www.mcmod.cn/class/30075.html)
 
-Conflux Map is a Fabric minimap and world map mod. The client runs on its own: the minimap, fullscreen world map, biome layer, waypoints, structure finder, map drawing, and PNG export are all contained in a single JAR. Installing the server companion adds a server-wide live map, a shared waypoint list, and a web map accessible from a browser.
+Conflux Map is a Fabric and NeoForge minimap and world map mod. The client runs on its own: the minimap, fullscreen world map, biome layer, waypoints, structure finder, map drawing, and PNG export are all contained in a single JAR. Installing the server companion adds a server-wide live map, a shared waypoint list, and a web map accessible from a browser.
 
 ## Supported versions
 
-| Build      | Loads on                | Fabric | Paper plugin |
-|------------|-------------------------|:------:|:------------:|
-| `1.17.1`   | 1.17.1                  | ✓      | —            |
-| `1.18.2`   | 1.18.2                  | ✓      | —            |
-| `1.20.1`   | 1.20.1                  | ✓      | —            |
-| `1.21.1`   | 1.21, 1.21.1            | ✓      | ✓            |
-| `1.21.3`   | 1.21.2, 1.21.3          | ✓      | ✓            |
-| `1.21.4`   | 1.21.4                  | ✓      | ✓            |
-| `1.21.5`   | 1.21.5                  | ✓      | ✓            |
-| `1.21.8`   | 1.21.6, 1.21.7, 1.21.8  | ✓      | ✓            |
-| `1.21.9`   | 1.21.9, 1.21.10         | ✓      | ✓            |
-| `1.21.11`  | 1.21.11                 | ✓      | ✓            |
-| `26.1.2`   | 26.1, 26.1.1, 26.1.2    | ✓      | ✓            |
-| `26.2`     | 26.2                   | ✓      | ✓            |
+| Build             | Loads on                | Fabric | NeoForge | Paper plugin |
+|-------------------|-------------------------|:------:|:--------:|:------------:|
+| `1.17.1`          | 1.17.1                  | ✓      | —        | —            |
+| `1.18.2`          | 1.18.2                  | ✓      | —        | —            |
+| `1.20.1`          | 1.20.1                  | ✓      | —        | —            |
+| `1.21.1`          | 1.21, 1.21.1            | ✓      | —        | ✓            |
+| `1.21.3`          | 1.21.2, 1.21.3          | ✓      | —        | ✓            |
+| `1.21.4`          | 1.21.4                  | ✓      | —        | ✓            |
+| `1.21.5`          | 1.21.5                  | ✓      | —        | ✓            |
+| `1.21.8`          | 1.21.6, 1.21.7, 1.21.8  | ✓      | —        | ✓            |
+| `1.21.9`          | 1.21.9, 1.21.10         | ✓      | —        | ✓            |
+| `1.21.11`         | 1.21.11                 | ✓      | —        | ✓            |
+| `26.1.2`          | 26.1, 26.1.1, 26.1.2    | ✓      | —        | ✓            |
+| `26.2`            | 26.2                   | ✓      | —        | ✓            |
+| `26.1-neoforge`   | 26.1                    | —      | ✓        | —            |
 
 ## Installation
 
-Download the JAR for your Minecraft version from the [Releases](../../releases) page and place it in the `mods/` folder together with [Fabric API](https://modrinth.com/mod/fabric-api). To build the mod yourself, see [Building](#building).
+Download the JAR for your Minecraft version and loader from the [Releases](../../releases) page and place it in the `mods/` folder. Fabric builds require [Fabric API](https://modrinth.com/mod/fabric-api); the NeoForge 26.1 build uses NeoForge's built-in mod list and does not require Fabric API. To build the mod yourself, see [Building](#building).
 
-[MaliLib](https://modrinth.com/mod/malilib) is optional. When installed, keybindings support multi-key combinations, and Conflux Map appears in MaliLib's A+C settings switcher.
+[MaliLib](https://modrinth.com/mod/malilib) is optional on Fabric. When installed, keybindings support multi-key combinations, and Conflux Map appears in MaliLib's A+C settings switcher. The NeoForge 26.1 build does not use MaliLib; configure it from Minecraft's controls screen or NeoForge's mod list.
 
 The minimap, world map, waypoints, drawing, and export require only the client. Server-wide map synchronization, shared waypoints, the chunk load-level map, and the web map require the server companion; see [Server companion](#server-companion).
 
@@ -121,6 +122,7 @@ Chat coordinate sharing requires no server companion and works on any server.
 With the companion installed, the whole server shares one live map and one waypoint list.
 
 - Fabric server: place the matching JAR into `mods/`.
+- NeoForge 26.1 server: place the `26.1-neoforge` JAR into `mods/`.
 - Paper server: place `confluxmap-paper-<version>.jar` into `plugins/` (Paper 1.21.1 through 26.2).
 
 Client and server versions can be upgraded independently: matching prediction algorithms use compact differential updates, differing algorithms fall back to full-data updates, and older-protocol clients always retain the basic map service.
@@ -145,6 +147,7 @@ Requires JDK 21 or newer. Gradle downloads Minecraft, the mappings, Fabric API, 
 
 ```sh
 ./gradlew :1.21.11:build
+./gradlew -p versions/neoforge-26.1 build
 ./gradlew :paper:build
 ./gradlew :paper:runServer
 ```

@@ -1,7 +1,7 @@
-# NeoForge 26.1 Port
+# NeoForge 26.1
 
 Experimental platform adapter based on upstream `c00827418a34984db7633d665b0a8ec51837e401`.
-This is an experimental NeoForge port. The shared map/client services and the
+This is the NeoForge 26.1 build. The shared map/client services and the
 server companion are included. MaliLib is intentionally not part of this target;
 NeoForge's built-in mod list is used for the configuration entry point.
 
@@ -10,7 +10,7 @@ NeoForge's built-in mod list is used for the configuration entry point.
 - Minecraft **26.1** (exact version, not 1.21.6 or 26.1.2).
 - NeoForge **26.1.0.19-beta**.
 - Java **25** and ModDevGradle **2.0.146**.
-- Experimental mod version `0.1.4-neoforge-alpha.1`.
+- Release version `0.1.4`.
 
 The existing Fabric targets and Paper adapter retain their own build scripts.
 The port keeps a checked-out preprocessed 26.1 source snapshot under

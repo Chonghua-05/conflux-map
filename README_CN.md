@@ -4,30 +4,31 @@
 
 [![CurseForge 下载量](https://img.shields.io/curseforge/dt/1663891?logo=curseforge&label=CurseForge&color=f16436)](https://www.curseforge.com/minecraft/mc-mods/conflux-map) [![MC百科 ID](https://img.shields.io/badge/MC%E7%99%BE%E7%A7%91_ID-30075-3f85c6?logo=data%3Aimage%2Fpng%3Bbase64%2CiVBORw0KGgoAAAANSUhEUgAAAA4AAAAOCAYAAAAfSC3RAAAACXBIWXMAAAAAAAAAAQCEeRdzAAACfklEQVR4nHVS7UtTURy%2BHyoCP5TQfxN9DMt0vrSXu0VfAvsQCBmGVL5MdDrLyiB6IYgWFJSUM%2B%2Fm3K7bdTqzmQudd%2FfmnLqXtmmb07vmbsR8OndEH8IOPDz8OM9zzvM7v0NVVB6m2t7WdNz20ZsmTv2zb0ojHwRlb8BnyNwYrjJVVB6iFFPbXb8BvR41iOC%2FME3RMHPVMH7sRKPFZqIGZnWJPk5bMk%2FTpf4pbVmksNlLo9%2BrI7WWsB6D0zVo527t0wxfop2xbcrEaSSjW4V2tgo9XENZrHA7ewZGdy16OTU62NO44riJ6pEgzjMr0Nt4mepxN%2B5axSEEUhN46m9B52Q1Hs81YyFlByM8wZ1pGjNRK7h4BlziB0zzUajH%2BCJldNVLQtYHZS0kHWh1nMTcBlOuV1OL8Kes%2BC4DzPo2RtcyaHKtQGMTZarb1SAtZlxI70SRlsMY8jYhKUWwuScgEF9DIFfAy%2BUkTg0vof5DCDqbCL2dGI1OcmNuBrMRBpH8Z4S3lpCQluBed%2BBLKodP2V94EVSMQWLkoRrlQSvGrgmVFM0T4epr2MPPyhHfr4iwkFvC2QLYb3nEJRmPFlN4JW7hfiAJmgmRqGz9rjf2Bu%2F4QTzwXYKYS6PZHUP%2FfBwjkSwus2H403kI23sI78gYj%2B5AN7ZcJOPQ5rs9dejjzuIqe49ECUJL%2BtAwAhrGBKgJn7PyqCURawjqyn0KMvkAmpiZq91vmXxY0trXoR8nc7ILygP8hWH8K0GZ92lbqGRwRjLKl7t23fecnLxGmhb%2BQDwQOiaEi54Y6izuLupo5TFKZfG0XnBGNshpRSIoEOz9gwKJVySaBDF1HDl%2BgvoNorIyyNSoGRkAAAAASUVORK5CYII%3D)](https://www.mcmod.cn/class/30075.html)
 
-Conflux Map 是一款 Fabric 平台的小地图与世界地图模组。客户端可独立运行：小地图、全屏世界地图、群系图层、路径点、结构查找、地图绘图与 PNG 导出均集成于同一个 JAR。若服务器安装配套的服务端组件，整个服务器还可以共享同一份实时地图、一套公共路径点，以及一个通过浏览器访问的网页地图。
+Conflux Map 是一款支持 Fabric 与 NeoForge 的小地图和世界地图模组。客户端可独立运行：小地图、全屏世界地图、群系图层、路径点、结构查找、地图绘图与 PNG 导出均集成于同一个 JAR。若服务器安装配套的服务端组件，整个服务器还可以共享同一份实时地图、一套公共路径点，以及一个通过浏览器访问的网页地图。
 
 ## 支持的版本
 
-| 构建       | 可加载的版本           | Fabric | Paper 插件 |
-|------------|-----------------------|:------:|:----------:|
-| `1.17.1`   | 1.17.1                | ✓      | —          |
-| `1.18.2`   | 1.18.2                | ✓      | —          |
-| `1.20.1`   | 1.20.1                | ✓      | —          |
-| `1.21.1`   | 1.21、1.21.1           | ✓      | ✓          |
-| `1.21.3`   | 1.21.2、1.21.3         | ✓      | ✓          |
-| `1.21.4`   | 1.21.4                | ✓      | ✓          |
-| `1.21.5`   | 1.21.5                | ✓      | ✓          |
-| `1.21.8`   | 1.21.6、1.21.7、1.21.8 | ✓      | ✓          |
-| `1.21.9`   | 1.21.9、1.21.10        | ✓      | ✓          |
-| `1.21.11`  | 1.21.11               | ✓      | ✓          |
-| `26.1.2`   | 26.1、26.1.1、26.1.2   | ✓      | ✓          |
-| `26.2`     | 26.2                  | ✓      | ✓          |
+| 构建              | 可加载的版本           | Fabric | NeoForge | Paper 插件 |
+|-------------------|-----------------------|:------:|:--------:|:----------:|
+| `1.17.1`          | 1.17.1                | ✓      | —        | —          |
+| `1.18.2`          | 1.18.2                | ✓      | —        | —          |
+| `1.20.1`          | 1.20.1                | ✓      | —        | —          |
+| `1.21.1`          | 1.21、1.21.1           | ✓      | —        | ✓          |
+| `1.21.3`          | 1.21.2、1.21.3         | ✓      | —        | ✓          |
+| `1.21.4`          | 1.21.4                | ✓      | —        | ✓          |
+| `1.21.5`          | 1.21.5                | ✓      | —        | ✓          |
+| `1.21.8`          | 1.21.6、1.21.7、1.21.8 | ✓      | —        | ✓          |
+| `1.21.9`          | 1.21.9、1.21.10        | ✓      | —        | ✓          |
+| `1.21.11`         | 1.21.11               | ✓      | —        | ✓          |
+| `26.1.2`          | 26.1、26.1.1、26.1.2   | ✓      | —        | ✓          |
+| `26.2`            | 26.2                  | ✓      | —        | ✓          |
+| `26.1-neoforge`   | 26.1                  | —      | ✓        | —          |
 
 ## 安装
 
-从 [Releases](../../releases) 页面下载对应 Minecraft 版本的 JAR，与 [Fabric API](https://modrinth.com/mod/fabric-api) 一同放入 `mods/` 目录。自行构建的方法参见[构建](#构建)。
+从 [Releases](../../releases) 页面下载对应 Minecraft 版本和加载器的 JAR，放入 `mods/` 目录。Fabric 构建需要 [Fabric API](https://modrinth.com/mod/fabric-api)；NeoForge 26.1 构建使用 NeoForge 自带的模组列表，不需要 Fabric API。自行构建的方法参见[构建](#构建)。
 
-[MaliLib](https://modrinth.com/mod/malilib) 为可选依赖。安装后按键支持多键组合，Conflux Map 也会出现在 MaliLib 的 A+C 设置切换界面中。
+[MaliLib](https://modrinth.com/mod/malilib) 仅在 Fabric 上可选。安装后按键支持多键组合，Conflux Map 也会出现在 MaliLib 的 A+C 设置切换界面中。NeoForge 26.1 构建不使用 MaliLib，请在 Minecraft 控制设置或 NeoForge 模组列表中配置。
 
 小地图、世界地图、路径点、绘图与导出功能仅依赖客户端。全服地图同步、公共路径点、区块加载等级与网页地图需要服务端组件，参见[服务端组件](#服务端组件)。
 
@@ -121,6 +122,7 @@ Conflux Map 是一款 Fabric 平台的小地图与世界地图模组。客户端
 安装组件后，全服共用同一份实时地图与同一份路径点列表。
 
 - Fabric 服务端：将对应版本的 JAR 放入 `mods/` 目录。
+- NeoForge 26.1 服务端：将 `26.1-neoforge` JAR 放入 `mods/` 目录。
 - Paper 服务端：将 `confluxmap-paper-<version>.jar` 放入 `plugins/` 目录，支持 Paper 1.21.1 至 26.2。
 
 客户端与服务端可以分别升级：两侧预测算法一致时采用体积较小的差分同步，不一致时回退至完整数据同步，旧协议客户端始终可以获得基础地图服务。
@@ -145,6 +147,7 @@ Conflux Map 是一款 Fabric 平台的小地图与世界地图模组。客户端
 
 ```sh
 ./gradlew :1.21.11:build
+./gradlew -p versions/neoforge-26.1 build
 ./gradlew :paper:build
 ./gradlew :paper:runServer
 ```
