@@ -4,14 +4,14 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import org.junit.jupiter.api.Test;
 
-/** Regression coverage for location actions on uncaptured/void map columns. */
+/** Regression coverage for location action availability. */
 class FullscreenMapLocationMenuTest {
     @Test
-    void waypointAndShareStayUsableWithoutAHeightEstimate() {
-        assertTrue(FullscreenMapLocationMenu.actionEnabled(
+    void groundActionsRequireAHeightEstimate() {
+        assertTrue(!FullscreenMapLocationMenu.actionEnabled(
             FullscreenMapLocationMenu.Action.SET_WAYPOINT, true, false, false
         ));
-        assertTrue(FullscreenMapLocationMenu.actionEnabled(
+        assertTrue(!FullscreenMapLocationMenu.actionEnabled(
             FullscreenMapLocationMenu.Action.SHARE_LOCATION, true, false, false
         ));
     }

@@ -12,6 +12,7 @@ import net.minecraft.client.Minecraft;
 /** Evaluates whether the configured teleport command can reach one map target. */
 public final class TeleportCommandAccess {
     private static final String NO_PLAYER = "confluxmap.teleport.unavailable.player";
+    private static final String UNKNOWN_POSITION = "confluxmap.teleport.unavailable.position";
     private static final String DIMENSION_SWITCH = "confluxmap.teleport.unavailable.dimension";
     private static final String WORLD_SWITCH = "confluxmap.teleport.unavailable.world";
     private static final String COMMAND = "confluxmap.teleport.unavailable.command";
@@ -48,11 +49,9 @@ public final class TeleportCommandAccess {
         if (!playerPresent) {
             return Result.unavailable(NO_PLAYER);
         }
-        // A fullscreen-map cursor may point at an uncaptured column (or an End void
-        // column), so there is no deterministic height estimate yet.  The teleport
-        // service handles that case safely: it stages at the build limit, waits for
-        // the target chunk, and then resolves the authoritative ground height.  Do
-        // not disable the action merely because the preview has no height metadata.
+        if (!targetPositionKnown) {
+            return Result.unavailable(UNKNOWN_POSITION);
+        }
         if (!sameDimension && !TeleportCommandTemplate.supportsDimensionSwitch(template)) {
             return Result.unavailable(DIMENSION_SWITCH);
         }
