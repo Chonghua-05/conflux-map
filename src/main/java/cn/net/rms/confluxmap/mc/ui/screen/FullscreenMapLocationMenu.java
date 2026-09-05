@@ -20,6 +20,7 @@ final class FullscreenMapLocationMenu {
     enum Action {
         SET_WAYPOINT("confluxmap.map.location_menu.set_waypoint"),
         EDIT_WAYPOINT("confluxmap.map.location_menu.edit_waypoint"),
+        DELETE_WAYPOINT("confluxmap.map.location_menu.delete_waypoint"),
         SHARE_LOCATION("confluxmap.map.location_menu.share_location"),
         SHARE_WAYPOINT("confluxmap.map.location_menu.share_waypoint"),
         TELEPORT("confluxmap.map.location_menu.teleport"),
@@ -39,11 +40,6 @@ final class FullscreenMapLocationMenu {
             return translationKey;
         }
     }
-
-    private static final int ACTION_COUNT = 4;
-    private static final int PANEL_HEIGHT = PANEL_PADDING * 2
-        + ACTION_COUNT * BUTTON_HEIGHT
-        + (ACTION_COUNT - 1) * BUTTON_GAP;
 
     private FullscreenMapLocationMenu() {
     }
@@ -71,6 +67,11 @@ final class FullscreenMapLocationMenu {
             : currentTargetHighlighted
                 ? Action.CLEAR_HIGHLIGHT
                 : existingWaypoint ? Action.HIGHLIGHT_WAYPOINT : Action.HIGHLIGHT;
+        if (existingWaypoint) {
+            return teleportCommandAvailable
+                ? List.of(Action.TELEPORT, Action.EDIT_WAYPOINT, Action.DELETE_WAYPOINT, share, highlight)
+                : List.of(Action.EDIT_WAYPOINT, Action.DELETE_WAYPOINT, share, Action.TELEPORT, highlight);
+        }
         return teleportCommandAvailable
             ? List.of(Action.TELEPORT, edit, share, highlight)
             : List.of(edit, share, Action.TELEPORT, highlight);
@@ -88,6 +89,9 @@ final class FullscreenMapLocationMenu {
         final boolean teleportCommandAvailable
     ) {
         if (!playerPresent) {
+            return false;
+        }
+        if (action == Action.DELETE_WAYPOINT) {
             return false;
         }
         if (action == Action.HIGHLIGHT
@@ -116,16 +120,36 @@ final class FullscreenMapLocationMenu {
         return actionEnabled(action, playerPresent, estimatedHeightKnown, teleportCommandAvailable);
     }
 
+    static boolean actionEnabled(
+        final Action action,
+        final boolean playerPresent,
+        final boolean estimatedHeightKnown,
+        final boolean teleportCommandAvailable,
+        final boolean waypointEditable,
+        final boolean waypointDeletable
+    ) {
+        if (action == Action.DELETE_WAYPOINT) {
+            return playerPresent && waypointDeletable;
+        }
+        return actionEnabled(
+            action, playerPresent, estimatedHeightKnown, teleportCommandAvailable, waypointEditable
+        );
+    }
+
     static Bounds place(
         final int cursorX,
         final int cursorY,
         final int viewportWidth,
-        final int viewportHeight
+        final int viewportHeight,
+        final int actionCount
     ) {
         final int availableWidth = Math.max(1, viewportWidth - SCREEN_MARGIN * 2);
         final int availableHeight = Math.max(1, viewportHeight - SCREEN_MARGIN * 2);
         final int panelWidth = Math.min(PANEL_WIDTH, availableWidth);
-        final int panelHeight = Math.min(PANEL_HEIGHT, availableHeight);
+        final int desiredHeight = PANEL_PADDING * 2
+            + actionCount * BUTTON_HEIGHT
+            + Math.max(0, actionCount - 1) * BUTTON_GAP;
+        final int panelHeight = Math.min(desiredHeight, availableHeight);
         final int x = placeAxis(cursorX, panelWidth, viewportWidth);
         final int y = placeAxis(cursorY, panelHeight, viewportHeight);
         return new Bounds(x, y, panelWidth, panelHeight);

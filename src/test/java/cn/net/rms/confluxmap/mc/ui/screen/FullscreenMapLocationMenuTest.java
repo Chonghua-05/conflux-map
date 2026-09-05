@@ -41,6 +41,7 @@ class FullscreenMapLocationMenuTest {
     void replacesLocationActionsWithWaypointActionsForAnExistingWaypoint() {
         assertEquals(List.of(
             FullscreenMapLocationMenu.Action.EDIT_WAYPOINT,
+            FullscreenMapLocationMenu.Action.DELETE_WAYPOINT,
             FullscreenMapLocationMenu.Action.SHARE_WAYPOINT,
             FullscreenMapLocationMenu.Action.TELEPORT,
             FullscreenMapLocationMenu.Action.HIGHLIGHT_WAYPOINT
@@ -48,6 +49,7 @@ class FullscreenMapLocationMenuTest {
         assertEquals(List.of(
             FullscreenMapLocationMenu.Action.TELEPORT,
             FullscreenMapLocationMenu.Action.EDIT_WAYPOINT,
+            FullscreenMapLocationMenu.Action.DELETE_WAYPOINT,
             FullscreenMapLocationMenu.Action.SHARE_WAYPOINT,
             FullscreenMapLocationMenu.Action.HIGHLIGHT_WAYPOINT
         ), FullscreenMapLocationMenu.actions(true, true, false));
@@ -63,6 +65,7 @@ class FullscreenMapLocationMenuTest {
         ), FullscreenMapLocationMenu.actions(false, false, true));
         assertEquals(List.of(
             FullscreenMapLocationMenu.Action.EDIT_WAYPOINT,
+            FullscreenMapLocationMenu.Action.DELETE_WAYPOINT,
             FullscreenMapLocationMenu.Action.SHARE_WAYPOINT,
             FullscreenMapLocationMenu.Action.TELEPORT,
             FullscreenMapLocationMenu.Action.CLEAR_HIGHLIGHT
@@ -114,17 +117,31 @@ class FullscreenMapLocationMenuTest {
     @Test
     void editActionOnlyDependsOnWaypointPermission() {
         assertTrue(FullscreenMapLocationMenu.actionEnabled(
-            FullscreenMapLocationMenu.Action.EDIT_WAYPOINT, true, false, false, true
+            FullscreenMapLocationMenu.Action.EDIT_WAYPOINT, true, false, false, true, false
         ));
         assertFalse(FullscreenMapLocationMenu.actionEnabled(
-            FullscreenMapLocationMenu.Action.EDIT_WAYPOINT, true, false, false, false
+            FullscreenMapLocationMenu.Action.EDIT_WAYPOINT, true, false, false, false, true
+        ));
+    }
+
+    @Test
+    void deleteActionOnlyDependsOnWaypointPermission() {
+        assertTrue(FullscreenMapLocationMenu.actionEnabled(
+            FullscreenMapLocationMenu.Action.DELETE_WAYPOINT, true, false, false, false, true
+        ));
+        assertFalse(FullscreenMapLocationMenu.actionEnabled(
+            FullscreenMapLocationMenu.Action.DELETE_WAYPOINT, true, false, false, true, false
         ));
     }
 
     @Test
     void opensBesideTheCursorWithoutLeavingTheViewport() {
-        final FullscreenMapLocationMenu.Bounds topLeft = FullscreenMapLocationMenu.place(20, 20, 320, 240);
-        final FullscreenMapLocationMenu.Bounds bottomRight = FullscreenMapLocationMenu.place(315, 235, 320, 240);
+        final FullscreenMapLocationMenu.Bounds topLeft = FullscreenMapLocationMenu.place(
+            20, 20, 320, 240, 4
+        );
+        final FullscreenMapLocationMenu.Bounds bottomRight = FullscreenMapLocationMenu.place(
+            315, 235, 320, 240, 5
+        );
 
         assertTrue(topLeft.x() > 20);
         assertTrue(topLeft.y() > 20);
@@ -132,6 +149,21 @@ class FullscreenMapLocationMenuTest {
         assertTrue(bottomRight.y() + bottomRight.height() < 235);
         assertInsideViewport(topLeft, 320, 240);
         assertInsideViewport(bottomRight, 320, 240);
+    }
+
+    @Test
+    void growsThePanelForTheWaypointDeleteAction() {
+        final FullscreenMapLocationMenu.Bounds location = FullscreenMapLocationMenu.place(
+            20, 20, 320, 240, 4
+        );
+        final FullscreenMapLocationMenu.Bounds waypoint = FullscreenMapLocationMenu.place(
+            20, 20, 320, 240, 5
+        );
+
+        assertEquals(
+            FullscreenMapLocationMenu.BUTTON_HEIGHT + FullscreenMapLocationMenu.BUTTON_GAP,
+            waypoint.height() - location.height()
+        );
     }
 
     @Test
