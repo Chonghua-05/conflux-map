@@ -2,7 +2,7 @@ package cn.net.rms.confluxmap.mc.ui;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 //#if MC<11900
-import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 //#endif
 
 import cn.net.rms.confluxmap.core.config.ConfluxConfig;
@@ -30,13 +30,13 @@ final class PlayerMarkerRendererTest {
 
     //#if MC<11900
     @Test
-    void playerMarkerIgnoresLegacyGuiItemDepth() throws Exception {
+    void playerMarkerReliesOnTheSharedGuiPainterOrder() throws Exception {
         final String source = Files.readString(preprocessedSource());
 
-        assertTrue(source.contains("RenderSystem.disableDepthTest();"));
-        assertTrue(source.contains("RenderSystem.depthMask(false);"));
-        assertTrue(source.contains("RenderSystem.depthMask(true);"));
-        assertTrue(source.contains("RenderSystem.enableDepthTest();"));
+        assertFalse(source.contains("RenderSystem.disableDepthTest();"));
+        assertFalse(source.contains("RenderSystem.depthMask(false);"));
+        assertFalse(source.contains("RenderSystem.depthMask(true);"));
+        assertFalse(source.contains("RenderSystem.enableDepthTest();"));
     }
     //#endif
 

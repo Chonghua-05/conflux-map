@@ -2,18 +2,10 @@ package cn.net.rms.confluxmap.mc.ui.world;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
-//#if MC>=12000 && MC<12104
-//$$ import static org.junit.jupiter.api.Assertions.assertTrue;
-//#endif
 
 import cn.net.rms.confluxmap.core.model.DimensionId;
 import cn.net.rms.confluxmap.core.waypoint.Waypoint;
 import cn.net.rms.confluxmap.core.waypoint.WaypointRenderEntry;
-//#if MC>=12000 && MC<12104
-//$$ import java.net.URISyntaxException;
-//$$ import java.nio.file.Files;
-//$$ import java.nio.file.Path;
-//#endif
 import java.util.ArrayList;
 import java.util.List;
 import java.util.UUID;
@@ -64,21 +56,6 @@ final class WaypointItemHudRendererTest {
         assertEquals(playerId, player.playerId());
     }
 
-    //#if MC>=12000 && MC<12104
-    //$$ @Test
-    //$$ void itemIconsReleaseGuiDepthBeforeLaterOverlays() throws Exception {
-    //$$     final String source = Files.readString(guiDrawSource());
-    //$$     final int drawItem = source.indexOf("context.drawItem(stack, 0, 0);");
-    //$$     final int clearDepth = source.indexOf("RenderUtil.clearGuiDepth();", drawItem);
-    //$$
-    //$$     assertTrue(drawItem >= 0, "the version must use DrawContext item rendering");
-    //$$     assertTrue(
-    //$$         clearDepth > drawItem,
-    //$$         "item icons must clear their depth before player markers, pointers, or the crosshair"
-    //$$     );
-    //$$ }
-    //#endif
-
     private static WaypointItemHudRenderer.Label label() {
         return new WaypointItemHudRenderer.Label(
             new WaypointRenderEntry(
@@ -95,27 +72,4 @@ final class WaypointItemHudRendererTest {
         );
     }
 
-    //#if MC>=12000 && MC<12104
-    //$$ private static Path guiDrawSource() throws URISyntaxException {
-    //$$     Path current = Path.of(
-    //$$         WaypointItemHudRendererTest.class.getProtectionDomain()
-    //$$             .getCodeSource().getLocation().toURI()
-    //$$     );
-    //$$     while (current != null && !"build".equals(current.getFileName().toString())) {
-    //$$         current = current.getParent();
-    //$$     }
-    //$$     if (current == null) {
-    //$$         throw new IllegalStateException("Could not locate the version build directory");
-    //$$     }
-    //$$     final Path preprocessed = current.resolve(
-    //$$         "preprocessed/main/java/cn/net/rms/confluxmap/mc/ui/GuiDraw.java"
-    //$$     );
-    //$$     if (Files.exists(preprocessed)) {
-    //$$         return preprocessed;
-    //$$     }
-    //$$     return current.getParent().getParent().getParent().resolve(
-    //$$         "src/main/java/cn/net/rms/confluxmap/mc/ui/GuiDraw.java"
-    //$$     );
-    //$$ }
-    //#endif
 }

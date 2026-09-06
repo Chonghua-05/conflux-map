@@ -109,11 +109,6 @@ public final class GuiDraw {
         //$$     context.drawItem(stack, 0, 0);
         //$$ } finally {
         //$$     matrices.pop();
-        //#if MC<12104
-        //$$     // DrawContext flushes GUI items at depth 150 through 1.21.3. Release that depth
-        //$$     // so later flat overlays keep their explicit painter's order.
-        //$$     RenderUtil.clearGuiDepth();
-        //#endif
         //$$ }
         //#else
         final MatrixStack modelView = RenderSystem.getModelViewStack();
@@ -127,6 +122,11 @@ public final class GuiDraw {
             modelView.pop();
             RenderSystem.applyModelViewMatrix();
         }
+        //#endif
+        //#if MC<12104
+        // GUI item models use their own depth through 1.21.3. Release it so every GuiDraw caller
+        // keeps ordinary painter's order without component-specific depth state.
+        RenderUtil.clearGuiDepth();
         //#endif
     }
 

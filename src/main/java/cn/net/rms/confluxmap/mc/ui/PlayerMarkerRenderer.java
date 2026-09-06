@@ -4,9 +4,6 @@ import cn.net.rms.confluxmap.compat.Ids;
 import cn.net.rms.confluxmap.core.config.ConfluxConfig;
 import cn.net.rms.confluxmap.core.util.Argb;
 import cn.net.rms.confluxmap.mc.render.RenderUtil;
-//#if MC<11900
-import com.mojang.blaze3d.systems.RenderSystem;
-//#endif
 import net.minecraft.client.MinecraftClient;
 import net.minecraft.client.util.math.MatrixStack;
 import net.minecraft.util.Identifier;
@@ -54,10 +51,6 @@ public final class PlayerMarkerRenderer {
     ) {
         final UiResourceTheme.PlayerMarkerTexture texture =
             theme.playerMarker().orElseGet(() -> builtInMarker(fallbackStyle));
-        //#if MC<11900
-        RenderSystem.disableDepthTest();
-        RenderSystem.depthMask(false);
-        //#endif
         matrices.push();
         try {
             matrices.translate(centerX, centerY, 0);
@@ -68,10 +61,6 @@ public final class PlayerMarkerRenderer {
             drawTexture(client, matrices, texture, fallbackColor, opacity);
         } finally {
             matrices.pop();
-            //#if MC<11900
-            RenderSystem.depthMask(true);
-            RenderSystem.enableDepthTest();
-            //#endif
         }
     }
 
