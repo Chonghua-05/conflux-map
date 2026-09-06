@@ -41,7 +41,6 @@ final class BiomeCandidateScreen extends ConfluxScreen {
     private final DimensionId dimension;
     private final Identifier biome;
     private final SplitMapPane mapPane;
-    private final List<ButtonWidget> mapButtons = new ArrayList<>();
     private final List<ButtonWidget> waypointButtons = new ArrayList<>();
 
     private int centerX;
@@ -99,7 +98,6 @@ final class BiomeCandidateScreen extends ConfluxScreen {
 
     private void rebuild() {
         clearChildren();
-        mapButtons.clear();
         waypointButtons.clear();
         panelContentWidth = requiredPanelContentWidth();
         final SplitMapLayout layout = splitLayout();
@@ -128,14 +126,6 @@ final class BiomeCandidateScreen extends ConfluxScreen {
         scrollOffset = listUi.scrollOffset();
         for (int index = 0; index < results.size(); index++) {
             final BiomeCandidateSearch.Candidate candidate = results.get(index);
-            mapButtons.add(addDrawableChild(Widgets.button(
-                listUi.actionX(),
-                listUi.mapButtonY(index),
-                listUi.actionWidth(),
-                20,
-                Texts.translatable("confluxmap.screen.structure_candidates.map"),
-                ignored -> focus(candidate)
-            )));
             waypointButtons.add(addDrawableChild(Widgets.button(
                 listUi.actionX(),
                 listUi.waypointButtonY(index),
@@ -306,7 +296,7 @@ final class BiomeCandidateScreen extends ConfluxScreen {
         final CandidateListUi listUi = candidateListUi();
         scrollOffset = listUi.scrollOffset();
         for (int index = 0; index < results.size(); index++) {
-            listUi.layoutButtons(index, mapButtons.get(index), waypointButtons.get(index));
+            listUi.layoutButton(index, waypointButtons.get(index));
         }
     }
 
@@ -354,6 +344,11 @@ final class BiomeCandidateScreen extends ConfluxScreen {
         //#else
         if (super.mouseClicked(mouseX, mouseY, button)) {
         //#endif
+            return true;
+        }
+        final int candidateIndex = button == 0 ? listUi.candidateAt(mouseX, mouseY) : -1;
+        if (candidateIndex >= 0) {
+            focus(results.get(candidateIndex));
             return true;
         }
         return mapPane.mouseClicked(mouseX, mouseY, button, splitLayout());
@@ -471,27 +466,19 @@ final class BiomeCandidateScreen extends ConfluxScreen {
             draw.drawTextWithShadow(
                 this.textRenderer,
                 this.textRenderer.trimToWidth(
-                    CandidateListUi.coordinateText(candidate.blockX(), candidate.blockZ()),
+                    CandidateListUi.coordinateText(candidate.blockX(), candidate.blockZ())
+                        + " · "
+                        + Texts.translatable(
+                            "confluxmap.value.blocks",
+                            CandidateListUi.distanceInBlocks(
+                                candidate.blockX(), candidate.blockZ(), centerX, centerZ
+                            )
+                        ).getString(),
                     listUi.textWidth()
                 ),
                 rowX(),
                 listUi.rowY(index) + 6,
                 0xFFFFFFFF
-            );
-            draw.drawTextWithShadow(
-                this.textRenderer,
-                this.textRenderer.trimToWidth(
-                    Texts.translatable(
-                        "confluxmap.value.blocks",
-                        CandidateListUi.distanceInBlocks(
-                            candidate.blockX(), candidate.blockZ(), centerX, centerZ
-                        )
-                    ).getString(),
-                    listUi.textWidth()
-                ),
-                rowX(),
-                listUi.waypointButtonY(index) + 6,
-                0xFFBBBBBB
             );
         }
         if (statusKey != null) {

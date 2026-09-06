@@ -4,12 +4,11 @@ import cn.net.rms.confluxmap.compat.Widgets;
 import cn.net.rms.confluxmap.mc.ui.GuiDraw;
 import net.minecraft.client.gui.widget.ButtonWidget;
 
-/** Shared two-line candidate list layout, controls, separators, and scrolling. */
+/** Shared single-line candidate list layout, controls, separators, and scrolling. */
 final class CandidateListUi {
     private static final int LIST_TOP = 112;
     private static final int LIST_BOTTOM_SPACE = 32;
-    private static final int ROW_HEIGHT = 44;
-    private static final int ACTION_ROW_OFFSET = 22;
+    private static final int ROW_HEIGHT = 24;
     private static final int ACTION_WIDTH = 76;
     private static final int GAP = 4;
     private static final int SEPARATOR_COLOR = 0xAA777777;
@@ -73,12 +72,8 @@ final class CandidateListUi {
         return actionWidth;
     }
 
-    int mapButtonY(final int index) {
-        return rowY(index);
-    }
-
     int waypointButtonY(final int index) {
-        return rowY(index) + ACTION_ROW_OFFSET;
+        return rowY(index) + 2;
     }
 
     int dividerY(final int index) {
@@ -102,18 +97,21 @@ final class CandidateListUi {
         );
     }
 
-    void layoutButtons(
-        final int index,
-        final ButtonWidget mapButton,
-        final ButtonWidget waypointButton
-    ) {
+    void layoutButton(final int index, final ButtonWidget waypointButton) {
         final boolean visible = isVisible(index);
-        mapButton.visible = visible;
         waypointButton.visible = visible;
         if (visible) {
-            Widgets.setY(mapButton, mapButtonY(index));
             Widgets.setY(waypointButton, waypointButtonY(index));
         }
+    }
+
+    int candidateAt(final double mouseX, final double mouseY) {
+        if (mouseX < rowX || mouseX >= actionX()
+            || mouseY < LIST_TOP || mouseY >= LIST_TOP + visibleRows * ROW_HEIGHT) {
+            return -1;
+        }
+        final int index = scrollOffset + (int) ((mouseY - LIST_TOP) / ROW_HEIGHT);
+        return index < totalRows ? index : -1;
     }
 
     ScrollBarModel scrollBar() {

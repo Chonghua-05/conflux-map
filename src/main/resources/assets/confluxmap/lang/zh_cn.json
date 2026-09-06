@@ -514,7 +514,7 @@
   "confluxmap.screen.client_world.aliases": "服务器地址",
   "confluxmap.screen.server_alias.title": "服务器地址",
   "confluxmap.screen.server_alias.prompt": "该服务器的地图数据存放在：%s",
-  "confluxmap.screen.server_alias.hint": "此处列出的地址共用同一份地图缓存和坐标点",
+  "confluxmap.screen.server_alias.hint": "此处列出的地址共用同一份地图缓存和路径点",
   "confluxmap.screen.server_alias.disconnected": "连接服务器后才能管理它的地址",
   "confluxmap.screen.server_alias.primary": "[主]",
   "confluxmap.screen.server_alias.detached": "[未关联]",
@@ -540,8 +540,7 @@
   "confluxmap.screen.map_export.clipboard.skipped": "图片已保存；为避免内存不足，未复制到剪贴板",
   "confluxmap.screen.map_export.clipboard.failed": "图片已保存；复制到剪贴板失败",
   "confluxmap.screen.structure_candidates.bounds": "搜索半径 / 结果数量",
-  "confluxmap.screen.structure_candidates.map": "定位",
-  "confluxmap.screen.structure_candidates.waypoint": "路径点",
+  "confluxmap.screen.structure_candidates.waypoint": "添加路径点",
   "confluxmap.screen.structure_candidates.invalid": "请输入有效的搜索参数",
   "confluxmap.screen.structure_candidates.not_found": "该范围内没有找到可能存在的结构"
 }

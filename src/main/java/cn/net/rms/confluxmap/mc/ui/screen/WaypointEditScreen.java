@@ -80,6 +80,7 @@ public final class WaypointEditScreen extends ConfluxScreen {
     private ButtonWidget markerModeButton;
     private ButtonWidget iconButton;
     private ButtonWidget clearIconButton;
+    private ButtonWidget deleteButton;
     private ButtonWidget doneButton;
     private List<String> setNames = List.of(WaypointSet.DEFAULT_NAME);
     private int selectedSetIndex;
@@ -93,6 +94,7 @@ public final class WaypointEditScreen extends ConfluxScreen {
     private String draftGroup;
     private String draftMarkerLabel = "";
     private WaypointMarkerMode markerMode = WaypointMarkerMode.TEXT;
+    private boolean deleteConfirmationPending;
     private String errorKey;
 
     private WaypointEditScreen(
@@ -448,16 +450,37 @@ public final class WaypointEditScreen extends ConfluxScreen {
             setDisabledTooltip(clearIconButton, "confluxmap.screen.waypoint.marker_style_unsupported");
         }
 
+        final int footerY = height - 32;
+        final boolean editing = editingId != null;
+        final int footerLeft = centerX - (editing ? 100 : 104);
+        final int footerButtonWidth = editing ? 64 : 100;
+        if (editing) {
+            deleteButton = addDrawableChild(Widgets.button(
+                footerLeft,
+                footerY,
+                footerButtonWidth,
+                FIELD_HEIGHT,
+                deleteButtonMessage(),
+                ignored -> onDelete()
+            ));
+            refreshDeleteButton();
+        } else {
+            deleteButton = null;
+        }
+        final int doneX = editing ? footerLeft + footerButtonWidth + 4 : centerX - 104;
         doneButton = addDrawableChild(Widgets.button(
-            centerX - 104, height - 32, 100, FIELD_HEIGHT, Texts.translatable("confluxmap.screen.waypoint.done"), b -> onDone()
+            doneX, footerY, footerButtonWidth, FIELD_HEIGHT,
+            Texts.translatable("confluxmap.screen.waypoint.done"), b -> onDone()
         ));
         if (createTarget == CreateTarget.LOCAL) {
             doneButton.active = boundLocalStore != null && boundLocalStore.persistenceWritable();
         } else if (createTarget == CreateTarget.PUBLIC) {
             updatePublicDoneButton();
         }
+        final int cancelX = editing ? doneX + footerButtonWidth + 4 : centerX + 4;
         addDrawableChild(Widgets.button(
-            centerX + 4, height - 32, 100, FIELD_HEIGHT, Texts.translatable("confluxmap.screen.waypoint.cancel"), b -> onCancel()
+            cancelX, footerY, footerButtonWidth, FIELD_HEIGHT,
+            Texts.translatable("confluxmap.screen.waypoint.cancel"), b -> onCancel()
         ));
         setEnterAction(() -> doneButton != null && doneButton.active, this::onDone);
     }
@@ -812,6 +835,42 @@ public final class WaypointEditScreen extends ConfluxScreen {
         MinecraftAccess.setScreen(MinecraftClient.getInstance(), parent);
     }
 
+    private Text deleteButtonMessage() {
+        return Texts.translatable(
+            deleteConfirmationPending
+                ? "confluxmap.screen.waypoints.confirm"
+                : "confluxmap.screen.waypoints.delete"
+        );
+    }
+
+    private void onDelete() {
+        if (!deleteConfirmationPending) {
+            deleteConfirmationPending = true;
+            deleteButton.setMessage(deleteButtonMessage());
+            return;
+        }
+        if (editingShared != null) {
+            if (!sharedWaypoints.delete(editingShared)) {
+                final String reasonKey = sharedWaypoints.deleteDisabledReasonKey(editingShared);
+                errorKey = reasonKey == null
+                    ? "confluxmap.screen.waypoint.public_unavailable"
+                    : reasonKey;
+                deleteConfirmationPending = false;
+                deleteButton.setMessage(deleteButtonMessage());
+                refreshDeleteButton();
+                return;
+            }
+        } else {
+            final WaypointStore store = boundLocalStore;
+            if (store == null || store != localStoreSupplier.get() || !store.persistenceWritable()) {
+                refreshDeleteButton();
+                return;
+            }
+            store.remove(editingId);
+        }
+        MinecraftAccess.setScreen(MinecraftClient.getInstance(), parent);
+    }
+
     @Override
     public void tick() {
         super.tick();
@@ -828,7 +887,26 @@ public final class WaypointEditScreen extends ConfluxScreen {
             }
             updatePublicDoneButton();
         }
+        refreshDeleteButton();
         refreshDoneButton();
+    }
+
+    private void refreshDeleteButton() {
+        if (deleteButton == null) {
+            return;
+        }
+        if (editingShared != null) {
+            deleteButton.active = sharedWaypoints.availability().ready()
+                && sharedWaypoints.canDelete(editingShared);
+            setDisabledTooltip(
+                deleteButton,
+                sharedWaypoints.deleteDisabledReasonKey(editingShared)
+            );
+            return;
+        }
+        deleteButton.active = boundLocalStore != null
+            && boundLocalStore == localStoreSupplier.get()
+            && boundLocalStore.persistenceWritable();
     }
 
     private void refreshDoneButton() {

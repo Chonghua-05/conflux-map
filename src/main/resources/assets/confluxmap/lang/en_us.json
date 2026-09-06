@@ -540,8 +540,7 @@
   "confluxmap.screen.map_export.clipboard.skipped": "Image saved; clipboard copy skipped to protect memory",
   "confluxmap.screen.map_export.clipboard.failed": "Image saved; clipboard copy failed",
   "confluxmap.screen.structure_candidates.bounds": "Radius / result count",
-  "confluxmap.screen.structure_candidates.map": "Locate",
-  "confluxmap.screen.structure_candidates.waypoint": "Waypoint",
+  "confluxmap.screen.structure_candidates.waypoint": "Add Waypoint",
   "confluxmap.screen.structure_candidates.invalid": "Enter valid search values",
   "confluxmap.screen.structure_candidates.not_found": "No possible structures found in this area"
 }

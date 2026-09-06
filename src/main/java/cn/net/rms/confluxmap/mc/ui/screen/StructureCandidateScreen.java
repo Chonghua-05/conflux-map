@@ -37,7 +37,6 @@ final class StructureCandidateScreen extends ConfluxScreen {
     private final DimensionId dimension;
     private final StructureIndex.StructureType type;
     private final SplitMapPane mapPane;
-    private final List<ButtonWidget> mapButtons = new ArrayList<>();
     private final List<ButtonWidget> waypointButtons = new ArrayList<>();
 
     private int centerX;
@@ -94,7 +93,6 @@ final class StructureCandidateScreen extends ConfluxScreen {
 
     private void rebuild() {
         clearChildren();
-        mapButtons.clear();
         waypointButtons.clear();
         panelContentWidth = requiredPanelContentWidth();
         final SplitMapLayout layout = splitLayout();
@@ -152,14 +150,6 @@ final class StructureCandidateScreen extends ConfluxScreen {
         scrollOffset = listUi.scrollOffset();
         for (int index = 0; index < results.size(); index++) {
             final StructureIndex.Marker marker = results.get(index);
-            final ButtonWidget mapButton = addDrawableChild(Widgets.button(
-                listUi.actionX(),
-                listUi.mapButtonY(index),
-                listUi.actionWidth(),
-                20,
-                Texts.translatable("confluxmap.screen.structure_candidates.map"),
-                ignored -> focus(marker)
-            ));
             final ButtonWidget waypointButton = addDrawableChild(Widgets.button(
                 listUi.actionX(),
                 listUi.waypointButtonY(index),
@@ -168,7 +158,6 @@ final class StructureCandidateScreen extends ConfluxScreen {
                 Texts.translatable("confluxmap.screen.structure_candidates.waypoint"),
                 ignored -> map.createWaypointForStructure(marker, this)
             ));
-            mapButtons.add(mapButton);
             waypointButtons.add(waypointButton);
         }
         final int backWidth = Math.min(100, layout.panelContentWidth());
@@ -311,7 +300,7 @@ final class StructureCandidateScreen extends ConfluxScreen {
         final CandidateListUi listUi = candidateListUi();
         scrollOffset = listUi.scrollOffset();
         for (int index = 0; index < results.size(); index++) {
-            listUi.layoutButtons(index, mapButtons.get(index), waypointButtons.get(index));
+            listUi.layoutButton(index, waypointButtons.get(index));
         }
     }
 
@@ -320,9 +309,6 @@ final class StructureCandidateScreen extends ConfluxScreen {
         searchButton.active = allowed;
         if (variantButton != null) {
             variantButton.active = allowed;
-        }
-        for (final ButtonWidget button : mapButtons) {
-            button.active = allowed;
         }
         for (final ButtonWidget button : waypointButtons) {
             button.active = allowed;
@@ -359,6 +345,11 @@ final class StructureCandidateScreen extends ConfluxScreen {
         //#else
         if (super.mouseClicked(mouseX, mouseY, button)) {
         //#endif
+            return true;
+        }
+        final int candidateIndex = button == 0 ? listUi.candidateAt(mouseX, mouseY) : -1;
+        if (candidateIndex >= 0 && structures.availableTypes(dimension).contains(type)) {
+            focus(results.get(candidateIndex));
             return true;
         }
         return mapPane.mouseClicked(mouseX, mouseY, button, splitLayout());
@@ -486,27 +477,19 @@ final class StructureCandidateScreen extends ConfluxScreen {
                 fitToWidth(
                     Texts.translatable(marker.translationKey()).getString()
                         + " · "
-                        + CandidateListUi.coordinateText(marker.blockX(), marker.blockZ()),
+                        + CandidateListUi.coordinateText(marker.blockX(), marker.blockZ())
+                        + " · "
+                        + Texts.translatable(
+                            "confluxmap.value.blocks",
+                            CandidateListUi.distanceInBlocks(
+                                marker.blockX(), marker.blockZ(), centerX, centerZ
+                            )
+                        ).getString(),
                     textWidth
                 ),
                 rowX() + iconSize + GAP,
                 listUi.rowY(index) + 6,
                 0xFFFFFFFF
-            );
-            draw.drawTextWithShadow(
-                this.textRenderer,
-                fitToWidth(
-                    Texts.translatable(
-                        "confluxmap.value.blocks",
-                        CandidateListUi.distanceInBlocks(
-                            marker.blockX(), marker.blockZ(), centerX, centerZ
-                        )
-                    ).getString(),
-                    textWidth
-                ),
-                rowX() + iconSize + GAP,
-                listUi.waypointButtonY(index) + 6,
-                0xFFBBBBBB
             );
         }
         if (statusKey != null) {
