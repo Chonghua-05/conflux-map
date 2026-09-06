@@ -5,6 +5,7 @@ import cn.net.rms.confluxmap.mc.ui.GuiDraw;
 /** Interactive left-hand map pane shared by the structure picker and candidate browser. */
 final class SplitMapPane {
     private static final int PANEL_BACKGROUND = 0xB0101018;
+    private static final int BLURRED_PANEL_BACKGROUND = 0x70101018;
     private static final int DIVIDER_COLOR = 0xB0454554;
 
     private final FullscreenMapScreen map;
@@ -22,10 +23,11 @@ final class SplitMapPane {
         final SplitMapLayout layout
     ) {
         map.renderEmbedded(draw, mouseX, mouseY, tickDelta, layout);
+        final boolean blurred = map.renderEmbeddedPanelBlur(draw, layout);
         draw.fill(
             layout.panelLeft(), 0,
             layout.screenWidth(), layout.screenHeight(),
-            PANEL_BACKGROUND
+            blurred ? BLURRED_PANEL_BACKGROUND : PANEL_BACKGROUND
         );
         draw.fill(
             layout.panelLeft(), 0,

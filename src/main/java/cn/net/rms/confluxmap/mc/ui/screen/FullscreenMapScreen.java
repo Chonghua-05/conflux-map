@@ -314,6 +314,7 @@ public final class FullscreenMapScreen extends ConfluxScreen {
     private final MapWorldService mapWorlds;
     private final TileService tiles;
     private final TileTextureManager textures;
+    private final SplitMapBlur embeddedBlur = new SplitMapBlur();
     private final DaylightModel daylightModel;
     private final PredictionState predictionState;
     private final PredictionTileService predictionTiles;
@@ -1655,6 +1656,7 @@ public final class FullscreenMapScreen extends ConfluxScreen {
     public void removed() {
         chunkLoadStates.deactivate();
         ConfluxMapClient.get().mapSyncClient().clearViewport();
+        embeddedBlur.close();
         super.removed();
     }
 
@@ -2429,6 +2431,33 @@ public final class FullscreenMapScreen extends ConfluxScreen {
             renderContents(draw, mapMouseX, mapMouseY, tickDelta);
         } finally {
             embeddedLayout = previousEmbeddedLayout;
+            centerX = previousCenterX;
+            width = previousWidth;
+            height = previousHeight;
+        }
+    }
+
+    boolean renderEmbeddedPanelBlur(final GuiDraw draw, final SplitMapLayout layout) {
+        return embeddedBlur.render(
+            draw, this.client, layout, matrices -> renderEmbeddedBackdrop(matrices, layout)
+        );
+    }
+
+    private void renderEmbeddedBackdrop(
+        final MatrixStack matrices,
+        final SplitMapLayout layout
+    ) {
+        final int previousWidth = width;
+        final int previousHeight = height;
+        final double previousCenterX = centerX;
+        width = layout.mapRenderWidth();
+        height = layout.mapHeight();
+        centerX = layout.renderCenterX(centerX, scale);
+        try {
+            RenderUtil.fillRect(matrices, 0, 0, width, height, BACKGROUND_COLOR);
+            drawGrid(matrices);
+            drawTiles(matrices, false);
+        } finally {
             centerX = previousCenterX;
             width = previousWidth;
             height = previousHeight;
@@ -3457,6 +3486,10 @@ public final class FullscreenMapScreen extends ConfluxScreen {
      * falls back to prediction only where neither real source has coverage.
      */
     private void drawTiles(final MatrixStack matrices) {
+        drawTiles(matrices, true);
+    }
+
+    private void drawTiles(final MatrixStack matrices, final boolean updateViewport) {
         final int lod = currentLod();
         final double pxPerBlock = 1.0 / scale;
         final double blocksPerTile = TileMath.blocksPerTile(lod);
@@ -3472,37 +3505,41 @@ public final class FullscreenMapScreen extends ConfluxScreen {
         final boolean biomeMode = biomeMode();
         final boolean predictionActive = predictionActive(layer, session, biomeMode);
         final boolean syncActive = predictionActive(layer, session, false);
-        viewTiles().setViewport(layer, lod, firstTileX, lastTileX, firstTileZ, lastTileZ);
-        if (predictionActive) {
-            if (session.dimension().equals(DimensionId.NETHER)) {
-                predictionTiles.setNetherBiomeY(layerSelector.current().pivotY());
-            }
-            predictionTiles.setViewport(session.dimension(), lod, firstTileX, lastTileX, firstTileZ, lastTileZ);
-            if (syncActive) {
-                final ChunkViewport mapChunks = ChunkViewport.covering(
-                    centerX, centerZ, width, height, scale
-                );
-                final ChunkViewport playerView;
-                if (this.client.player == null) {
-                    playerView = null;
-                } else {
-                    final int playerChunkX = this.client.player.getBlockPos().getX() >> 4;
-                    final int playerChunkZ = this.client.player.getBlockPos().getZ() >> 4;
-                    final int advertisedRadius = companion.serverViewDistance();
-                    final int radius = advertisedRadius >= 0
-                        ? advertisedRadius : MinecraftAccess.viewDistance(this.client);
-                    playerView = ChunkViewport.centered(playerChunkX, playerChunkZ, radius);
+        if (updateViewport) {
+            viewTiles().setViewport(layer, lod, firstTileX, lastTileX, firstTileZ, lastTileZ);
+            if (predictionActive) {
+                if (session.dimension().equals(DimensionId.NETHER)) {
+                    predictionTiles.setNetherBiomeY(layerSelector.current().pivotY());
                 }
-                ConfluxMapClient.get().mapSyncClient().reportViewport(
-                    session.dimension(), lod, firstTileX, lastTileX, firstTileZ, lastTileZ,
-                    mapChunks, playerView
+                predictionTiles.setViewport(
+                    session.dimension(), lod, firstTileX, lastTileX, firstTileZ, lastTileZ
                 );
+                if (syncActive) {
+                    final ChunkViewport mapChunks = ChunkViewport.covering(
+                        centerX, centerZ, width, height, scale
+                    );
+                    final ChunkViewport playerView;
+                    if (this.client.player == null) {
+                        playerView = null;
+                    } else {
+                        final int playerChunkX = this.client.player.getBlockPos().getX() >> 4;
+                        final int playerChunkZ = this.client.player.getBlockPos().getZ() >> 4;
+                        final int advertisedRadius = companion.serverViewDistance();
+                        final int radius = advertisedRadius >= 0
+                            ? advertisedRadius : MinecraftAccess.viewDistance(this.client);
+                        playerView = ChunkViewport.centered(playerChunkX, playerChunkZ, radius);
+                    }
+                    ConfluxMapClient.get().mapSyncClient().reportViewport(
+                        session.dimension(), lod, firstTileX, lastTileX, firstTileZ, lastTileZ,
+                        mapChunks, playerView
+                    );
+                } else {
+                    ConfluxMapClient.get().mapSyncClient().clearViewport();
+                }
             } else {
+                predictionTiles.clearViewport();
                 ConfluxMapClient.get().mapSyncClient().clearViewport();
             }
-        } else {
-            predictionTiles.clearViewport();
-            ConfluxMapClient.get().mapSyncClient().clearViewport();
         }
 
         RenderUtil.beginTexturedQuads();

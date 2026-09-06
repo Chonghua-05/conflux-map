@@ -1,10 +1,34 @@
 package cn.net.rms.confluxmap.mc.render;
 
+import cn.net.rms.confluxmap.compat.Ids;
 import com.mojang.blaze3d.systems.RenderSystem;
+import java.io.IOException;
 import net.minecraft.client.MinecraftClient;
 import net.minecraft.client.gl.Framebuffer;
 import net.minecraft.client.gl.SimpleFramebuffer;
 import net.minecraft.client.util.Window;
+//#if MC>=12105 && MC<12111
+//$$ import com.mojang.blaze3d.textures.FilterMode;
+//#elseif MC<12105
+import org.lwjgl.opengl.GL11;
+//#endif
+//#if MC>=260200
+//$$ import com.mojang.blaze3d.resource.GraphicsResourceAllocator;
+//$$ import net.minecraft.client.renderer.LevelTargetBundle;
+//$$ import net.minecraft.client.renderer.PostChain;
+//#elseif MC>=12111
+//$$ import net.minecraft.client.gl.PostEffectProcessor;
+//$$ import net.minecraft.client.render.DefaultFramebufferSet;
+//$$ import net.minecraft.client.util.memory.ObjectAllocator;
+//#elseif MC>=12103
+//$$ import net.minecraft.client.gl.PostEffectProcessor;
+//$$ import net.minecraft.client.render.DefaultFramebufferSet;
+//$$ import net.minecraft.client.util.ObjectAllocator;
+//#elseif MC>=12000
+//$$ import net.minecraft.client.gl.PostEffectProcessor;
+//#else
+import net.minecraft.client.gl.ShaderEffect;
+//#endif
 
 //#if MC>=12103
 //$$ import com.mojang.blaze3d.systems.ProjectionType;
@@ -39,7 +63,13 @@ import net.minecraft.util.math.Matrix4f;
  */
 public final class OffscreenCanvas {
     private Framebuffer framebuffer;
-    private int sizePx;
+    private int widthPx;
+    private int heightPx;
+    //#if MC>=12000 && MC<12103
+    //$$ private PostEffectProcessor blurEffect;
+    //#elseif MC<12000
+    private ShaderEffect blurEffect;
+    //#endif
     //#if MC>=260100
     //$$ private ProjectionMatrixBuffer projectionMatrix;
     //#elseif MC>=12108
@@ -51,27 +81,41 @@ public final class OffscreenCanvas {
         beginInternal(sizePx, true);
     }
 
+    /** Rectangular variant used by full-width GUI effects. */
+    public void begin(final int widthPx, final int heightPx) {
+        beginInternal(widthPx, heightPx, true);
+    }
+
     /** Binds the canvas without clearing it, for persistent texture-atlas updates. */
     public void beginPreserving(final int sizePx) {
         beginInternal(sizePx, false);
     }
 
     private void beginInternal(final int sizePx, final boolean clear) {
-        final boolean created = framebuffer == null || framebuffer.textureWidth != sizePx;
-        if (framebuffer == null || framebuffer.textureWidth != sizePx) {
+        beginInternal(sizePx, sizePx, clear);
+    }
+
+    private void beginInternal(final int widthPx, final int heightPx, final boolean clear) {
+        final boolean created = framebuffer == null
+            || framebuffer.textureWidth != widthPx
+            || framebuffer.textureHeight != heightPx;
+        if (created) {
             close();
             //#if MC>=260200
             //$$ framebuffer = new TextureTarget(
-            //$$     "Conflux Map minimap", sizePx, sizePx, false, GpuFormat.RGBA8_UNORM
+            //$$     "Conflux Map canvas", widthPx, heightPx, false, GpuFormat.RGBA8_UNORM
             //$$ );
             //#elseif MC>=12105
-            //$$ framebuffer = new SimpleFramebuffer("Conflux Map minimap", sizePx, sizePx, false);
+            //$$ framebuffer = new SimpleFramebuffer("Conflux Map canvas", widthPx, heightPx, false);
             //#elseif MC>=12103
-            //$$ framebuffer = new SimpleFramebuffer(sizePx, sizePx, false);
+            //$$ framebuffer = new SimpleFramebuffer(widthPx, heightPx, false);
             //#else
-            framebuffer = new SimpleFramebuffer(sizePx, sizePx, false, MinecraftClient.IS_SYSTEM_MAC);
+            framebuffer = new SimpleFramebuffer(
+                widthPx, heightPx, false, MinecraftClient.IS_SYSTEM_MAC
+            );
             //#endif
-            this.sizePx = sizePx;
+            this.widthPx = widthPx;
+            this.heightPx = heightPx;
         }
         //#if MC>=260100
         //$$ if (projectionMatrix == null) {
@@ -122,15 +166,19 @@ public final class OffscreenCanvas {
         //$$ RenderSystem.applyModelViewMatrix();
         //#endif
         //#endif
-        setProjection(canvasProjection(sizePx));
+        setProjection(canvasProjection(widthPx, heightPx));
     }
 
     /** Modern GUI rendering culls map quads unless the canvas uses the same downward Y axis. */
     private static Matrix4f canvasProjection(final int sizePx) {
+        return canvasProjection(sizePx, sizePx);
+    }
+
+    private static Matrix4f canvasProjection(final int widthPx, final int heightPx) {
         //#if MC>=12000
-        //$$ return ortho(0f, sizePx, sizePx, 0f);
+        //$$ return ortho(0f, widthPx, heightPx, 0f);
         //#else
-        return ortho(0f, sizePx, 0f, sizePx);
+        return ortho(0f, widthPx, 0f, heightPx);
         //#endif
     }
 
@@ -212,11 +260,112 @@ public final class OffscreenCanvas {
         //#endif
     }
 
+    /** Binds the canvas with bilinear filtering for scaled GUI effects. */
+    public void bindTextureLinear() {
+        //#if MC>=12111
+        //$$ RenderUtil.bindTexture(
+        //$$     framebuffer.getColorAttachmentView(),
+        //$$     RenderSystem.getSamplerCache().get(
+        //$$         com.mojang.blaze3d.textures.AddressMode.CLAMP_TO_EDGE,
+        //$$         com.mojang.blaze3d.textures.AddressMode.CLAMP_TO_EDGE,
+        //$$         com.mojang.blaze3d.textures.FilterMode.LINEAR,
+        //$$         com.mojang.blaze3d.textures.FilterMode.LINEAR,
+        //$$         false
+        //$$     )
+        //$$ );
+        //#elseif MC>=12108
+        //$$ framebuffer.setFilter(FilterMode.LINEAR);
+        //$$ RenderUtil.bindTexture(framebuffer.getColorAttachmentView());
+        //#elseif MC>=12105
+        //$$ framebuffer.setFilter(FilterMode.LINEAR);
+        //$$ RenderUtil.bindTexture(framebuffer.getColorAttachment());
+        //#else
+        framebuffer.setTexFilter(GL11.GL_LINEAR);
+        RenderUtil.bindTexture(framebuffer.getColorAttachment());
+        //#endif
+    }
+
+    /** Applies Minecraft's menu-style separable box blur to this canvas in place. */
+    public boolean applyMenuBlur(final MinecraftClient client) throws IOException {
+        //#if MC>=260200
+        //$$ final PostChain blur = client.getShaderManager().getPostChain(
+        //$$     Ids.of("minecraft", "blur"), LevelTargetBundle.MAIN_TARGETS
+        //$$ );
+        //$$ if (blur == null) {
+        //$$     return false;
+        //$$ }
+        //$$ blur.process(framebuffer, GraphicsResourceAllocator.UNPOOLED);
+        //#elseif MC>=12103
+        //$$ final PostEffectProcessor blur = client.getShaderLoader().loadPostEffect(
+        //$$     Ids.of("minecraft", "blur"), DefaultFramebufferSet.MAIN_ONLY
+        //$$ );
+        //$$ if (blur == null) {
+        //$$     return false;
+        //$$ }
+        //$$ final float radius = client.options.getMenuBackgroundBlurrinessValue();
+        //#if MC<12105
+        //$$ blur.setUniforms("Radius", radius);
+        //$$ blur.render(framebuffer, ObjectAllocator.TRIVIAL);
+        //#elseif MC<12108
+        //$$ blur.render(
+        //$$     framebuffer, ObjectAllocator.TRIVIAL,
+        //$$     pass -> pass.setUniform("Radius", radius)
+        //$$ );
+        //#else
+        //$$ blur.render(framebuffer, ObjectAllocator.TRIVIAL);
+        //#endif
+        //#else
+        if (blurEffect == null) {
+            blurEffect = createMenuBlurEffect(client);
+            blurEffect.setupDimensions(widthPx, heightPx);
+        }
+        //#if MC>=12100
+        //$$ blurEffect.setUniforms(
+        //$$     "Radius", client.options.getMenuBackgroundBlurrinessValue()
+        //$$ );
+        //#endif
+        blurEffect.render(0f);
+        client.getFramebuffer().beginWrite(false);
+        //#endif
+        return true;
+    }
+
+    //#if MC<12103
+    private
+        //#if MC>=12000
+        //$$ PostEffectProcessor
+        //#else
+        ShaderEffect
+        //#endif
+        createMenuBlurEffect(final MinecraftClient client) throws IOException {
+        return new
+            //#if MC>=12000
+            //$$ PostEffectProcessor(
+            //#else
+            ShaderEffect(
+            //#endif
+            client.getTextureManager(), client.getResourceManager(), framebuffer,
+            //#if MC>=12100
+            //$$ Ids.of("minecraft", "shaders/post/blur.json")
+            //#else
+            Ids.of("confluxmap", "shaders/post/split_map_blur.json")
+            //#endif
+        );
+    }
+    //#endif
+
     public void close() {
+        //#if MC<12103
+        if (blurEffect != null) {
+            blurEffect.close();
+            blurEffect = null;
+        }
+        //#endif
         if (framebuffer != null) {
             framebuffer.delete();
             framebuffer = null;
-            sizePx = 0;
+            widthPx = 0;
+            heightPx = 0;
         }
         //#if MC>=12108
         //$$ if (projectionMatrix != null) {
@@ -227,6 +376,6 @@ public final class OffscreenCanvas {
     }
 
     public int size() {
-        return sizePx;
+        return widthPx;
     }
 }
