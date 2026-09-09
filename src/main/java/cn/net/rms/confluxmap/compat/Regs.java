@@ -1,21 +1,16 @@
 package cn.net.rms.confluxmap.compat;
 
-import net.minecraft.block.Block;
-import net.minecraft.entity.EntityType;
-import net.minecraft.item.Item;
-import net.minecraft.util.Identifier;
-import net.minecraft.util.math.BlockPos;
-import net.minecraft.world.World;
-import net.minecraft.world.biome.Biome;
-
-//#if MC>=11903
-//$$ import net.minecraft.registry.Registries;
-//$$ import net.minecraft.registry.Registry;
-//$$ import net.minecraft.registry.RegistryKey;
-//$$ import net.minecraft.registry.RegistryKeys;
-//#else
-import net.minecraft.util.registry.Registry;
-//#endif
+import net.minecraft.world.level.block.Block;
+import net.minecraft.world.entity.EntityType;
+import net.minecraft.world.item.Item;
+import net.minecraft.resources.Identifier;
+import net.minecraft.core.BlockPos;
+import net.minecraft.world.level.Level;
+import net.minecraft.world.level.biome.Biome;
+import net.minecraft.core.registries.BuiltInRegistries;
+import net.minecraft.core.Registry;
+import net.minecraft.resources.ResourceKey;
+import net.minecraft.core.registries.Registries;
 
 import java.util.Optional;
 
@@ -35,50 +30,28 @@ public final class Regs {
     }
 
     /** The biome registry backing {@code world}. */
-    public static Registry<Biome> biomes(final World world) {
-        //#if MC>=12103
-        //$$ return world.getRegistryManager().getOrThrow(RegistryKeys.BIOME);
-        //#elseif MC>=11903
-        //$$ return world.getRegistryManager().get(RegistryKeys.BIOME);
-        //#else
-        return world.getRegistryManager().get(Registry.BIOME_KEY);
-        //#endif
+    public static Registry<Biome> biomes(final Level world) {
+        return world.registryAccess().lookupOrThrow(Registries.BIOME);
     }
 
     /** The static block registry. */
     public static Registry<Block> blocks() {
-        //#if MC>=11903
-        //$$ return Registries.BLOCK;
-        //#else
-        return Registry.BLOCK;
-        //#endif
+        return BuiltInRegistries.BLOCK;
     }
 
     /** The static item registry. */
     public static Registry<Item> items() {
-        //#if MC>=11903
-        //$$ return Registries.ITEM;
-        //#else
-        return Registry.ITEM;
-        //#endif
+        return BuiltInRegistries.ITEM;
     }
 
     /** The static entity-type registry. */
     public static Registry<EntityType<?>> entityTypes() {
-        //#if MC>=11903
-        //$$ return Registries.ENTITY_TYPE;
-        //#else
-        return Registry.ENTITY_TYPE;
-        //#endif
+        return BuiltInRegistries.ENTITY_TYPE;
     }
 
     /** Looks up a biome without exposing the registry API rename at 1.21.3. */
     public static Biome biome(final Registry<Biome> registry, final Identifier id) {
-        //#if MC>=12103
-        //$$ return registry.getOptionalValue(id).orElse(null);
-        //#else
-        return registry.get(id);
-        //#endif
+        return registry.getOptional(id).orElse(null);
     }
 
     /**
@@ -87,66 +60,36 @@ public final class Regs {
      * absence, which would turn "unknown block" into "block with the air map colour".
      */
     public static Optional<Block> block(final Identifier id) {
-        //#if MC>=12105
-        //$$ return blocks().getOptionalValue(id);
-        //#else
-        return blocks().getOrEmpty(id);
-        //#endif
+        return blocks().getOptional(id);
     }
 
     /** Looks an item up by identifier without defaulting an unknown id to air. */
     public static Optional<Item> item(final Identifier id) {
-        //#if MC>=12105
-        //$$ return items().getOptionalValue(id);
-        //#else
-        return items().getOrEmpty(id);
-        //#endif
+        return items().getOptional(id);
     }
 
     /** Looks an entity type up by identifier without depending on generated constant owners. */
     public static Optional<EntityType<?>> entityType(final Identifier id) {
-        //#if MC>=12105
-        //$$ return entityTypes().getOptionalValue(id);
-        //#else
-        return entityTypes().getOrEmpty(id);
-        //#endif
+        return entityTypes().getOptional(id);
     }
 
     /** The registry identifier of an entity type. */
     public static Identifier entityTypeId(final EntityType<?> type) {
-        //#if MC>=260100
-        //$$ return entityTypes().getKey(type);
-        //#else
-        return entityTypes().getId(type);
-        //#endif
+        return entityTypes().getKey(type);
     }
 
     /** The registry identifier of {@code block}. */
     public static Identifier blockId(final Block block) {
-        //#if MC>=260100
-        //$$ return blocks().getKey(block);
-        //#else
-        return blocks().getId(block);
-        //#endif
+        return blocks().getKey(block);
     }
 
     /** The registry identifier of {@code item}. */
     public static Identifier itemId(final Item item) {
-        //#if MC>=260100
-        //$$ return items().getKey(item);
-        //#else
-        return items().getId(item);
-        //#endif
+        return items().getKey(item);
     }
 
     /** The registry identifier of the biome at {@code pos}, or null when it has none. */
-    public static Identifier biomeIdAt(final World world, final BlockPos pos) {
-        //#if MC>=11903
-        //$$ return world.getBiome(pos).getKey().map(RegistryKey::getValue).orElse(null);
-        //#elseif MC>=11800
-        //$$ return biomes(world).getId(world.getBiome(pos).value());
-        //#else
-        return biomes(world).getId(world.getBiome(pos));
-        //#endif
+    public static Identifier biomeIdAt(final Level world, final BlockPos pos) {
+        return world.getBiome(pos).unwrapKey().map(ResourceKey::identifier).orElse(null);
     }
 }

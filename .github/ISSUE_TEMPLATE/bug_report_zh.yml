@@ -13,7 +13,7 @@ body:
     id: minecraft-version
     attributes:
       label: Minecraft 版本
-      placeholder: "例如：1.21.4"
+      placeholder: "例如：26.1"
     validations:
       required: true
 
@@ -31,9 +31,9 @@ body:
     attributes:
       label: 运行平台
       options:
-        - Fabric 客户端
-        - Fabric 服务端组件
-        - Paper 服务端组件
+        - NeoForge 客户端
+        - NeoForge 独立服务端
+        - NeoForge 内置服务端
         - 其他
     validations:
       required: true
@@ -42,8 +42,8 @@ body:
     id: loader-version
     attributes:
       label: 加载器或服务端版本
-      description: 根据实际环境填写 Fabric Loader、Fabric API 或 Paper 版本。
-      placeholder: "例如：Fabric Loader 0.16.10、Fabric API 0.119.2"
+      description: 填写 NeoForge 版本和 Java 运行时版本。
+      placeholder: "例如：NeoForge 26.1.0.19-beta、Java 25"
     validations:
       required: true
 

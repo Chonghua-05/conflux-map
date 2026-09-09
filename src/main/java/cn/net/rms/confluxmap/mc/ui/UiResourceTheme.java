@@ -7,9 +7,9 @@ import java.util.HashSet;
 import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
-import net.fabricmc.loader.api.FabricLoader;
-import net.minecraft.resource.ResourceManager;
-import net.minecraft.util.Identifier;
+import net.neoforged.fml.ModList;
+import net.minecraft.server.packs.resources.ResourceManager;
+import net.minecraft.resources.Identifier;
 
 /**
  * Resolves resource-pack UI overrides without making the renderers know pack provenance or
@@ -22,15 +22,9 @@ import net.minecraft.util.Identifier;
  */
 public final class UiResourceTheme {
     private static final int XAERO_ATLAS_SIZE = 256;
-    //#if MC>=12002
-    //$$ private static final Identifier VANILLA_BUTTON_RESOURCE = Ids.of(
-    //$$     "minecraft", "textures/gui/sprites/widget/button.png"
-    //$$ );
-    //#else
     private static final Identifier VANILLA_BUTTON_RESOURCE = Ids.of(
-        "minecraft", "textures/gui/widgets.png"
+        "minecraft", "textures/gui/sprites/widget/button.png"
     );
-    //#endif
     private static final Identifier XAERO_MINIMAP_FRAME = Ids.of(
         "xaerobetterpvp", "gui/minimap_frame.png"
     );
@@ -83,11 +77,11 @@ public final class UiResourceTheme {
         if (manager == null) {
             return;
         }
-        final boolean xaeroMinimapLoaded = FabricLoader.getInstance().isModLoaded("xaerominimap");
+        final boolean xaeroMinimapLoaded = ModList.get().isLoaded("xaerominimap");
         xaeroMinimapFrame = suppliedByResourcePack(manager, XAERO_MINIMAP_FRAME, xaeroMinimapLoaded);
         xaeroPlayerMarker = suppliedByResourcePack(manager, XAERO_MINIMAP_GUI, xaeroMinimapLoaded);
         xaeroWorldMapGui = suppliedByResourcePack(
-            manager, XAERO_WORLD_MAP_GUI, FabricLoader.getInstance().isModLoaded("xaeroworldmap")
+            manager, XAERO_WORLD_MAP_GUI, ModList.get().isLoaded("xaeroworldmap")
         );
         confluxSquareFrame = resourceCount(manager, CONFLUX_SQUARE_FRAME) > 0;
         confluxCircleFrame = resourceCount(manager, CONFLUX_CIRCLE_FRAME) > 0;
@@ -178,15 +172,7 @@ public final class UiResourceTheme {
     }
 
     private static int resourceCount(final ResourceManager manager, final Identifier id) {
-        //#if MC>=11900
-        //$$ return manager.getAllResources(id).size();
-        //#else
-        try {
-            return manager.getAllResources(id).size();
-        } catch (final IOException exception) {
-            return 0;
-        }
-        //#endif
+        return manager.getResourceStack(id).size();
     }
 
     private static Map<Identifier, UiIcon> xaeroIcons() {

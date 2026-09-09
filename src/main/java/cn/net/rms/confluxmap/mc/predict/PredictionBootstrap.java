@@ -16,10 +16,10 @@ import cn.net.rms.confluxmap.server.FlatWorldBaseline;
 import cn.net.rms.confluxmap.server.WorldPresetDetector;
 import java.util.Optional;
 import java.util.OptionalLong;
-import net.minecraft.client.MinecraftClient;
-import net.minecraft.server.world.ServerWorld;
-import net.minecraft.util.registry.RegistryKey;
-import net.minecraft.world.World;
+import net.minecraft.client.Minecraft;
+import net.minecraft.server.level.ServerLevel;
+import net.minecraft.resources.ResourceKey;
+import net.minecraft.world.level.Level;
 
 /**
  * Session listener that publishes everything prediction knows about the new session into {@link
@@ -29,7 +29,8 @@ import net.minecraft.world.World;
  * <p>Sources per mode:
  * <ul>
  *   <li>Singleplayer: presets/flat surface from the integrated server's live generators
- *       ({@link WorldPresetDetector}/{@link FlatWorldBaseline}), seed from the save properties.</li>
+ *       ({@link WorldPresetDetector}/{@link FlatWorldBaseline}), seed from the save properties
+ *       unless an explicit client-side seed override is configured.</li>
  *   <li>Multiplayer with an ACTIVE companion: presets/flat surface from the handshake
  *       (HELLO_POLICY dim entries + FLAT_BASELINE), seed from the overworld dim entry when
  *       granted. A pre-preset companion advertises defaults, matching its old behavior.</li>
@@ -45,13 +46,13 @@ public final class PredictionBootstrap {
     /** This subproject compiles for exactly one Minecraft version; see {@code McVersions} for the worldgen-version string table. */
     private static final String MC_VERSION_STRING = MinecraftVersion.current();
 
-    private final MinecraftClient client;
+    private final Minecraft client;
     private final PredictionState state;
     private final CompanionSession companion;
     private final ManualSeedConfig manualSeeds;
 
     public PredictionBootstrap(
-        final MinecraftClient client,
+        final Minecraft client,
         final PredictionState state,
         final CompanionSession companion,
         final ManualSeedConfig manualSeeds
@@ -68,7 +69,7 @@ public final class PredictionBootstrap {
         if (!session.active()) {
             return;
         }
-        final boolean singleplayer = client.isInSingleplayer() && client.getServer() != null;
+        final boolean singleplayer = client.isLocalServer() && client.getSingleplayerServer() != null;
         final OptionalLong seedOpt;
         final String worldgenVersion;
         final WorldPreset overworldPreset;
@@ -77,19 +78,22 @@ public final class PredictionBootstrap {
         final Optional<FlatBaseline> flatBaseline;
         final boolean manual;
         if (singleplayer) {
-            //#if MC>=260100
-            //$$ // 26.1 dropped WorldData.getGeneratorOptions; the seed now hangs off the level itself.
-            //$$ seedOpt = OptionalLong.of(client.getSingleplayerServer().overworld().getSeed());
-            //#else
-            seedOpt = OptionalLong.of(client.getServer().getSaveProperties().getGeneratorOptions().getSeed());
-            //#endif
+            // 26.1 dropped WorldData.getGeneratorOptions; the seed now hangs off the level itself.
+            final Optional<ManualSeedConfig.Entry> manualEntry = manualSeeds.get(session.world());
+            if (manualEntry.isPresent()) {
+                seedOpt = OptionalLong.of(manualEntry.get().seed());
+                worldgenVersion = manualEntry.get().worldgenVersion();
+                manual = true;
+            } else {
+                seedOpt = OptionalLong.of(client.getSingleplayerServer().overworld().getSeed());
+                worldgenVersion = MC_VERSION_STRING;
+                manual = false;
+            }
             // The client jar's own worldgen is the only worldgen an integrated server can run.
-            worldgenVersion = MC_VERSION_STRING;
-            overworldPreset = detectLocal(World.OVERWORLD);
-            netherPreset = detectLocal(World.NETHER);
-            endPreset = detectLocal(World.END);
+            overworldPreset = detectLocal(Level.OVERWORLD);
+            netherPreset = detectLocal(Level.NETHER);
+            endPreset = detectLocal(Level.END);
             flatBaseline = overworldPreset == WorldPreset.FLAT ? localFlatBaseline() : Optional.empty();
-            manual = false;
         } else if (companion.isActive()) {
             // The companion publishes the same vanilla seed for every dim (research R6 confirms
             // vanilla threads one long through every dimension); read it from the overworld entry.
@@ -172,14 +176,14 @@ public final class PredictionBootstrap {
     }
 
     /** Integrated server only: classify one dimension's live generator; a missing world is CUSTOM. */
-    private WorldPreset detectLocal(final RegistryKey<World> key) {
-        final ServerWorld world = client.getServer().getWorld(key);
+    private WorldPreset detectLocal(final ResourceKey<Level> key) {
+        final ServerLevel world = client.getSingleplayerServer().getLevel(key);
         return world == null ? WorldPreset.CUSTOM : WorldPresetDetector.detect(world);
     }
 
     /** Integrated server only: the superflat overworld's uniform surface. */
     private Optional<FlatBaseline> localFlatBaseline() {
-        final ServerWorld world = client.getServer().getWorld(World.OVERWORLD);
+        final ServerLevel world = client.getSingleplayerServer().getLevel(Level.OVERWORLD);
         return world == null ? Optional.empty() : FlatWorldBaseline.of(world);
     }
 

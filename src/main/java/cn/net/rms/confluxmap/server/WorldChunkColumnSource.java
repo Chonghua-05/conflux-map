@@ -6,36 +6,36 @@ import cn.net.rms.confluxmap.core.predict.CubiomesBiomeIds;
 import java.util.HashMap;
 import java.util.IdentityHashMap;
 import java.util.Map;
-import net.minecraft.block.Block;
-import net.minecraft.block.BlockState;
-import net.minecraft.server.world.ServerWorld;
-import net.minecraft.tag.FluidTags;
-import net.minecraft.util.Identifier;
-import net.minecraft.util.math.BlockPos;
-import net.minecraft.world.Heightmap;
-import net.minecraft.world.LightType;
-import net.minecraft.world.chunk.WorldChunk;
+import net.minecraft.world.level.block.Block;
+import net.minecraft.world.level.block.state.BlockState;
+import net.minecraft.server.level.ServerLevel;
+import net.minecraft.tags.FluidTags;
+import net.minecraft.resources.Identifier;
+import net.minecraft.core.BlockPos;
+import net.minecraft.world.level.levelgen.Heightmap;
+import net.minecraft.world.level.LightLayer;
+import net.minecraft.world.level.chunk.LevelChunk;
 
-/** Main-thread adapter that exposes one loaded {@link WorldChunk} through {@link ChunkColumnSource}. */
+/** Main-thread adapter that exposes one loaded {@link LevelChunk} through {@link ChunkColumnSource}. */
 final class WorldChunkColumnSource implements ChunkColumnSource {
-    private final ServerWorld world;
-    private final WorldChunk chunk;
+    private final ServerLevel world;
+    private final LevelChunk chunk;
     private final long revision;
     private final int startX;
     private final int startZ;
-    private final BlockPos.Mutable pos = new BlockPos.Mutable();
+    private final BlockPos.MutableBlockPos pos = new BlockPos.MutableBlockPos();
     private final Map<Block, String> blockNames = new IdentityHashMap<>();
     private final Map<BiomeSample, Integer> biomeIds = new HashMap<>();
 
     private record BiomeSample(int x, int y, int z) {
     }
 
-    WorldChunkColumnSource(final ServerWorld world, final WorldChunk chunk, final long revision) {
+    WorldChunkColumnSource(final ServerLevel world, final LevelChunk chunk, final long revision) {
         this.world = world;
         this.chunk = chunk;
         this.revision = revision;
-        startX = chunk.getPos().getStartX();
-        startZ = chunk.getPos().getStartZ();
+        startX = chunk.getPos().getMinBlockX();
+        startZ = chunk.getPos().getMinBlockZ();
     }
 
     @Override
@@ -50,17 +50,17 @@ final class WorldChunkColumnSource implements ChunkColumnSource {
 
     @Override
     public int bottomY() {
-        return world.getBottomY();
+        return world.getMinY();
     }
 
     @Override
     public int motionBlockingHeight(final int x, final int z) {
-        return toExclusiveHeight(chunk.sampleHeightmap(Heightmap.Type.MOTION_BLOCKING, x, z));
+        return toExclusiveHeight(chunk.getHeight(Heightmap.Types.MOTION_BLOCKING, x, z));
     }
 
     @Override
     public int oceanFloorHeight(final int x, final int z) {
-        return toExclusiveHeight(chunk.sampleHeightmap(Heightmap.Type.OCEAN_FLOOR, x, z));
+        return toExclusiveHeight(chunk.getHeight(Heightmap.Types.OCEAN_FLOOR, x, z));
     }
 
     static int toExclusiveHeight(final int topBlockY) {
@@ -82,19 +82,11 @@ final class WorldChunkColumnSource implements ChunkColumnSource {
     @Override
     public SurfaceKind fluidKindAt(final int x, final int y, final int z) {
         pos.set(startX + x, y, startZ + z);
-        final net.minecraft.fluid.FluidState fluid = chunk.getBlockState(pos).getFluidState();
-        //#if MC>=260100
-        //$$ if (fluid.is(FluidTags.WATER)) {
-        //#else
-        if (fluid.isIn(FluidTags.WATER)) {
-        //#endif
+        final net.minecraft.world.level.material.FluidState fluid = chunk.getBlockState(pos).getFluidState();
+        if (fluid.is(FluidTags.WATER)) {
             return SurfaceKind.WATER;
         }
-        //#if MC>=260100
-        //$$ if (fluid.is(FluidTags.LAVA)) {
-        //#else
-        if (fluid.isIn(FluidTags.LAVA)) {
-        //#endif
+        if (fluid.is(FluidTags.LAVA)) {
             return SurfaceKind.LAVA;
         }
         return SurfaceKind.UNKNOWN;
@@ -102,12 +94,8 @@ final class WorldChunkColumnSource implements ChunkColumnSource {
 
     @Override
     public int blockLightAbove(final int x, final int surfaceY, final int z) {
-        pos.set(startX + x, Math.min(surfaceY + 1, world.getTopY() - 1), startZ + z);
-        //#if MC>=260100
-        //$$ return world.getBrightness(net.minecraft.world.level.LightLayer.BLOCK, pos);
-        //#else
-        return world.getLightLevel(LightType.BLOCK, pos);
-        //#endif
+        pos.set(startX + x, Math.min(surfaceY + 1, world.getMaxY() - 1), startZ + z);
+        return world.getBrightness(net.minecraft.world.level.LightLayer.BLOCK, pos);
     }
 
     @Override

@@ -4,12 +4,9 @@ import cn.net.rms.confluxmap.compat.Ids;
 import cn.net.rms.confluxmap.core.config.ConfluxConfig;
 import cn.net.rms.confluxmap.core.util.Argb;
 import cn.net.rms.confluxmap.mc.render.RenderUtil;
-//#if MC<11900
-import com.mojang.blaze3d.systems.RenderSystem;
-//#endif
-import net.minecraft.client.MinecraftClient;
-import net.minecraft.client.util.math.MatrixStack;
-import net.minecraft.util.Identifier;
+import net.minecraft.client.Minecraft;
+import com.mojang.blaze3d.vertex.PoseStack;
+import net.minecraft.resources.Identifier;
 
 /** Texture-backed player and detached-camera marker renderer. */
 public final class PlayerMarkerRenderer {
@@ -29,8 +26,8 @@ public final class PlayerMarkerRenderer {
      * rotates the texture so that up means the marked entity's forward.
      */
     public static void draw(
-        final MinecraftClient client,
-        final MatrixStack matrices,
+        final Minecraft client,
+        final PoseStack matrices,
         final UiResourceTheme theme,
         final ConfluxConfig.PlayerMarkerStyle fallbackStyle,
         final float centerX,
@@ -42,8 +39,8 @@ public final class PlayerMarkerRenderer {
     }
 
     public static void draw(
-        final MinecraftClient client,
-        final MatrixStack matrices,
+        final Minecraft client,
+        final PoseStack matrices,
         final UiResourceTheme theme,
         final ConfluxConfig.PlayerMarkerStyle fallbackStyle,
         final float centerX,
@@ -54,11 +51,7 @@ public final class PlayerMarkerRenderer {
     ) {
         final UiResourceTheme.PlayerMarkerTexture texture =
             theme.playerMarker().orElseGet(() -> builtInMarker(fallbackStyle));
-        //#if MC<11900
-        RenderSystem.disableDepthTest();
-        RenderSystem.depthMask(false);
-        //#endif
-        matrices.push();
+        matrices.pushPose();
         try {
             matrices.translate(centerX, centerY, 0);
             RenderUtil.rotateZ(
@@ -67,11 +60,7 @@ public final class PlayerMarkerRenderer {
             );
             drawTexture(client, matrices, texture, fallbackColor, opacity);
         } finally {
-            matrices.pop();
-            //#if MC<11900
-            RenderSystem.depthMask(true);
-            RenderSystem.enableDepthTest();
-            //#endif
+            matrices.popPose();
         }
     }
 
@@ -86,8 +75,8 @@ public final class PlayerMarkerRenderer {
     }
 
     private static void drawTexture(
-        final MinecraftClient client,
-        final MatrixStack matrices,
+        final Minecraft client,
+        final PoseStack matrices,
         final UiResourceTheme.PlayerMarkerTexture marker,
         final int fallbackColor,
         final float opacity
@@ -129,7 +118,7 @@ public final class PlayerMarkerRenderer {
     }
 
     private static void drawTintedTexture(
-        final MatrixStack matrices,
+        final PoseStack matrices,
         final UiResourceTheme.PlayerMarkerTexture marker,
         final float offsetY,
         final int color

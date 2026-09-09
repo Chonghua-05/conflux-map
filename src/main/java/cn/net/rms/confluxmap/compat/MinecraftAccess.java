@@ -2,130 +2,80 @@ package cn.net.rms.confluxmap.compat;
 
 import java.io.IOException;
 import java.io.InputStream;
-import net.minecraft.client.MinecraftClient;
-import net.minecraft.client.gui.screen.Screen;
-//#if MC>=260200
-//$$ import net.minecraft.client.gui.screens.inventory.AbstractContainerScreen;
-//#else
-import net.minecraft.client.gui.screen.ingame.HandledScreen;
-//#endif
-import net.minecraft.server.command.ServerCommandSource;
-import net.minecraft.server.network.ServerPlayerEntity;
-import net.minecraft.resource.ResourceManager;
-import net.minecraft.text.Text;
-import net.minecraft.util.Identifier;
-//#if MC>=12111
-//$$ import net.minecraft.command.permission.Permission;
-//$$ import net.minecraft.command.permission.PermissionLevel;
-//#endif
+import net.minecraft.client.Minecraft;
+import net.minecraft.client.gui.screens.Screen;
+import net.minecraft.client.gui.screens.inventory.AbstractContainerScreen;
+import net.minecraft.commands.CommandSourceStack;
+import net.minecraft.server.level.ServerPlayer;
+import net.minecraft.server.packs.resources.ResourceManager;
+import net.minecraft.network.chat.Component;
+import net.minecraft.resources.Identifier;
+import net.minecraft.server.permissions.Permission;
+import net.minecraft.server.permissions.PermissionLevel;
 
 /** Small access seams for Minecraft methods whose signatures changed after 1.17.1. */
 public final class MinecraftAccess {
     private MinecraftAccess() {
     }
 
-    public static int viewDistance(final MinecraftClient client) {
-        //#if MC>=12000
-        //$$ return client.options.getViewDistance().getValue();
-        //#else
-        return client.options.viewDistance;
-        //#endif
+    public static int viewDistance(final Minecraft client) {
+        return client.options.renderDistance().get();
     }
 
     /**
      * The player's biome-blend radius in blocks: the tint at a position is averaged over the
      * square that many blocks around it, and 0 turns blending off entirely.
      */
-    public static int biomeBlendRadius(final MinecraftClient client) {
-        //#if MC>=12000
-        //$$ return client.options.getBiomeBlendRadius().getValue();
-        //#else
-        return client.options.biomeBlendRadius;
-        //#endif
+    public static int biomeBlendRadius(final Minecraft client) {
+        return client.options.biomeBlendRadius().get();
     }
 
     /**
      * Live video gamma. Tweakeroo Gamma Override deliberately writes through this vanilla
      * option, including values above the normal slider range, so no optional API is needed.
      */
-    public static float gamma(final MinecraftClient client) {
-        //#if MC>=12000
-        //$$ return client.options.getGamma().getValue().floatValue();
-        //#else
-        return (float) client.options.gamma;
-        //#endif
+    public static float gamma(final Minecraft client) {
+        return client.options.gamma().get().floatValue();
     }
 
     /** Whether the configured vanilla player-list key is currently held. */
-    public static boolean isPlayerListKeyPressed(final MinecraftClient client) {
-        //#if MC>=260100
-        //$$ return client.options.keyPlayerList.isDown();
-        //#elseif MC>=11800
-        //$$ return client.options.playerListKey.isPressed();
-        //#else
-        return client.options.keyPlayerList.isPressed();
-        //#endif
+    public static boolean isPlayerListKeyPressed(final Minecraft client) {
+        return client.options.keyPlayerList.isDown();
     }
 
     /** The active screen, whose owner moved from Minecraft to Gui in 26.2. */
-    public static Screen screen(final MinecraftClient client) {
-        //#if MC>=260200
-        //$$ return client.gui.screen();
-        //#else
-        return client.currentScreen;
-        //#endif
+    public static Screen screen(final Minecraft client) {
+        return client.screen;
     }
 
     /** Changes the active screen through the version-appropriate owner. */
-    public static void setScreen(final MinecraftClient client, final Screen screen) {
-        //#if MC>=260200
-        //$$ client.gui.setScreen(screen);
-        //#else
+    public static void setScreen(final Minecraft client, final Screen screen) {
         client.setScreen(screen);
-        //#endif
     }
 
     /** Inventory-style screens also host JEI/REI overlays, so the minimap HUD must yield to them. */
     public static boolean isContainerScreen(final Screen screen) {
-        //#if MC>=260200
-        //$$ return screen instanceof AbstractContainerScreen<?>;
-        //#else
-        return screen instanceof HandledScreen<?>;
-        //#endif
+        return screen instanceof AbstractContainerScreen<?>;
     }
 
     /** Whether the full vanilla debug overlay is visible. */
-    public static boolean isFullDebugOverlayVisible(final MinecraftClient client) {
-        //#if MC>=260100
-        //$$ return client.debugEntries.isOverlayVisible();
-        //#elseif MC>=12109
-        //$$ return client.debugHudEntryList.isF3Enabled();
-        //#elseif MC>=12100
-        //$$ return client.getDebugHud().shouldShowDebugHud();
-        //#else
-        return client.options.debugEnabled;
-        //#endif
+    public static boolean isFullDebugOverlayVisible(final Minecraft client) {
+        return client.debugEntries.isOverlayVisible();
     }
 
-    public static void sendChatMessage(final MinecraftClient client, final String message) {
-        //#if MC>=12000
-        //$$ if (client.getNetworkHandler() != null) {
-        //$$     client.getNetworkHandler().sendChatMessage(message);
-        //$$ }
-        //#else
-        if (client.player != null) {
-            client.player.sendChatMessage(message);
+    public static void sendChatMessage(final Minecraft client, final String message) {
+        if (client.getConnection() != null) {
+            client.getConnection().sendChat(message);
         }
-        //#endif
     }
 
     /** Whether the server exposed at least one named command to this player's command tree. */
-    public static boolean canSendCommand(final MinecraftClient client, final String... commandNames) {
-        if (client.player == null || client.getNetworkHandler() == null) {
+    public static boolean canSendCommand(final Minecraft client, final String... commandNames) {
+        if (client.player == null || client.getConnection() == null) {
             return false;
         }
         for (final String commandName : commandNames) {
-            if (client.getNetworkHandler().getCommandDispatcher().getRoot().getChild(commandName) != null) {
+            if (client.getConnection().getCommands().getRoot().getChild(commandName) != null) {
                 return true;
             }
         }
@@ -133,66 +83,40 @@ public final class MinecraftAccess {
     }
 
     /** Sends one command without the leading slash through the version-appropriate chat path. */
-    public static void sendCommand(final MinecraftClient client, final String command) {
-        //#if MC>=12000
-        //$$ if (client.getNetworkHandler() != null) {
-        //$$     client.getNetworkHandler().sendChatCommand(command);
-        //$$ }
-        //#else
-        if (client.player != null) {
-            client.player.sendChatMessage("/" + command);
+    public static void sendCommand(final Minecraft client, final String command) {
+        if (client.getConnection() != null) {
+            client.getConnection().sendCommand(command);
         }
-        //#endif
     }
 
-    public static String playerName(final ServerPlayerEntity player) {
-        //#if MC>=12100
-        //$$ return player.getName().getString();
-        //#else
-        return player.getEntityName();
-        //#endif
+    public static String playerName(final ServerPlayer player) {
+        return player.getName().getString();
     }
 
     public static InputStream openResource(final ResourceManager resources, final Identifier id)
         throws IOException {
-        //#if MC>=12000
-        //$$ return resources.getResource(id)
-        //$$     .orElseThrow(() -> new IOException("missing resource: " + id))
-        //$$     .getInputStream();
-        //#else
-        return resources.getResource(id).getInputStream();
-        //#endif
+        return resources.getResource(id)
+            .orElseThrow(() -> new IOException("missing resource: " + id))
+            .open();
     }
 
     public static void sendFeedback(
-        final ServerCommandSource source,
-        final Text message,
+        final CommandSourceStack source,
+        final Component message,
         final boolean broadcastToOps
     ) {
-        //#if MC>=12000
-        //$$ source.sendFeedback(() -> message, broadcastToOps);
-        //#else
-        source.sendFeedback(message, broadcastToOps);
-        //#endif
+        source.sendSuccess(() -> message, broadcastToOps);
     }
 
-    public static boolean hasPermission(final ServerCommandSource source, final int level) {
-        //#if MC>=12111
-        //$$ return source.getPermissions().hasPermission(
-        //$$     new Permission.Level(PermissionLevel.fromLevel(level))
-        //$$ );
-        //#else
-        return source.hasPermissionLevel(level);
-        //#endif
+    public static boolean hasPermission(final CommandSourceStack source, final int level) {
+        return source.permissions().hasPermission(
+            new Permission.HasCommandLevel(PermissionLevel.byId(level))
+        );
     }
 
-    public static boolean hasPermission(final ServerPlayerEntity player, final int level) {
-        //#if MC>=12111
-        //$$ return player.getPermissions().hasPermission(
-        //$$     new Permission.Level(PermissionLevel.fromLevel(level))
-        //$$ );
-        //#else
-        return player.hasPermissionLevel(level);
-        //#endif
+    public static boolean hasPermission(final ServerPlayer player, final int level) {
+        return player.permissions().hasPermission(
+            new Permission.HasCommandLevel(PermissionLevel.byId(level))
+        );
     }
 }

@@ -5,8 +5,8 @@ import static com.mojang.brigadier.arguments.IntegerArgumentType.integer;
 import static com.mojang.brigadier.arguments.StringArgumentType.getString;
 import static com.mojang.brigadier.arguments.StringArgumentType.greedyString;
 import static com.mojang.brigadier.arguments.StringArgumentType.word;
-import static net.minecraft.server.command.CommandManager.argument;
-import static net.minecraft.server.command.CommandManager.literal;
+import static net.minecraft.commands.Commands.argument;
+import static net.minecraft.commands.Commands.literal;
 
 import cn.net.rms.confluxmap.ConfluxMapMod;
 import cn.net.rms.confluxmap.compat.MinecraftAccess;
@@ -16,13 +16,11 @@ import cn.net.rms.confluxmap.server.shared.SharedWaypointCommandService;
 import cn.net.rms.confluxmap.server.shared.SharedWaypointService;
 import java.nio.charset.StandardCharsets;
 import java.util.UUID;
-//#if MC>=12108
-//$$ import net.fabricmc.fabric.api.command.v2.CommandRegistrationCallback;
-//#else
-import net.fabricmc.fabric.api.command.v1.CommandRegistrationCallback;
-//#endif
-import net.minecraft.server.command.ServerCommandSource;
-import net.minecraft.server.network.ServerPlayerEntity;
+import net.neoforged.neoforge.common.NeoForge;
+import net.neoforged.neoforge.event.RegisterCommandsEvent;
+import net.neoforged.neoforge.event.RegisterCommandsEvent;
+import net.minecraft.commands.CommandSourceStack;
+import net.minecraft.server.level.ServerPlayer;
 
 /** Server commands for the companion's player diagnostics and operator controls. */
 final class ConfluxMapCommands {
@@ -36,11 +34,7 @@ final class ConfluxMapCommands {
             return;
         }
         registered = true;
-        //#if MC>=12108
-        //$$ CommandRegistrationCallback.EVENT.register((dispatcher, registryAccess, environment) -> dispatcher.register(
-        //#else
-        CommandRegistrationCallback.EVENT.register((dispatcher, dedicated) -> dispatcher.register(
-        //#endif
+        NeoForge.EVENT_BUS.addListener((RegisterCommandsEvent event) -> event.getDispatcher().register(
             literal("confluxmap")
                 .then(literal("waypoints")
                     .then(literal("list")
@@ -51,7 +45,7 @@ final class ConfluxMapCommands {
                             getInteger(context, "page")
                         ))))
                     .then(literal("add")
-                        .requires(source -> source.getEntity() instanceof ServerPlayerEntity)
+                        .requires(source -> source.getEntity() instanceof ServerPlayer)
                         .then(argument("name", greedyString()).executes(context -> createHere(
                             companion,
                             context.getSource(),
@@ -66,7 +60,7 @@ final class ConfluxMapCommands {
                                 getString(context, "name")
                             )))))
                     .then(literal("move")
-                        .requires(source -> source.getEntity() instanceof ServerPlayerEntity)
+                        .requires(source -> source.getEntity() instanceof ServerPlayer)
                         .then(argument("id", word()).executes(context -> moveHere(
                             companion,
                             context.getSource(),
@@ -89,10 +83,10 @@ final class ConfluxMapCommands {
                         .requires(source -> MinecraftAccess.hasPermission(source, 2))
                         .executes(context -> disable(companion, context.getSource()))))
                 .then(literal("performance")
-                    .requires(source -> source.getEntity() instanceof ServerPlayerEntity)
+                    .requires(source -> source.getEntity() instanceof ServerPlayer)
                     .executes(context -> performance(companion, context.getSource())))
                 .then(literal("webmap")
-                    .requires(source -> source.getEntity() instanceof ServerPlayerEntity)
+                    .requires(source -> source.getEntity() instanceof ServerPlayer)
                     .then(literal("hide").executes(context -> webMapPrivacy(
                         companion, context.getSource(), true
                     )))
@@ -104,7 +98,7 @@ final class ConfluxMapCommands {
 
     private static int list(
         final ConfluxMapCompanion companion,
-        final ServerCommandSource source,
+        final CommandSourceStack source,
         final int pageNumber
     ) {
         final SharedWaypointCommandService commands = commands(companion, source);
@@ -139,14 +133,14 @@ final class ConfluxMapCommands {
 
     private static int createHere(
         final ConfluxMapCompanion companion,
-        final ServerCommandSource source,
+        final CommandSourceStack source,
         final String name
     ) throws com.mojang.brigadier.exceptions.CommandSyntaxException {
         final SharedWaypointCommandService commands = commands(companion, source);
         if (commands == null) {
             return error(source, "Shared waypoints are disabled on this server.");
         }
-        final ServerPlayerEntity player = source.getPlayer();
+        final ServerPlayer player = source.getPlayerOrException();
         return result(
             source,
             commands.createHere(actor(source), position(player), name),
@@ -156,7 +150,7 @@ final class ConfluxMapCommands {
 
     private static int rename(
         final ConfluxMapCompanion companion,
-        final ServerCommandSource source,
+        final CommandSourceStack source,
         final String id,
         final String name
     ) {
@@ -168,7 +162,7 @@ final class ConfluxMapCommands {
 
     private static int moveHere(
         final ConfluxMapCompanion companion,
-        final ServerCommandSource source,
+        final CommandSourceStack source,
         final String id
     ) throws com.mojang.brigadier.exceptions.CommandSyntaxException {
         final SharedWaypointCommandService commands = commands(companion, source);
@@ -177,14 +171,14 @@ final class ConfluxMapCommands {
         }
         return result(
             source,
-            commands.moveHere(actor(source), id, position(source.getPlayer())),
+            commands.moveHere(actor(source), id, position(source.getPlayerOrException())),
             "Shared waypoint moved."
         );
     }
 
     private static int delete(
         final ConfluxMapCompanion companion,
-        final ServerCommandSource source,
+        final CommandSourceStack source,
         final String id
     ) {
         final SharedWaypointCommandService commands = commands(companion, source);
@@ -195,7 +189,7 @@ final class ConfluxMapCommands {
 
     private static SharedWaypointCommandService commands(
         final ConfluxMapCompanion companion,
-        final ServerCommandSource source
+        final CommandSourceStack source
     ) {
         if (!companion.sharedWaypointsEnabled()) {
             return null;
@@ -207,31 +201,31 @@ final class ConfluxMapCommands {
         );
     }
 
-    private static SharedWaypointService.Actor actor(final ServerCommandSource source) {
-        if (source.getEntity() instanceof final ServerPlayerEntity player) {
+    private static SharedWaypointService.Actor actor(final CommandSourceStack source) {
+        if (source.getEntity() instanceof final ServerPlayer player) {
             return new SharedWaypointService.Actor(
-                player.getUuid(), MinecraftAccess.playerName(player),
+                player.getUUID(), MinecraftAccess.playerName(player),
                 MinecraftAccess.hasPermission(source, 2)
             );
         }
         return new SharedWaypointService.Actor(
             UUID.nameUUIDFromBytes(
-                ("confluxmap-command:" + source.getName()).getBytes(StandardCharsets.UTF_8)
+                ("confluxmap-command:" + source.getTextName()).getBytes(StandardCharsets.UTF_8)
             ),
-            source.getName(),
+            source.getTextName(),
             MinecraftAccess.hasPermission(source, 2)
         );
     }
 
-    private static SharedWaypointCommandService.Position position(final ServerPlayerEntity player) {
+    private static SharedWaypointCommandService.Position position(final ServerPlayer player) {
         return new SharedWaypointCommandService.Position(
-            DimensionId.parse(player.getServerWorld().getRegistryKey().getValue().toString()),
+            DimensionId.parse(player.level().dimension().identifier().toString()),
             player.getX(), player.getY(), player.getZ()
         );
     }
 
     private static int result(
-        final ServerCommandSource source,
+        final CommandSourceStack source,
         final SharedWaypointCommandService.Result result,
         final String success
     ) {
@@ -270,14 +264,14 @@ final class ConfluxMapCommands {
 
     private static int performance(
         final ConfluxMapCompanion companion,
-        final ServerCommandSource source
+        final CommandSourceStack source
     ) throws com.mojang.brigadier.exceptions.CommandSyntaxException {
         if (!companion.isEnabled()) {
             return error(source, "Conflux Map companion is disabled.");
         }
-        final ServerPlayerEntity player = source.getPlayer();
+        final ServerPlayer player = source.getPlayerOrException();
         final java.util.List<SyncPerformanceMonitor.LodSnapshot> snapshots =
-            companion.summaries().performance(player.getUuid());
+            companion.summaries().performance(player.getUUID());
         for (final String line : SyncPerformanceFormatter.format(
             snapshots,
             cn.net.rms.confluxmap.core.util.TileMath.MAX_LOD
@@ -289,11 +283,11 @@ final class ConfluxMapCommands {
 
     private static int webMapPrivacy(
         final ConfluxMapCompanion companion,
-        final ServerCommandSource source,
+        final CommandSourceStack source,
         final boolean hidden
     ) throws com.mojang.brigadier.exceptions.CommandSyntaxException {
-        final ServerPlayerEntity player = source.getPlayer();
-        if (!companion.setWebMapHidden(player.getUuid(), hidden)) {
+        final ServerPlayer player = source.getPlayerOrException();
+        if (!companion.setWebMapHidden(player.getUUID(), hidden)) {
             return error(source, "Could not save the web-map privacy preference.");
         }
         return feedback(
@@ -305,7 +299,7 @@ final class ConfluxMapCommands {
 
     private static int status(
         final ConfluxMapCompanion companion,
-        final ServerCommandSource source
+        final CommandSourceStack source
     ) {
         final ServerConfig config = companion.config();
         final SharedWaypointService service = companion.sharedWaypoints();
@@ -324,7 +318,7 @@ final class ConfluxMapCommands {
 
     private static int enable(
         final ConfluxMapCompanion companion,
-        final ServerCommandSource source
+        final CommandSourceStack source
     ) {
         final ConfluxMapCompanion.SharedWaypointToggleResult result =
             companion.enableSharedWaypoints(source.getServer());
@@ -350,7 +344,7 @@ final class ConfluxMapCommands {
 
     private static int disable(
         final ConfluxMapCompanion companion,
-        final ServerCommandSource source
+        final CommandSourceStack source
     ) {
         final ConfluxMapCompanion.SharedWaypointToggleResult result =
             companion.disableSharedWaypoints(source.getServer());
@@ -366,24 +360,24 @@ final class ConfluxMapCommands {
         };
     }
 
-    private static int feedback(final ServerCommandSource source, final String message) {
+    private static int feedback(final CommandSourceStack source, final String message) {
         MinecraftAccess.sendFeedback(source, Texts.literal(message), true);
         return 1;
     }
 
-    private static int error(final ServerCommandSource source, final String message) {
-        source.sendError(Texts.literal(message));
+    private static int error(final CommandSourceStack source, final String message) {
+        source.sendFailure(Texts.literal(message));
         return 0;
     }
 
     private static void audit(
-        final ServerCommandSource source,
+        final CommandSourceStack source,
         final String action,
         final ConfluxMapCompanion.SharedWaypointToggleResult result
     ) {
         ConfluxMapMod.LOGGER.info(
             "shared-waypoint admin actor={} action={} result={}",
-            source.getName(),
+            source.getTextName(),
             action,
             result
         );

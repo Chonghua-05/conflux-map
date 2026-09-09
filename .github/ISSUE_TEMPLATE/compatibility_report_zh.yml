@@ -21,7 +21,7 @@ body:
     id: minecraft-version
     attributes:
       label: Minecraft 版本
-      placeholder: "例如：1.21.4"
+      placeholder: "例如：26.1"
     validations:
       required: true
 
@@ -39,8 +39,8 @@ body:
       label: 完整运行环境
       description: 请填写加载器或服务端版本，以及复现冲突所需的全部模组或插件。
       placeholder: |
-        Fabric Loader 0.16.10
-        Fabric API 0.119.2
+        NeoForge 26.1.0.19-beta
+        Java 25
         其他模组 1.0.0
         操作系统：Arch Linux
     validations:

@@ -7,10 +7,10 @@ import cn.net.rms.confluxmap.mc.ui.GuiDraw;
 import cn.net.rms.confluxmap.compat.Widgets;
 import cn.net.rms.confluxmap.compat.Texts;
 import java.util.Objects;
-import net.minecraft.client.MinecraftClient;
-import net.minecraft.client.gui.screen.Screen;
-import net.minecraft.client.gui.widget.ButtonWidget;
-import net.minecraft.client.util.math.MatrixStack;
+import net.minecraft.client.Minecraft;
+import net.minecraft.client.gui.screens.Screen;
+import net.minecraft.client.gui.components.Button;
+import com.mojang.blaze3d.vertex.PoseStack;
 
 /** Explicit confirmation boundary for deleting a set and every waypoint assigned to it. */
 final class WaypointSetDeleteConfirmScreen extends ConfluxScreen {
@@ -24,7 +24,7 @@ final class WaypointSetDeleteConfirmScreen extends ConfluxScreen {
     private final String setName;
     private final Runnable onSuccess;
     private int waypointCount;
-    private ButtonWidget confirmButton;
+    private Button confirmButton;
     private String errorKey;
 
     WaypointSetDeleteConfirmScreen(
@@ -48,7 +48,7 @@ final class WaypointSetDeleteConfirmScreen extends ConfluxScreen {
     @Override
     protected void init() {
         final int centerX = width / 2;
-        confirmButton = addDrawableChild(Widgets.button(
+        confirmButton = addRenderableWidget(Widgets.button(
             centerX - 104,
             height - 32,
             100,
@@ -56,7 +56,7 @@ final class WaypointSetDeleteConfirmScreen extends ConfluxScreen {
             Texts.translatable("confluxmap.screen.waypoint_set.delete.confirm"),
             button -> confirmDelete()
         ));
-        addDrawableChild(Widgets.button(
+        addRenderableWidget(Widgets.button(
             centerX + 4,
             height - 32,
             100,
@@ -75,7 +75,7 @@ final class WaypointSetDeleteConfirmScreen extends ConfluxScreen {
 
     @Override
     public void onClose() {
-        MinecraftAccess.setScreen(MinecraftClient.getInstance(), parent);
+        MinecraftAccess.setScreen(Minecraft.getInstance(), parent);
     }
 
     @Override
@@ -153,7 +153,7 @@ final class WaypointSetDeleteConfirmScreen extends ConfluxScreen {
     }
 
     private void drawCentered(final GuiDraw draw, final String value, final int y, final int color) {
-        final String text = this.textRenderer.trimToWidth(value, Math.max(40, width - 32));
-        draw.drawTextWithShadow(this.textRenderer, text, width / 2f - this.textRenderer.getWidth(text) / 2f, y, color);
+        final String text = this.font.plainSubstrByWidth(value, Math.max(40, width - 32));
+        draw.drawTextWithShadow(this.font, text, width / 2f - this.font.width(text) / 2f, y, color);
     }
 }

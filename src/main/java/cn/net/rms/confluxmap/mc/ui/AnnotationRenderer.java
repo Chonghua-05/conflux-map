@@ -12,8 +12,8 @@ import cn.net.rms.confluxmap.core.annotation.RectangleAnnotationGeometry;
 import cn.net.rms.confluxmap.mc.render.RenderUtil;
 import java.util.List;
 import java.util.UUID;
-import net.minecraft.client.font.TextRenderer;
-import net.minecraft.client.util.math.MatrixStack;
+import net.minecraft.client.gui.Font;
+import com.mojang.blaze3d.vertex.PoseStack;
 
 /** Stateless renderer shared by the fullscreen map and minimap HUD. */
 public final class AnnotationRenderer {
@@ -27,7 +27,7 @@ public final class AnnotationRenderer {
     }
 
     public static void drawGeometry(
-        final MatrixStack matrices,
+        final PoseStack matrices,
         final List<Annotation> annotations,
         final AnnotationProjection projection,
         final UUID selectedId
@@ -48,7 +48,7 @@ public final class AnnotationRenderer {
 
     public static void drawLabels(
         final GuiDraw draw,
-        final TextRenderer textRenderer,
+        final Font textRenderer,
         final List<Annotation> annotations,
         final AnnotationProjection projection,
         final double clipX,
@@ -65,9 +65,9 @@ public final class AnnotationRenderer {
             final AnnotationProjection.ScreenPoint anchor = projection.project(annotation.geometry().bounds().center());
             final int textWidth = textWidth(textRenderer, annotation.label());
             final double left = anchor.x() - textWidth / 2.0;
-            final double top = anchor.y() - textRenderer.fontHeight / 2.0;
+            final double top = anchor.y() - textRenderer.lineHeight / 2.0;
             if (!fitsClip(
-                left, top, textWidth, textRenderer.fontHeight,
+                left, top, textWidth, textRenderer.lineHeight,
                 clipX, clipY, clipWidth, clipHeight, clipShape
             )) {
                 continue;
@@ -108,12 +108,8 @@ public final class AnnotationRenderer {
             && insideCircle(x + width, y + height, centerX, centerY, radius);
     }
 
-    private static int textWidth(final TextRenderer renderer, final String text) {
-        //#if MC>=260100
-        //$$ return renderer.width(text);
-        //#else
-        return renderer.getWidth(text);
-        //#endif
+    private static int textWidth(final Font renderer, final String text) {
+        return renderer.width(text);
     }
 
     private static boolean insideCircle(
@@ -127,7 +123,7 @@ public final class AnnotationRenderer {
     }
 
     private static void drawGeometry(
-        final MatrixStack matrices,
+        final PoseStack matrices,
         final AnnotationGeometry geometry,
         final AnnotationProjection projection,
         final float width,
@@ -166,7 +162,7 @@ public final class AnnotationRenderer {
     }
 
     private static void stroke(
-        final MatrixStack matrices,
+        final PoseStack matrices,
         final AnnotationProjection.ScreenPoint start,
         final AnnotationProjection.ScreenPoint end,
         final float width,

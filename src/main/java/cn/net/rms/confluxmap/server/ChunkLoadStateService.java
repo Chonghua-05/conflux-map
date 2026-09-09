@@ -10,9 +10,9 @@ import java.util.Map;
 import java.util.UUID;
 import java.util.function.Consumer;
 import net.minecraft.server.MinecraftServer;
-import net.minecraft.server.world.ServerWorld;
-import net.minecraft.util.math.ChunkPos;
-import net.minecraft.world.chunk.WorldChunk;
+import net.minecraft.server.level.ServerLevel;
+import net.minecraft.world.level.ChunkPos;
+import net.minecraft.world.level.chunk.LevelChunk;
 
 /** Tracks loaded chunks, refreshes their effective levels, and drains bounded client deltas. */
 public final class ChunkLoadStateService {
@@ -24,10 +24,10 @@ public final class ChunkLoadStateService {
     private final LinkedHashSet<LoadedKey> levelCheckQueue = new LinkedHashSet<>();
     private final Map<UUID, Consumer<LoadStateDeltaS2C>> subscribers = new LinkedHashMap<>();
 
-    private record LoadedKey(ServerWorld world, int chunkX, int chunkZ) {
+    private record LoadedKey(ServerLevel world, int chunkX, int chunkZ) {
     }
 
-    public void onChunkLoad(final ServerWorld world, final WorldChunk chunk) {
+    public void onChunkLoad(final ServerLevel world, final LevelChunk chunk) {
         final ChunkPos pos = chunk.getPos();
         final LoadedKey key = new LoadedKey(world, chunkX(pos), chunkZ(pos));
         loadedChunks.put(key, pos);
@@ -35,7 +35,7 @@ public final class ChunkLoadStateService {
         refresh(key, pos);
     }
 
-    public void onChunkUnload(final ServerWorld world, final WorldChunk chunk) {
+    public void onChunkUnload(final ServerLevel world, final LevelChunk chunk) {
         final ChunkPos pos = chunk.getPos();
         final LoadedKey key = new LoadedKey(world, chunkX(pos), chunkZ(pos));
         loadedChunks.remove(key);
@@ -126,12 +126,12 @@ public final class ChunkLoadStateService {
         );
     }
 
-    private static ServerWorld worldAt(final MinecraftServer server, final int targetIndex) {
+    private static ServerLevel worldAt(final MinecraftServer server, final int targetIndex) {
         if (targetIndex < 0) {
             return null;
         }
         int index = 0;
-        for (final ServerWorld world : server.getWorlds()) {
+        for (final ServerLevel world : server.getAllLevels()) {
             if (index++ == targetIndex) {
                 return world;
             }
@@ -139,9 +139,9 @@ public final class ChunkLoadStateService {
         return null;
     }
 
-    private static int worldIndex(final MinecraftServer server, final ServerWorld target) {
+    private static int worldIndex(final MinecraftServer server, final ServerLevel target) {
         int index = 0;
-        for (final ServerWorld world : server.getWorlds()) {
+        for (final ServerLevel world : server.getAllLevels()) {
             if (world == target) {
                 return index;
             }
@@ -151,18 +151,10 @@ public final class ChunkLoadStateService {
     }
 
     private static int chunkX(final ChunkPos pos) {
-        //#if MC>=260100
-        //$$ return pos.x();
-        //#else
-        return pos.x;
-        //#endif
+        return pos.x();
     }
 
     private static int chunkZ(final ChunkPos pos) {
-        //#if MC>=260100
-        //$$ return pos.z();
-        //#else
-        return pos.z;
-        //#endif
+        return pos.z();
     }
 }

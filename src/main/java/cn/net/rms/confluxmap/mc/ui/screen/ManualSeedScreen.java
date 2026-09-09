@@ -12,12 +12,12 @@ import cn.net.rms.confluxmap.mc.predict.ManualSeedService;
 import cn.net.rms.confluxmap.mc.ui.GuiDraw;
 import cn.net.rms.confluxmap.nativepredict.McVersions;
 import java.util.List;
-import net.minecraft.client.MinecraftClient;
-import net.minecraft.client.gui.screen.Screen;
-import net.minecraft.client.gui.widget.ButtonWidget;
-import net.minecraft.client.gui.widget.TextFieldWidget;
-import net.minecraft.text.OrderedText;
-import net.minecraft.text.StringVisitable;
+import net.minecraft.client.Minecraft;
+import net.minecraft.client.gui.screens.Screen;
+import net.minecraft.client.gui.components.Button;
+import net.minecraft.client.gui.components.EditBox;
+import net.minecraft.util.FormattedCharSequence;
+import net.minecraft.network.chat.FormattedText;
 
 /** Focused seed-and-version form for the current client-only multiplayer world. */
 public final class ManualSeedScreen extends ConfluxScreen {
@@ -29,10 +29,10 @@ public final class ManualSeedScreen extends ConfluxScreen {
     private final ManualSeedService manualSeeds;
     private final WorldIdentity boundWorld;
     private final List<McVersions.Selection> versions = McVersions.selections();
-    private TextFieldWidget seedField;
-    private ButtonWidget versionButton;
-    private ButtonWidget applyButton;
-    private ButtonWidget clearButton;
+    private EditBox seedField;
+    private Button versionButton;
+    private Button applyButton;
+    private Button clearButton;
     private int versionIndex;
     private String errorKey;
 
@@ -57,8 +57,8 @@ public final class ManualSeedScreen extends ConfluxScreen {
     protected void init() {
         final int formWidth = Math.min(280, width - 24);
         final int left = width / 2 - formWidth / 2;
-        seedField = new TextFieldWidget(
-            this.textRenderer,
+        seedField = new EditBox(
+            this.font,
             left,
             76,
             formWidth,
@@ -66,15 +66,15 @@ public final class ManualSeedScreen extends ConfluxScreen {
             Texts.translatable("confluxmap.screen.manual_seed.seed")
         );
         seedField.setMaxLength(128);
-        seedField.setText(manualSeeds.current().map(ManualSeedConfig.Entry::seedInput).orElse(""));
-        addDrawableChild(seedField);
+        seedField.setValue(manualSeeds.current().map(ManualSeedConfig.Entry::seedInput).orElse(""));
+        addRenderableWidget(seedField);
         setInitialFocus(seedField);
 
         final int arrowWidth = 24;
-        addDrawableChild(Widgets.button(
+        addRenderableWidget(Widgets.button(
             left, 116, arrowWidth, FIELD_HEIGHT, Texts.literal("<"), ignored -> selectVersion(-1)
         ));
-        versionButton = addDrawableChild(Widgets.button(
+        versionButton = addRenderableWidget(Widgets.button(
             left + arrowWidth + 4,
             116,
             formWidth - arrowWidth * 2 - 8,
@@ -82,7 +82,7 @@ public final class ManualSeedScreen extends ConfluxScreen {
             versionLabel(),
             ignored -> selectVersion(1)
         ));
-        addDrawableChild(Widgets.button(
+        addRenderableWidget(Widgets.button(
             left + formWidth - arrowWidth,
             116,
             arrowWidth,
@@ -94,7 +94,7 @@ public final class ManualSeedScreen extends ConfluxScreen {
         final int buttonGap = 4;
         final int buttonWidth = (formWidth - buttonGap * 2) / 3;
         final int buttonY = height - 32;
-        applyButton = addDrawableChild(Widgets.button(
+        applyButton = addRenderableWidget(Widgets.button(
             left,
             buttonY,
             buttonWidth,
@@ -102,7 +102,7 @@ public final class ManualSeedScreen extends ConfluxScreen {
             Texts.translatable("confluxmap.screen.manual_seed.apply"),
             ignored -> apply()
         ));
-        clearButton = addDrawableChild(Widgets.button(
+        clearButton = addRenderableWidget(Widgets.button(
             left + buttonWidth + buttonGap,
             buttonY,
             buttonWidth,
@@ -110,7 +110,7 @@ public final class ManualSeedScreen extends ConfluxScreen {
             Texts.translatable("confluxmap.screen.manual_seed.clear"),
             ignored -> clear()
         ));
-        addDrawableChild(Widgets.button(
+        addRenderableWidget(Widgets.button(
             left + (buttonWidth + buttonGap) * 2,
             buttonY,
             buttonWidth,
@@ -133,7 +133,7 @@ public final class ManualSeedScreen extends ConfluxScreen {
         versionButton.setMessage(versionLabel());
     }
 
-    private net.minecraft.text.Text versionLabel() {
+    private net.minecraft.network.chat.Component versionLabel() {
         return Texts.translatable(
             "confluxmap.screen.manual_seed.version_value", versions.get(versionIndex).label()
         );
@@ -142,7 +142,7 @@ public final class ManualSeedScreen extends ConfluxScreen {
     private void refreshButtons() {
         final boolean available = manualSeeds.available()
             && ConfluxMapClient.get().sessionGuard().current().world().equals(boundWorld);
-        applyButton.active = available && SeedInput.parse(seedField.getText()).isPresent();
+        applyButton.active = available && SeedInput.parse(seedField.getValue()).isPresent();
         clearButton.active = available && manualSeeds.current().isPresent();
         if (!available) {
             errorKey = "confluxmap.screen.manual_seed.session_changed";
@@ -154,7 +154,7 @@ public final class ManualSeedScreen extends ConfluxScreen {
             return;
         }
         final McVersions.Selection selected = versions.get(versionIndex);
-        if (!manualSeeds.apply(boundWorld, seedField.getText(), selected.worldgenVersion())) {
+        if (!manualSeeds.apply(boundWorld, seedField.getValue(), selected.worldgenVersion())) {
             errorKey = "confluxmap.screen.manual_seed.session_changed";
             refreshButtons();
             return;
@@ -176,7 +176,7 @@ public final class ManualSeedScreen extends ConfluxScreen {
 
     @Override
     public void onClose() {
-        MinecraftAccess.setScreen(MinecraftClient.getInstance(), parent);
+        MinecraftAccess.setScreen(Minecraft.getInstance(), parent);
     }
 
     @Override
@@ -224,25 +224,25 @@ public final class ManualSeedScreen extends ConfluxScreen {
         final int color
     ) {
         int y = startY;
-        for (final OrderedText line : this.textRenderer.wrapLines(
-            StringVisitable.plain(value), Math.max(40, Math.min(280, width - 24))
+        for (final FormattedCharSequence line : this.font.split(
+            FormattedText.of(value), Math.max(40, Math.min(280, width - 24))
         )) {
             draw.drawTextWithShadow(
-                this.textRenderer,
+                this.font,
                 line,
-                width / 2f - this.textRenderer.getWidth(line) / 2f,
+                width / 2f - this.font.width(line) / 2f,
                 y,
                 color
             );
-            y += this.textRenderer.fontHeight + 1;
+            y += this.font.lineHeight + 1;
         }
     }
 
     private void drawCentered(final GuiDraw draw, final String value, final int y, final int color) {
         draw.drawTextWithShadow(
-            this.textRenderer,
+            this.font,
             value,
-            width / 2f - this.textRenderer.getWidth(value) / 2f,
+            width / 2f - this.font.width(value) / 2f,
             y,
             color
         );

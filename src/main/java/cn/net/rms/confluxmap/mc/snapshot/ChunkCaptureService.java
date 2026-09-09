@@ -32,10 +32,10 @@ import java.util.List;
 import java.util.Map;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.function.IntSupplier;
-import net.fabricmc.fabric.api.client.event.lifecycle.v1.ClientTickEvents;
-import net.minecraft.client.MinecraftClient;
-import net.minecraft.client.network.ClientPlayerEntity;
-import net.minecraft.client.world.ClientWorld;
+import cn.net.rms.confluxmap.neoforge.compat.ClientTickEvents;
+import net.minecraft.client.Minecraft;
+import net.minecraft.client.player.LocalPlayer;
+import net.minecraft.client.multiplayer.ClientLevel;
 
 /**
  * Drives the capture pipeline: packet hooks mark chunks dirty (via
@@ -53,7 +53,7 @@ public final class ChunkCaptureService {
     private static final int LOG_INTERVAL_TICKS = 100;
     private static final long FLOOR_FINISH_BUDGET_NANOS = 2_000_000L;
 
-    private final MinecraftClient client;
+    private final Minecraft client;
     private final GameBridge gameBridge;
     private final ConfluxConfig config;
     private final MapWorldService worlds;
@@ -77,7 +77,7 @@ public final class ChunkCaptureService {
     private MapLayer workerLayer;
 
     public ChunkCaptureService(
-        final MinecraftClient client,
+        final Minecraft client,
         final GameBridge gameBridge,
         final ConfluxConfig config,
         final MapWorldService worlds,
@@ -152,9 +152,9 @@ public final class ChunkCaptureService {
         final int blockX, final int y, final int blockZ, final int stateId
     ) {
         markCaptureDirty(blockX >> 4, blockZ >> 4);
-        final ClientWorld world = client.world;
+        final ClientLevel world = client.level;
         if (world != null) {
-            terrainWorker.submitDelta(world.getTime(), blockX, y, blockZ, stateId);
+            terrainWorker.submitDelta(world.getGameTime(), blockX, y, blockZ, stateId);
         }
     }
 
@@ -250,7 +250,7 @@ public final class ChunkCaptureService {
     }
 
     private boolean isChunkLoaded(final int chunkX, final int chunkZ) {
-        final ClientWorld world = client.world;
+        final ClientLevel world = client.level;
         return world != null && ChunkTintSampler.loaded(world, chunkX, chunkZ);
     }
 
@@ -268,13 +268,13 @@ public final class ChunkCaptureService {
      * any candidate profile before recognition succeeds.
      */
     public List<ChunkSnapshot> probeNearest(final MapLayer layer, final int limit) {
-        final ClientPlayerEntity player = client.player;
-        if (player == null || client.world == null || limit <= 0) {
+        final LocalPlayer player = client.player;
+        if (player == null || client.level == null || limit <= 0) {
             return List.of();
         }
-        final int centerX = player.getBlockPos().getX() >> 4;
-        final int centerZ = player.getBlockPos().getZ() >> 4;
-        final int pivotY = layer.type() == MapLayer.Type.NETHER_CEILING ? client.world.getTopY() - 1 : 0;
+        final int centerX = player.blockPosition().getX() >> 4;
+        final int centerZ = player.blockPosition().getZ() >> 4;
+        final int pivotY = layer.type() == MapLayer.Type.NETHER_CEILING ? client.level.getMaxY() - 1 : 0;
         final int radiusLimit = captureViewDistance() + 1;
         final List<ChunkSnapshot> snapshots = new ArrayList<>(limit);
         for (int radius = 0; radius <= radiusLimit && snapshots.size() < limit; radius++) {
@@ -307,14 +307,14 @@ public final class ChunkCaptureService {
 
     private void tick() {
         final MapWorld world = worlds.current();
-        final ClientPlayerEntity player = client.player;
+        final LocalPlayer player = client.player;
         final PlayerView viewpoint = gameBridge.viewpoint().orElse(null);
         if (world == null || player == null || viewpoint == null) {
             return;
         }
         final long token = world.session().token();
-        final int playerChunkX = player.getBlockPos().getX() >> 4;
-        final int playerChunkZ = player.getBlockPos().getZ() >> 4;
+        final int playerChunkX = player.blockPosition().getX() >> 4;
+        final int playerChunkZ = player.blockPosition().getZ() >> 4;
         final int viewpointChunkX = viewpoint.blockX() >> 4;
         final int viewpointChunkZ = viewpoint.blockZ() >> 4;
         final ChunkViewport nextCaptureViewport = ChunkViewport.centered(
@@ -349,7 +349,7 @@ public final class ChunkCaptureService {
 
         terrainWorker.resolveMaterialRequests();
 
-        final int worldTopY = client.world.getTopY();
+        final int worldTopY = client.level.getMaxY();
         final List<LayerSelector.Decision> backgroundPlan = capturePlan(decision, worldTopY);
         final int backgroundChunkBudget = Math.max(
             1, config.snapshotBudgetPerTick / backgroundPlan.size()
@@ -542,7 +542,7 @@ public final class ChunkCaptureService {
     /**
      * Limits visible capture work to the server send-distance square plus its loaded guard ring.
      * At the largest minimap size/zoom the screen can cover thousands of chunks, while only this
-     * intersection can exist in {@link ClientWorld}; queueing the rest makes every tick sort
+     * intersection can exist in {@link ClientLevel}; queueing the rest makes every tick sort
      * coordinates that the snapshot factory can only reject.
      */
     static ChunkViewport visibleCaptureViewport(

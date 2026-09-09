@@ -36,7 +36,7 @@ import java.util.function.LongSupplier;
 
 /** Client-side viewport debounce, request planning, and correction application. */
 public final class MapSyncClient {
-    /** Narrow send seam so the sync loop is testable without a live Fabric channel. */
+    /** Narrow send seam so the sync loop is testable without a live network channel. */
     @FunctionalInterface
     interface Sender {
         int send(cn.net.rms.confluxmap.core.net.Message message);

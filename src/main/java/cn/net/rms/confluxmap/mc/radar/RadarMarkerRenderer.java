@@ -12,16 +12,12 @@ import cn.net.rms.confluxmap.mc.ui.WaypointMarkerRenderer;
 import java.util.List;
 import java.util.UUID;
 import java.util.function.Predicate;
-import net.minecraft.client.MinecraftClient;
-import net.minecraft.client.util.math.MatrixStack;
-import net.minecraft.entity.Entity;
-import net.minecraft.entity.FlyingItemEntity;
-import net.minecraft.entity.ItemEntity;
-//#if MC<12100
-import net.minecraft.entity.vehicle.AbstractMinecartEntity;
-import net.minecraft.item.Items;
-//#endif
-import net.minecraft.item.ItemStack;
+import net.minecraft.client.Minecraft;
+import com.mojang.blaze3d.vertex.PoseStack;
+import net.minecraft.world.entity.Entity;
+import net.minecraft.world.entity.projectile.ItemSupplier;
+import net.minecraft.world.entity.item.ItemEntity;
+import net.minecraft.world.item.ItemStack;
 
 /**
  * Draws already-projected radar markers (entity head/item icon or diamond fallback,
@@ -106,7 +102,7 @@ public final class RadarMarkerRenderer {
      */
     public static void drawAll(
         final GuiDraw draw,
-        final MinecraftClient client,
+        final Minecraft client,
         final ConfluxConfig config,
         final EntityIconManager iconManager,
         final List<Marker> markers,
@@ -118,7 +114,7 @@ public final class RadarMarkerRenderer {
     /** Draws one player skin crop for HUD surfaces that do not have a loaded player entity. */
     public static boolean drawPlayerPortrait(
         final GuiDraw draw,
-        final MinecraftClient client,
+        final Minecraft client,
         final EntityIconManager iconManager,
         final UUID playerId,
         final float x,
@@ -149,7 +145,7 @@ public final class RadarMarkerRenderer {
     /** Draws radar markers while allowing a screen to suppress markers covered by a modal overlay. */
     public static void drawAll(
         final GuiDraw draw,
-        final MinecraftClient client,
+        final Minecraft client,
         final ConfluxConfig config,
         final EntityIconManager iconManager,
         final List<Marker> markers,
@@ -165,7 +161,7 @@ public final class RadarMarkerRenderer {
 
     private static void drawMarker(
         final GuiDraw draw,
-        final MinecraftClient client,
+        final Minecraft client,
         final ConfluxConfig config,
         final EntityIconManager iconManager,
         final Marker marker,
@@ -176,7 +172,7 @@ public final class RadarMarkerRenderer {
         final float y = marker.y();
         final int yDelta = marker.yDelta();
         final Entity live = marker.live();
-        final MatrixStack matrices = draw.matrices();
+        final PoseStack matrices = draw.matrices();
         final float alphaScale = marker.ghost()
             ? 0.5f : entry.spectator() ? SPECTATOR_ALPHA : 1f;
         if (usesDetailedIcon(entry.category(), presentation)) {
@@ -235,37 +231,15 @@ public final class RadarMarkerRenderer {
 
     private static ItemStack itemIconFor(final Entity entity) {
         if (entity instanceof ItemEntity) {
-            return ((ItemEntity) entity).getStack();
+            return ((ItemEntity) entity).getItem();
         }
-        if (entity instanceof FlyingItemEntity) {
-            return ((FlyingItemEntity) entity).getStack();
+        if (entity instanceof ItemSupplier) {
+            return ((ItemSupplier) entity).getItem();
         }
-        final ItemStack picked = entity.getPickBlockStack();
+        final ItemStack picked = entity.getPickResult();
         if (picked != null && !picked.isEmpty()) {
             return picked;
         }
-        //#if MC<12100
-        // Vanilla 1.17.1 implements pick-block for boats but not minecarts. Later versions expose
-        // the correct stack directly from every minecart subclass.
-        if (entity instanceof AbstractMinecartEntity) {
-            switch (((AbstractMinecartEntity) entity).getMinecartType()) {
-                case RIDEABLE:
-                    return new ItemStack(Items.MINECART);
-                case CHEST:
-                    return new ItemStack(Items.CHEST_MINECART);
-                case FURNACE:
-                    return new ItemStack(Items.FURNACE_MINECART);
-                case TNT:
-                    return new ItemStack(Items.TNT_MINECART);
-                case HOPPER:
-                    return new ItemStack(Items.HOPPER_MINECART);
-                case COMMAND_BLOCK:
-                    return new ItemStack(Items.COMMAND_BLOCK_MINECART);
-                default:
-                    break;
-            }
-        }
-        //#endif
         return ItemStack.EMPTY;
     }
 
@@ -275,8 +249,8 @@ public final class RadarMarkerRenderer {
      * @return false when the portrait could not be bound, so the caller still draws its dot
      */
     private static boolean drawIcon(
-        final MatrixStack matrices,
-        final MinecraftClient client,
+        final PoseStack matrices,
+        final Minecraft client,
         final EntityIconManager iconManager,
         final EntityIconManager.FaceIcon icon,
         final float x,
@@ -327,7 +301,7 @@ public final class RadarMarkerRenderer {
     }
 
     private static void drawIconOutline(
-        final MatrixStack matrices,
+        final PoseStack matrices,
         final EntityIconManager.FaceIcon icon,
         final float x,
         final float y,
@@ -348,7 +322,7 @@ public final class RadarMarkerRenderer {
     }
 
     private static void drawHighlightFrame(
-        final MatrixStack matrices,
+        final PoseStack matrices,
         final float x,
         final float y,
         final float iconWidth,
@@ -372,7 +346,7 @@ public final class RadarMarkerRenderer {
 
     private static void drawDestinationIcon(
         final GuiDraw draw,
-        final MinecraftClient client,
+        final Minecraft client,
         final ConfluxConfig config,
         final Marker marker
     ) {
@@ -427,16 +401,16 @@ public final class RadarMarkerRenderer {
     }
 
     private static void drawCenteredLine(
-        final MinecraftClient client,
+        final Minecraft client,
         final GuiDraw draw,
         final String text,
         final float centerX,
         final float y,
         final float alphaScale
     ) {
-        final int width = client.textRenderer.getWidth(text);
+        final int width = client.font.width(text);
         draw.drawTextWithShadow(
-            client.textRenderer, text, centerX - width / 2f, y, Argb.scaleAlpha(TEXT_COLOR, alphaScale)
+            client.font, text, centerX - width / 2f, y, Argb.scaleAlpha(TEXT_COLOR, alphaScale)
         );
     }
 }

@@ -5,54 +5,43 @@ import cn.net.rms.confluxmap.compat.Texts;
 import java.util.IdentityHashMap;
 import java.util.Map;
 import java.util.function.BooleanSupplier;
-//#if MC>=12000
-//$$ import net.minecraft.client.gui.DrawContext;
-//#else
-import net.minecraft.client.util.math.MatrixStack;
-//#endif
-//#if MC>=12109
-//$$ import net.minecraft.client.input.KeyInput;
-//#endif
-import net.minecraft.client.gui.screen.Screen;
-import net.minecraft.client.gui.widget.ClickableWidget;
-import net.minecraft.text.Text;
+import net.minecraft.client.gui.GuiGraphicsExtractor;
+import net.minecraft.client.input.KeyEvent;
+import net.minecraft.client.gui.screens.Screen;
+import net.minecraft.client.gui.components.AbstractWidget;
+import net.minecraft.network.chat.Component;
 import org.lwjgl.glfw.GLFW;
 
 /** Screen base that keeps the MatrixStack-to-DrawContext rewrite at one lifecycle seam. */
 public abstract class ConfluxScreen extends Screen {
-    private final Map<ClickableWidget, String> disabledTooltipKeys = new IdentityHashMap<>();
+    private final Map<AbstractWidget, String> disabledTooltipKeys = new IdentityHashMap<>();
     private final HotkeyFocusDelay initialFocusDelay = new HotkeyFocusDelay();
     private Runnable enterAction;
     private BooleanSupplier enterActionEnabled = () -> false;
-    private ClickableWidget deferredInitialFocus;
-    //#if MC>=12000
-    //$$ /**
-    //$$  * Screen.render owns the widget loop, but its implicit background must not cover
-    //$$  * renderContents. Only 1.21.5 and older reach that path: 1.21.6 moved the background
-    //$$  * call up into Screen.renderWithTooltip, which already runs before renderContents.
-    //$$  */
-    //$$ private boolean renderingVanillaWidgets;
-    //#endif
+    private AbstractWidget deferredInitialFocus;
+    /**
+     * Screen.render owns the widget loop, but its implicit background must not cover
+     * renderContents. Only 1.21.5 and older reach that path: 1.21.6 moved the background
+     * call up into Screen.renderWithTooltip, which already runs before renderContents.
+     */
+    private boolean renderingVanillaWidgets;
 
-    protected ConfluxScreen(final Text title) {
+    protected ConfluxScreen(final Component title) {
         super(title);
     }
 
     /** Leaves a new text field unfocused until the opening key's character event has drained. */
-    protected final void deferInitialFocusUntilNextTick(final ClickableWidget widget) {
+    protected final void deferInitialFocusUntilNextTick(final AbstractWidget widget) {
         deferredInitialFocus = widget;
         initialFocusDelay.defer();
         setFocused(null);
     }
-
-    //#if MC>=12109
-    //$$ @Override
-    //$$ protected void setInitialFocus() {
-    //$$     if (initialFocusDelay.shouldFocus()) {
-    //$$         super.setInitialFocus();
-    //$$     }
-    //$$ }
-    //#endif
+    @Override
+    protected void setInitialFocus() {
+        if (initialFocusDelay.shouldFocus()) {
+            super.setInitialFocus();
+        }
+    }
 
     @Override
     public void tick() {
@@ -62,123 +51,52 @@ public abstract class ConfluxScreen extends Screen {
         }
         initialFocusDelay.advanceTick();
         if (initialFocusDelay.shouldFocus()) {
-            final ClickableWidget widget = deferredInitialFocus;
+            final AbstractWidget widget = deferredInitialFocus;
             deferredInitialFocus = null;
             setInitialFocus(widget);
         }
     }
-
-    //#if MC>=260100
-    //$$ @Override
-    //$$ public final void extractRenderState(
-    //$$     final GuiGraphicsExtractor context,
-    //$$     final int mouseX,
-    //$$     final int mouseY,
-    //$$     final float tickDelta
-    //$$ ) {
-    //$$     final GuiDraw draw = GuiDraw.of(context);
-    //$$     renderContents(draw, mouseX, mouseY, tickDelta);
-    //$$     // 26.1 renamed the retained-mode entry points but kept the ordering: the background is
-    //$$     // extracted before the widget list is walked.
-    //$$     renderingVanillaWidgets = true;
-    //$$     try {
-    //$$         super.extractRenderState(context, mouseX, mouseY, tickDelta);
-    //$$     } finally {
-    //$$         renderingVanillaWidgets = false;
-    //$$     }
-    //$$     renderAfterWidgets(draw, mouseX, mouseY, tickDelta);
-    //$$     renderDisabledTooltip(draw, mouseX, mouseY);
-    //$$ }
-    //$$
-    //$$ @Override
-    //$$ public final void extractBackground(
-    //$$     final GuiGraphicsExtractor context,
-    //$$     final int mouseX,
-    //$$     final int mouseY,
-    //$$     final float tickDelta
-    //$$ ) {
-    //$$     if (!renderingVanillaWidgets) {
-    //$$         renderVanillaBackground(context, mouseX, mouseY, tickDelta);
-    //$$     }
-    //$$ }
-    //$$
-    //$$ protected void renderVanillaBackground(
-    //$$     final GuiGraphicsExtractor context,
-    //$$     final int mouseX,
-    //$$     final int mouseY,
-    //$$     final float tickDelta
-    //$$ ) {
-    //$$     super.extractBackground(context, mouseX, mouseY, tickDelta);
-    //$$ }
-    //#elseif MC>=12000
-    //$$ @Override
-    //$$ public final void render(
-    //$$     final DrawContext context,
-    //$$     final int mouseX,
-    //$$     final int mouseY,
-    //$$     final float tickDelta
-    //$$ ) {
-    //$$     final GuiDraw draw = GuiDraw.of(context);
-    //$$     renderContents(draw, mouseX, mouseY, tickDelta);
-    //$$     // Modern Screen.render invokes renderBackground before iterating its private widget list.
-    //$$     renderingVanillaWidgets = true;
-    //$$     try {
-    //$$         super.render(context, mouseX, mouseY, tickDelta);
-    //$$     } finally {
-    //$$         renderingVanillaWidgets = false;
-    //$$     }
-    //$$     renderAfterWidgets(draw, mouseX, mouseY, tickDelta);
-    //$$     renderDisabledTooltip(draw, mouseX, mouseY);
-    //$$ }
-    //$$
-    //#if MC>=12002
-    //$$ @Override
-    //$$ public final void renderBackground(
-    //$$     final DrawContext context,
-    //$$     final int mouseX,
-    //$$     final int mouseY,
-    //$$     final float tickDelta
-    //$$ ) {
-    //$$     if (!renderingVanillaWidgets) {
-    //$$         renderVanillaBackground(context, mouseX, mouseY, tickDelta);
-    //$$     }
-    //$$ }
-    //$$
-    //$$ protected void renderVanillaBackground(
-    //$$     final DrawContext context,
-    //$$     final int mouseX,
-    //$$     final int mouseY,
-    //$$     final float tickDelta
-    //$$ ) {
-    //$$     super.renderBackground(context, mouseX, mouseY, tickDelta);
-    //$$ }
-    //#else
-    //$$ @Override
-    //$$ public final void renderBackground(final DrawContext context) {
-    //$$     if (!renderingVanillaWidgets) {
-    //$$         renderVanillaBackground(context);
-    //$$     }
-    //$$ }
-    //$$
-    //$$ protected void renderVanillaBackground(final DrawContext context) {
-    //$$     super.renderBackground(context);
-    //$$ }
-    //#endif
-    //#else
     @Override
-    public final void render(
-        final MatrixStack matrices,
+    public final void extractRenderState(
+        final GuiGraphicsExtractor context,
         final int mouseX,
         final int mouseY,
         final float tickDelta
     ) {
-        final GuiDraw draw = GuiDraw.of(matrices);
+        final GuiDraw draw = GuiDraw.of(context);
         renderContents(draw, mouseX, mouseY, tickDelta);
-        super.render(matrices, mouseX, mouseY, tickDelta);
+        // 26.1 renamed the retained-mode entry points but kept the ordering: the background is
+        // extracted before the widget list is walked.
+        renderingVanillaWidgets = true;
+        try {
+            super.extractRenderState(context, mouseX, mouseY, tickDelta);
+        } finally {
+            renderingVanillaWidgets = false;
+        }
         renderAfterWidgets(draw, mouseX, mouseY, tickDelta);
         renderDisabledTooltip(draw, mouseX, mouseY);
     }
-    //#endif
+
+    @Override
+    public final void extractBackground(
+        final GuiGraphicsExtractor context,
+        final int mouseX,
+        final int mouseY,
+        final float tickDelta
+    ) {
+        if (!renderingVanillaWidgets) {
+            renderVanillaBackground(context, mouseX, mouseY, tickDelta);
+        }
+    }
+
+    protected void renderVanillaBackground(
+        final GuiGraphicsExtractor context,
+        final int mouseX,
+        final int mouseY,
+        final float tickDelta
+    ) {
+        super.extractBackground(context, mouseX, mouseY, tickDelta);
+    }
 
     protected abstract void renderContents(GuiDraw draw, int mouseX, int mouseY, float tickDelta);
 
@@ -198,22 +116,14 @@ public abstract class ConfluxScreen extends Screen {
     }
 
     @Override
-    //#if MC>=12109
-    //$$ public boolean keyPressed(final KeyInput input) {
-    //$$     final int keyCode = input.key();
-    //#else
-    public boolean keyPressed(final int keyCode, final int scanCode, final int modifiers) {
-    //#endif
+    public boolean keyPressed(final KeyEvent input) {
+        final int keyCode = input.key();
         if ((keyCode == GLFW.GLFW_KEY_ENTER || keyCode == GLFW.GLFW_KEY_KP_ENTER)
             && enterAction != null && enterActionEnabled.getAsBoolean()) {
             enterAction.run();
             return true;
         }
-        //#if MC>=12109
-        //$$ return super.keyPressed(input);
-        //#else
-        return super.keyPressed(keyCode, scanCode, modifiers);
-        //#endif
+        return super.keyPressed(input);
     }
 
     protected void renderAfterWidgets(
@@ -246,7 +156,7 @@ public abstract class ConfluxScreen extends Screen {
     }
 
     /** Associates one inactive control with the translated reason it cannot be used. */
-    protected final void setDisabledTooltip(final ClickableWidget widget, final String translationKey) {
+    protected final void setDisabledTooltip(final AbstractWidget widget, final String translationKey) {
         if (widget == null) {
             return;
         }
@@ -259,12 +169,12 @@ public abstract class ConfluxScreen extends Screen {
 
     private void renderDisabledTooltip(final GuiDraw draw, final int mouseX, final int mouseY) {
         disabledTooltipKeys.entrySet().removeIf(entry -> !children().contains(entry.getKey()));
-        for (final Map.Entry<ClickableWidget, String> entry : disabledTooltipKeys.entrySet()) {
-            final ClickableWidget widget = entry.getKey();
-            if (widget.visible && !widget.active && widget.isHovered()) {
+        for (final Map.Entry<AbstractWidget, String> entry : disabledTooltipKeys.entrySet()) {
+            final AbstractWidget widget = entry.getKey();
+            if (widget.visible && !widget.active && widget.isHoveredOrFocused()) {
                 draw.drawTooltip(
                     this,
-                    this.textRenderer,
+                    this.font,
                     Texts.translatable(entry.getValue()),
                     mouseX,
                     mouseY

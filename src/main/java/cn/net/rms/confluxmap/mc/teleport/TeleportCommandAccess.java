@@ -7,7 +7,7 @@ import cn.net.rms.confluxmap.core.model.WorldIdentity;
 import cn.net.rms.confluxmap.core.task.SessionGuard;
 import java.util.List;
 import java.util.function.Predicate;
-import net.minecraft.client.MinecraftClient;
+import net.minecraft.client.Minecraft;
 
 /** Evaluates whether the configured teleport command can reach one map target. */
 public final class TeleportCommandAccess {
@@ -21,7 +21,7 @@ public final class TeleportCommandAccess {
     }
 
     public static Result evaluate(
-        final MinecraftClient client,
+        final Minecraft client,
         final String template,
         final SessionGuard.Session live,
         final WorldIdentity targetWorld,

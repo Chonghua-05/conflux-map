@@ -5,8 +5,8 @@ import cn.net.rms.confluxmap.core.predict.StructureIndex;
 import cn.net.rms.confluxmap.mc.render.RenderUtil;
 import java.util.EnumMap;
 import java.util.Map;
-import net.minecraft.client.MinecraftClient;
-import net.minecraft.util.Identifier;
+import net.minecraft.client.Minecraft;
+import net.minecraft.resources.Identifier;
 
 /** Vanilla runtime textures used as recognizable structure icons without bundling copied assets. */
 public final class StructureIconCatalog {
@@ -77,7 +77,7 @@ public final class StructureIconCatalog {
         final float size,
         final int tint
     ) {
-        RenderUtil.bindTexture(MinecraftClient.getInstance(), icon(type, variant));
+        RenderUtil.bindTexture(Minecraft.getInstance(), icon(type, variant));
         RenderUtil.drawTintedQuad(draw.matrices(), x, y, size, size, 0f, 0f, 1f, 1f, tint);
     }
 

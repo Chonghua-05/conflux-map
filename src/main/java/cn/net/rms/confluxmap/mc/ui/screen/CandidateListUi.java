@@ -2,7 +2,7 @@ package cn.net.rms.confluxmap.mc.ui.screen;
 
 import cn.net.rms.confluxmap.compat.Widgets;
 import cn.net.rms.confluxmap.mc.ui.GuiDraw;
-import net.minecraft.client.gui.widget.ButtonWidget;
+import net.minecraft.client.gui.components.Button;
 
 /** Shared two-line candidate list layout, controls, separators, and scrolling. */
 final class CandidateListUi {
@@ -104,8 +104,8 @@ final class CandidateListUi {
 
     void layoutButtons(
         final int index,
-        final ButtonWidget mapButton,
-        final ButtonWidget waypointButton
+        final Button mapButton,
+        final Button waypointButton
     ) {
         final boolean visible = isVisible(index);
         mapButton.visible = visible;

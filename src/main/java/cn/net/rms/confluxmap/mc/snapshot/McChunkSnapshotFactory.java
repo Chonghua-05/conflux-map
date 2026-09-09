@@ -9,28 +9,28 @@ import cn.net.rms.confluxmap.mc.color.BiomeTintResolver;
 import cn.net.rms.confluxmap.mc.color.SpriteColorSampler;
 import cn.net.rms.confluxmap.core.terrain.CaveChunkResult;
 import cn.net.rms.confluxmap.core.terrain.TerrainResult;
-import net.minecraft.block.Block;
-import net.minecraft.block.BlockState;
-import net.minecraft.block.Blocks;
-import net.minecraft.block.CarpetBlock;
-import net.minecraft.block.FlowerBlock;
-import net.minecraft.block.LeavesBlock;
-import net.minecraft.block.SnowBlock;
-import net.minecraft.block.TallFlowerBlock;
-import net.minecraft.block.TallPlantBlock;
-import net.minecraft.client.MinecraftClient;
-import net.minecraft.client.network.ClientPlayerEntity;
-import net.minecraft.client.world.ClientWorld;
-import net.minecraft.fluid.FluidState;
-import net.minecraft.state.property.Properties;
-import net.minecraft.tag.BlockTags;
-import net.minecraft.util.math.BlockPos;
-import net.minecraft.util.math.Direction;
-import net.minecraft.util.math.MathHelper;
-import net.minecraft.world.Heightmap;
-import net.minecraft.world.LightType;
-import net.minecraft.world.chunk.ChunkStatus;
-import net.minecraft.world.chunk.WorldChunk;
+import net.minecraft.world.level.block.Block;
+import net.minecraft.world.level.block.state.BlockState;
+import net.minecraft.world.level.block.Blocks;
+import net.minecraft.world.level.block.CarpetBlock;
+import net.minecraft.world.level.block.FlowerBlock;
+import net.minecraft.world.level.block.LeavesBlock;
+import net.minecraft.world.level.block.SnowLayerBlock;
+import net.minecraft.world.level.block.TallFlowerBlock;
+import net.minecraft.world.level.block.DoublePlantBlock;
+import net.minecraft.client.Minecraft;
+import net.minecraft.client.player.LocalPlayer;
+import net.minecraft.client.multiplayer.ClientLevel;
+import net.minecraft.world.level.material.FluidState;
+import net.minecraft.world.level.block.state.properties.BlockStateProperties;
+import net.minecraft.tags.BlockTags;
+import net.minecraft.core.BlockPos;
+import net.minecraft.core.Direction;
+import net.minecraft.util.Mth;
+import net.minecraft.world.level.levelgen.Heightmap;
+import net.minecraft.world.level.LightLayer;
+import net.minecraft.world.level.chunk.status.ChunkStatus;
+import net.minecraft.world.level.chunk.LevelChunk;
 
 /**
  * Builds immutable {@link ChunkSnapshot}s from live client chunks, per
@@ -46,12 +46,12 @@ public final class McChunkSnapshotFactory {
     /** cave-nether-layers.md §2.1: the upward branch's fixed search window above the pivot. */
     private static final int UPWARD_SCAN_CAP = 10;
 
-    private final MinecraftClient client;
+    private final Minecraft client;
     private final SpriteColorSampler sampler;
     private final ChunkTintSampler tints;
 
     public McChunkSnapshotFactory(
-        final MinecraftClient client,
+        final Minecraft client,
         final SpriteColorSampler sampler,
         final BiomeTintResolver tintResolver
     ) {
@@ -67,11 +67,11 @@ public final class McChunkSnapshotFactory {
      * for how callers derive it (debounced viewpoint Y, a slice's fixed Y, or the nether-roof pivot).
      */
     public ChunkSnapshot snapshot(final int chunkX, final int chunkZ, final MapLayer layer, final int pivotY, final long sessionToken) {
-        final ClientWorld world = client.world;
+        final ClientLevel world = client.level;
         if (world == null) {
             return null;
         }
-        final WorldChunk chunk = (WorldChunk) world.getChunkManager().getChunk(chunkX, chunkZ, ChunkStatus.FULL, false);
+        final LevelChunk chunk = (LevelChunk) world.getChunkSource().getChunk(chunkX, chunkZ, ChunkStatus.FULL, false);
         if (chunk == null) {
             return null;
         }
@@ -87,17 +87,17 @@ public final class McChunkSnapshotFactory {
         final byte[] kind = new byte[ChunkSnapshot.COLUMNS];
         final byte[] light = new byte[ChunkSnapshot.COLUMNS];
 
-        final BlockPos.Mutable pos = new BlockPos.Mutable();
+        final BlockPos.MutableBlockPos pos = new BlockPos.MutableBlockPos();
         final int baseX = chunkX << 4;
         final int baseZ = chunkZ << 4;
         tints.beginChunk(world, chunkX, chunkZ);
 
         if (layer.type() == MapLayer.Type.SURFACE || layer.type() == MapLayer.Type.END_SURFACE) {
-            final ClientPlayerEntity player = client.player;
-            final int playerY = player != null ? player.getBlockPos().getY() : world.getBottomY();
-            final Heightmap heightmap = chunk.getHeightmap(Heightmap.Type.MOTION_BLOCKING);
-            final int bottomY = world.getBottomY();
-            final int topY = world.getTopY();
+            final LocalPlayer player = client.player;
+            final int playerY = player != null ? player.blockPosition().getY() : world.getMinY();
+            final Heightmap heightmap = chunk.getOrCreateHeightmapUnprimed(Heightmap.Types.MOTION_BLOCKING);
+            final int bottomY = world.getMinY();
+            final int topY = world.getMaxY();
             for (int z = 0; z < 16; z++) {
                 for (int x = 0; x < 16; x++) {
                     sampleColumn(
@@ -110,8 +110,8 @@ public final class McChunkSnapshotFactory {
         } else {
             final boolean netherAmbient = isNetherLayer(layer.type());
             final boolean deferBlockLight = layer.type() == MapLayer.Type.NETHER_CEILING;
-            final int worldMinY = world.getBottomY();
-            final int worldMaxY = world.getTopY();
+            final int worldMinY = world.getMinY();
+            final int worldMaxY = world.getMaxY();
             for (int z = 0; z < 16; z++) {
                 for (int x = 0; x < 16; x++) {
                     sampleFloorColumn(
@@ -128,7 +128,7 @@ public final class McChunkSnapshotFactory {
             world, pos, baseX, baseZ, surfaceY, biomeId, tints.biomeIdentityWindow()
         );
         return new ChunkSnapshot(
-            chunkX, chunkZ, sessionToken, world.getTime(), surfaceY, biomeId, fluidDepth,
+            chunkX, chunkZ, sessionToken, world.getGameTime(), surfaceY, biomeId, fluidDepth,
             baseArgb, xaeroBaseArgb, tintArgb, overlayArgb, xaeroOverlayArgb, kind, light
         );
     }
@@ -141,12 +141,12 @@ public final class McChunkSnapshotFactory {
     public ChunkSnapshot finishFloorSelection(
         final TerrainResult envelope, final MapLayer layer, final long sessionToken
     ) {
-        final ClientWorld world = client.world;
+        final ClientLevel world = client.level;
         if (world == null || envelope.sessionToken() != sessionToken) {
             return null;
         }
         final CaveChunkResult selection = envelope.result();
-        final WorldChunk chunk = (WorldChunk) world.getChunkManager().getChunk(
+        final LevelChunk chunk = (LevelChunk) world.getChunkSource().getChunk(
             selection.chunkX(), selection.chunkZ(), ChunkStatus.FULL, false
         );
         if (chunk == null) {
@@ -165,10 +165,10 @@ public final class McChunkSnapshotFactory {
         final byte[] light = new byte[ChunkSnapshot.COLUMNS];
         java.util.Arrays.fill(tintArgb, 0xFFFFFFFF);
 
-        final BlockPos.Mutable pos = new BlockPos.Mutable();
+        final BlockPos.MutableBlockPos pos = new BlockPos.MutableBlockPos();
         final int baseX = selection.chunkX() << 4;
         final int baseZ = selection.chunkZ() << 4;
-        final int worldMaxY = world.getTopY();
+        final int worldMaxY = world.getMaxY();
         final boolean netherAmbient = isNetherLayer(layer.type());
         tints.beginChunk(world, selection.chunkX(), selection.chunkZ());
         for (int z = 0; z < 16; z++) {
@@ -187,7 +187,7 @@ public final class McChunkSnapshotFactory {
                 final int worldZ = baseZ + z;
                 pos.set(worldX, y, worldZ);
                 final BlockState rawFloor = chunk.getBlockState(pos);
-                if (Block.getRawIdFromState(rawFloor) != expectedFloor) {
+                if (Block.getId(rawFloor) != expectedFloor) {
                     return null;
                 }
                 final BlockState floor = collapse(rawFloor);
@@ -204,7 +204,7 @@ public final class McChunkSnapshotFactory {
                 if (expectedOverlay >= 0 && y + 1 < worldMaxY) {
                     pos.set(worldX, y + 1, worldZ);
                     final BlockState rawOverlay = chunk.getBlockState(pos);
-                    if (Block.getRawIdFromState(rawOverlay) != expectedOverlay) {
+                    if (Block.getId(rawOverlay) != expectedOverlay) {
                         return null;
                     }
                     final BlockState overlay = collapse(rawOverlay);
@@ -237,9 +237,9 @@ public final class McChunkSnapshotFactory {
     }
 
     private void sampleColumn(
-        final WorldChunk chunk,
-        final ClientWorld world,
-        final BlockPos.Mutable pos,
+        final LevelChunk chunk,
+        final ClientLevel world,
+        final BlockPos.MutableBlockPos pos,
         final int baseX,
         final int baseZ,
         final int localX,
@@ -262,7 +262,7 @@ public final class McChunkSnapshotFactory {
         final int worldX = baseX + localX;
         final int worldZ = baseZ + localZ;
 
-        int y = heightmap.get(localX, localZ) - 1;
+        int y = heightmap.getFirstAvailable(localX, localZ) - 1;
         if (y < bottomY) {
             writeVoid(index, playerY, surfaceY, kind, baseArgb, tintArgb, overlayArgb, fluidDepth, light);
             return;
@@ -377,8 +377,8 @@ public final class McChunkSnapshotFactory {
         final int worldX,
         final int worldZ,
         final int topY,
-        final BlockPos.Mutable pos,
-        final ClientWorld world,
+        final BlockPos.MutableBlockPos pos,
+        final ClientLevel world,
         final BlockState surfaceState,
         final int surfaceYVal,
         final SurfaceKind resolvedKind,
@@ -479,8 +479,8 @@ public final class McChunkSnapshotFactory {
         final int y,
         final int worldX,
         final int worldZ,
-        final BlockPos.Mutable pos,
-        final ClientWorld world
+        final BlockPos.MutableBlockPos pos,
+        final ClientLevel world
     ) {
         pos.set(worldX, y, worldZ);
         final int base = sampler.colorFor(state, world, pos);
@@ -494,8 +494,8 @@ public final class McChunkSnapshotFactory {
         final int y,
         final int worldX,
         final int worldZ,
-        final BlockPos.Mutable pos,
-        final ClientWorld world
+        final BlockPos.MutableBlockPos pos,
+        final ClientLevel world
     ) {
         pos.set(worldX, y, worldZ);
         final int base = sampler.xaeroColorFor(state, world, pos);
@@ -506,21 +506,15 @@ public final class McChunkSnapshotFactory {
     /** Mirrors Xaero's default surface scan exclusions for decoration above the real terrain. */
     private static boolean isXaeroInvisible(final BlockState state) {
         final Block block = state.getBlock();
-        //#if MC>=12100
-        //$$ final boolean shortGrass = block == Blocks.SHORT_GRASS;
-        //#else
-        final boolean shortGrass = block == Blocks.GRASS;
-        //#endif
+        final boolean shortGrass = block == Blocks.SHORT_GRASS;
         if (block == Blocks.TORCH || shortGrass || block == Blocks.GLASS || block == Blocks.GLASS_PANE) {
             return true;
         }
         final boolean flower = block instanceof FlowerBlock || block instanceof TallFlowerBlock
-            || state.isIn(BlockTags.FLOWERS)
-            //#if MC>=12000
-            //$$ || block instanceof net.minecraft.block.PitcherCropBlock
-            //#endif
+            || state.is(BlockTags.FLOWERS)
+            || block instanceof net.minecraft.world.level.block.PitcherCropBlock
             ;
-        return block instanceof TallPlantBlock && !flower;
+        return block instanceof DoublePlantBlock && !flower;
     }
 
     /**
@@ -538,9 +532,9 @@ public final class McChunkSnapshotFactory {
      * field generically regardless of layer.
      */
     private void sampleFloorColumn(
-        final WorldChunk chunk,
-        final ClientWorld world,
-        final BlockPos.Mutable pos,
+        final LevelChunk chunk,
+        final ClientLevel world,
+        final BlockPos.MutableBlockPos pos,
         final int baseX,
         final int baseZ,
         final int localX,
@@ -561,7 +555,7 @@ public final class McChunkSnapshotFactory {
     ) {
         final int worldX = baseX + localX;
         final int worldZ = baseZ + localZ;
-        final int clampedPivot = MathHelper.clamp(pivotY, worldMinY, worldMaxY - 1);
+        final int clampedPivot = Mth.clamp(pivotY, worldMinY, worldMaxY - 1);
 
         pos.set(worldX, clampedPivot, worldZ);
         final boolean pivotOpen = isOpenForFloorScan(collapse(chunk.getBlockState(pos)), world, pos);
@@ -671,13 +665,13 @@ public final class McChunkSnapshotFactory {
     }
 
     /** §2.1's pivot-scan open test: non-opaque (§1's opacity test) and not lava. */
-    static boolean isOpenForFloorScan(final BlockState state, final ClientWorld world, final BlockPos pos) {
+    static boolean isOpenForFloorScan(final BlockState state, final ClientLevel world, final BlockPos pos) {
         return !isOpaque(state, world, pos) && state.getBlock() != Blocks.LAVA;
     }
 
     /** §2.1's overhang/foliage overlay eligibility: snow, or anything that isn't air/lava/water. */
     static boolean isFloorOverlayCandidate(final BlockState state) {
-        if (state.getBlock() instanceof SnowBlock) {
+        if (state.getBlock() instanceof SnowLayerBlock) {
             return true;
         }
         return !state.isAir() && state.getBlock() != Blocks.LAVA && state.getBlock() != Blocks.WATER;
@@ -686,7 +680,7 @@ public final class McChunkSnapshotFactory {
     /** Thin snow and carpets remain the visible top even when MOTION_BLOCKING ignores them. */
     private static boolean isPromotedSurfaceCover(final BlockState state) {
         final Block block = state.getBlock();
-        return block instanceof SnowBlock || block instanceof CarpetBlock;
+        return block instanceof SnowLayerBlock || block instanceof CarpetBlock;
     }
 
     /** §2/§6 unified block-type classification, shared by the surface scan and the floor scan. */
@@ -697,7 +691,7 @@ public final class McChunkSnapshotFactory {
             return SurfaceKind.WATER;
         } else if (surfaceBlock == Blocks.ICE) {
             return SurfaceKind.ICE;
-        } else if (surfaceBlock instanceof SnowBlock) {
+        } else if (surfaceBlock instanceof SnowLayerBlock) {
             return SurfaceKind.SNOW;
         } else if (surfaceBlock instanceof LeavesBlock) {
             return SurfaceKind.FOLIAGE;
@@ -719,21 +713,14 @@ public final class McChunkSnapshotFactory {
     private static int applyLight(
         final int argb,
         final BlockPos pos,
-        final ClientWorld world,
+        final ClientLevel world,
         final Block block,
         final boolean netherAmbient
     ) {
-        //#if MC>=260100
-        //$$ final int skyLevel = world.getBrightness(LightLayer.SKY, pos);
-        //$$ final int blockLevel = block == Blocks.LAVA || block == Blocks.MAGMA_BLOCK
-        //$$     ? 14
-        //$$     : world.getBrightness(LightLayer.BLOCK, pos);
-        //#else
-        final int skyLevel = world.getLightLevel(LightType.SKY, pos);
+        final int skyLevel = world.getBrightness(LightLayer.SKY, pos);
         final int blockLevel = block == Blocks.LAVA || block == Blocks.MAGMA_BLOCK
             ? 14
-            : world.getLightLevel(LightType.BLOCK, pos);
-        //#endif
+            : world.getBrightness(LightLayer.BLOCK, pos);
         return Argb.multiply(argb, LightTint.multiplier(blockLevel, skyLevel, netherAmbient));
     }
 
@@ -752,19 +739,15 @@ public final class McChunkSnapshotFactory {
      * sampled. Mutates {@code pos}; callers must not rely on its value afterward.
      */
     private static byte sampleBlockLightAbove(
-        final ClientWorld world,
-        final BlockPos.Mutable pos,
+        final ClientLevel world,
+        final BlockPos.MutableBlockPos pos,
         final int worldX,
         final int y,
         final int worldZ,
         final int topY
     ) {
         pos.set(worldX, Math.min(y + 1, topY - 1), worldZ);
-        //#if MC>=260100
-        //$$ return (byte) Mth.clamp(world.getBrightness(LightLayer.BLOCK, pos), 0, 15);
-        //#else
-        return (byte) MathHelper.clamp(world.getLightLevel(LightType.BLOCK, pos), 0, 15);
-        //#endif
+        return (byte) Mth.clamp(world.getBrightness(LightLayer.BLOCK, pos), 0, 15);
     }
 
     private void writeVoid(
@@ -798,32 +781,20 @@ public final class McChunkSnapshotFactory {
     }
 
     /** §1 opacity test: light-dampening > 0, else a full-square occlusion shape on the top or bottom face. */
-    private static boolean isOpaque(final BlockState state, final ClientWorld world, final BlockPos pos) {
-        //#if MC>=260100
-        //$$ if (state.getLightDampening() > 0) {
-        //#elseif MC>=12103
-        //$$ if (state.getOpacity() > 0) {
-        //#else
-        if (state.getOpacity(world, pos) > 0) {
-        //#endif
+    private static boolean isOpaque(final BlockState state, final ClientLevel world, final BlockPos pos) {
+        if (state.getLightDampening() > 0) {
             return true;
         }
-        if (!state.isOpaque()) {
+        if (!state.canOcclude()) {
             return false;
         }
-        return state.isSideSolidFullSquare(world, pos, Direction.DOWN)
-            || state.isSideSolidFullSquare(world, pos, Direction.UP);
+        return state.isFaceSturdy(world, pos, Direction.DOWN)
+            || state.isFaceSturdy(world, pos, Direction.UP);
     }
 
     /** §1 seafloor-scan continuation: dampening < 5 and not leaves. */
-    private static boolean seafloorContinues(final BlockState state, final ClientWorld world, final BlockPos pos) {
-        //#if MC>=260100
-        //$$ return state.getLightDampening() < 5 && !(state.getBlock() instanceof LeavesBlock);
-        //#elseif MC>=12103
-        //$$ return state.getOpacity() < 5 && !(state.getBlock() instanceof LeavesBlock);
-        //#else
-        return state.getOpacity(world, pos) < 5 && !(state.getBlock() instanceof LeavesBlock);
-        //#endif
+    private static boolean seafloorContinues(final BlockState state, final ClientLevel world, final BlockPos pos) {
+        return state.getLightDampening() < 5 && !(state.getBlock() instanceof LeavesBlock);
     }
 
     /** §1 seafloor-scan capture eligibility: not water/ice/air/bubble-column, and counts on the motion-blocking heightmap. */
@@ -832,7 +803,7 @@ public final class McChunkSnapshotFactory {
         if (state.isAir() || block == Blocks.WATER || block == Blocks.ICE || block == Blocks.BUBBLE_COLUMN) {
             return false;
         }
-        return Heightmap.Type.MOTION_BLOCKING.getBlockPredicate().test(state);
+        return Heightmap.Types.MOTION_BLOCKING.isOpaque().test(state);
     }
 
     /**
@@ -841,14 +812,14 @@ public final class McChunkSnapshotFactory {
      * and other submerged decoration stay eligible for the seafloor overlay scan.
      */
     static BlockState collapse(final BlockState state) {
-        final boolean submergedGreenery = state.isOf(Blocks.KELP) || state.isOf(Blocks.KELP_PLANT)
-            || state.isOf(Blocks.SEAGRASS) || state.isOf(Blocks.TALL_SEAGRASS);
-        final boolean waterlogged = state.contains(Properties.WATERLOGGED)
-            && state.get(Properties.WATERLOGGED);
+        final boolean submergedGreenery = state.is(Blocks.KELP) || state.is(Blocks.KELP_PLANT)
+            || state.is(Blocks.SEAGRASS) || state.is(Blocks.TALL_SEAGRASS);
+        final boolean waterlogged = state.hasProperty(BlockStateProperties.WATERLOGGED)
+            && state.getValue(BlockStateProperties.WATERLOGGED);
         if (!submergedGreenery && !waterlogged) {
             return state;
         }
         final FluidState fluid = state.getFluidState();
-        return fluid.isEmpty() ? state : fluid.getBlockState();
+        return fluid.isEmpty() ? state : fluid.createLegacyBlock();
     }
 }

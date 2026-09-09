@@ -5,11 +5,11 @@ import cn.net.rms.confluxmap.bridge.PlayerView;
 import cn.net.rms.confluxmap.core.config.ConfluxConfig;
 import cn.net.rms.confluxmap.core.model.MapLayer;
 import cn.net.rms.confluxmap.core.task.SessionGuard;
-import net.minecraft.client.MinecraftClient;
-import net.minecraft.client.world.ClientWorld;
-import net.minecraft.util.math.BlockPos;
-import net.minecraft.world.LightType;
-import net.minecraft.world.dimension.DimensionType;
+import net.minecraft.client.Minecraft;
+import net.minecraft.client.multiplayer.ClientLevel;
+import net.minecraft.core.BlockPos;
+import net.minecraft.world.level.LightLayer;
+import net.minecraft.world.level.dimension.DimensionType;
 
 /**
  * Decides the active capture+display {@link MapLayer} each tick, per
@@ -43,7 +43,7 @@ public final class LayerSelector {
     public record Decision(MapLayer layer, int pivotY) {
     }
 
-    private final MinecraftClient client;
+    private final Minecraft client;
     private final ConfluxConfig config;
     private final GameBridge gameBridge;
     private final boolean multiCore;
@@ -53,7 +53,7 @@ public final class LayerSelector {
     private volatile Decision current = new Decision(MapLayer.SURFACE, 0);
 
     public LayerSelector(
-        final MinecraftClient client,
+        final Minecraft client,
         final ConfluxConfig config,
         final GameBridge gameBridge
     ) {
@@ -74,7 +74,7 @@ public final class LayerSelector {
 
     /** Main thread, once per client tick. Returns (and publishes for {@link #current()}) the fresh decision. */
     public Decision tick() {
-        final ClientWorld world = client.world;
+        final ClientLevel world = client.level;
         final PlayerView viewpoint = gameBridge.viewpoint().orElse(null);
         if (world == null || viewpoint == null) {
             current = new Decision(MapLayer.SURFACE, 0);
@@ -84,14 +84,17 @@ public final class LayerSelector {
         final int eyeY = (int) Math.floor(viewpoint.eyeY());
         refreshPivot(eyeY);
 
-        final DimensionKind kind = classify(world.getDimension());
+        // The End has a dedicated map plane.  Some NeoForge/Minecraft builds expose
+        // skylight metadata differently for custom End dimension types, so the
+        // canonical dimension key takes precedence over that metadata.
+        final DimensionKind kind = classify(world);
         final MapLayer layer;
         switch (kind) {
             case HAS_CEILING:
                 layer = resolveNether(
                     config.layerOverride,
                     eyeY,
-                    logicalHeight(world.getDimension()),
+                    logicalHeight(world.dimensionType()),
                     config.netherSliceY
                 );
                 break;
@@ -104,7 +107,7 @@ public final class LayerSelector {
                 layer = resolveOverworld(world, viewpoint, eyeY, config.layerOverride);
         }
 
-        final Decision decision = new Decision(layer, pivotFor(layer, world.getTopY(), debouncedPivotY));
+        final Decision decision = new Decision(layer, pivotFor(layer, world.getMaxY(), debouncedPivotY));
         current = decision;
         return decision;
     }
@@ -116,8 +119,8 @@ public final class LayerSelector {
 
     /** Keybind entry point ({@code key.confluxmap.cycle_layer}): advances the override for the current dimension. */
     public void cycleOverride() {
-        final ClientWorld world = client.world;
-        final DimensionKind kind = world != null ? classify(world.getDimension()) : DimensionKind.SKY_LIT;
+        final ClientLevel world = client.level;
+        final DimensionKind kind = world != null ? classify(world) : DimensionKind.SKY_LIT;
         config.layerOverride = nextOverride(kind, config.layerOverride);
     }
 
@@ -147,16 +150,12 @@ public final class LayerSelector {
     }
 
     private static int logicalHeight(final DimensionType type) {
-        //#if MC>=12000
-        //$$ return type.logicalHeight();
-        //#else
-        return type.getLogicalHeight();
-        //#endif
+        return type.logicalHeight();
     }
 
     /** §1 Case C: sky-light-gated automatic cave detection, or a manual pin. */
     private MapLayer resolveOverworld(
-        final ClientWorld world, final PlayerView viewpoint, final int eyeY, final ConfluxConfig.LayerOverride override
+        final ClientLevel world, final PlayerView viewpoint, final int eyeY, final ConfluxConfig.LayerOverride override
     ) {
         if (override == ConfluxConfig.LayerOverride.FORCE_SLICE) {
             return MapLayer.caveSlice(config.caveSliceY);
@@ -168,11 +167,7 @@ public final class LayerSelector {
             return MapLayer.CAVE_AUTO;
         }
         final BlockPos pos = new BlockPos(viewpoint.blockX(), eyeY, viewpoint.blockZ());
-        //#if MC>=260100
-        //$$ return world.getBrightness(LightLayer.SKY, pos) <= 0 ? MapLayer.CAVE_AUTO : MapLayer.SURFACE;
-        //#else
-        return world.getLightLevel(LightType.SKY, pos) <= 0 ? MapLayer.CAVE_AUTO : MapLayer.SURFACE;
-        //#endif
+        return world.getBrightness(LightLayer.SKY, pos) <= 0 ? MapLayer.CAVE_AUTO : MapLayer.SURFACE;
     }
 
     /**
@@ -195,6 +190,13 @@ public final class LayerSelector {
             default:
                 return debouncedPivotY;
         }
+    }
+
+    /** Classifies a live level, pinning the vanilla End to its dedicated surface layer. */
+    private static DimensionKind classify(final ClientLevel world) {
+        return world.dimension().equals(net.minecraft.world.level.Level.END)
+            ? DimensionKind.NO_SKY_NO_CEILING
+            : classify(world.dimensionType());
     }
 
     /** §1's generic classification: has_ceiling, else no-sky-light, else ordinary sky-lit. */

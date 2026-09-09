@@ -5,7 +5,7 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import org.junit.jupiter.api.Test;
 
 class StatusEffectHudAvoidanceTest {
-    /** A right-aligned icon row, matching the shape the Fabric adapter derives from vanilla. */
+    /** A right-aligned icon row, matching the shape the NeoForge adapter derives from vanilla. */
     private static HudRect row(final int screenWidth, final int top, final int icons) {
         return icons <= 0 ? null : new HudRect(screenWidth - 25 * icons, top, screenWidth, top + 24);
     }

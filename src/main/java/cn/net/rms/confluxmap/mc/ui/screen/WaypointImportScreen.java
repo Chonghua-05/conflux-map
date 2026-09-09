@@ -17,14 +17,14 @@ import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Objects;
 import java.util.Set;
-import net.fabricmc.loader.api.FabricLoader;
-import net.minecraft.client.MinecraftClient;
-import net.minecraft.client.gui.screen.Screen;
-import net.minecraft.client.gui.widget.ButtonWidget;
-import net.minecraft.client.network.ServerInfo;
-import net.minecraft.client.util.math.MatrixStack;
-import net.minecraft.text.Text;
-import net.minecraft.util.WorldSavePath;
+import net.neoforged.fml.loading.FMLPaths;
+import net.minecraft.client.Minecraft;
+import net.minecraft.client.gui.screens.Screen;
+import net.minecraft.client.gui.components.Button;
+import net.minecraft.client.multiplayer.ServerData;
+import com.mojang.blaze3d.vertex.PoseStack;
+import net.minecraft.network.chat.Component;
+import net.minecraft.world.level.storage.LevelResource;
 
 /**
  * One-click migration of Xaero's Minimap / VoxelMap waypoints for the current
@@ -46,7 +46,7 @@ final class WaypointImportScreen extends ConfluxScreen {
     private final List<MigrationSource> sources;
     private final Set<Integer> excludedSources = new LinkedHashSet<>();
 
-    private ButtonWidget importButton;
+    private Button importButton;
     private WaypointImporter.Result result;
     private String errorKey;
     private int scrollOffset;
@@ -59,23 +59,23 @@ final class WaypointImportScreen extends ConfluxScreen {
     }
 
     private static List<MigrationSource> scanSources() {
-        final MigrationSourceScanner.Context context = currentContext(MinecraftClient.getInstance());
+        final MigrationSourceScanner.Context context = currentContext(Minecraft.getInstance());
         if (context == null) {
             return List.of();
         }
-        final Path gameDir = FabricLoader.getInstance().getGameDir();
+        final Path gameDir = FMLPaths.GAMEDIR.get();
         return MigrationSourceScanner.scan(gameDir, context, ConfluxMapMod.LOGGER);
     }
 
     /** Mirrors {@link cn.net.rms.confluxmap.mc.world.WorldSessionTracker}'s identity observation. */
-    private static MigrationSourceScanner.Context currentContext(final MinecraftClient client) {
-        if (client.isInSingleplayer() && client.getServer() != null) {
-            final Path saveRoot = client.getServer().getSavePath(WorldSavePath.ROOT).normalize();
+    private static MigrationSourceScanner.Context currentContext(final Minecraft client) {
+        if (client.isLocalServer() && client.getSingleplayerServer() != null) {
+            final Path saveRoot = client.getSingleplayerServer().getWorldPath(LevelResource.ROOT).normalize();
             final Path saveName = saveRoot.getFileName();
             return saveName == null ? null : MigrationSourceScanner.Context.singleplayer(saveName.toString());
         }
-        final ServerInfo server = client.getCurrentServerEntry();
-        return server == null ? null : MigrationSourceScanner.Context.multiplayer(server.address);
+        final ServerData server = client.getCurrentServer();
+        return server == null ? null : MigrationSourceScanner.Context.multiplayer(server.ip);
     }
 
     @Override
@@ -84,7 +84,7 @@ final class WaypointImportScreen extends ConfluxScreen {
     }
 
     private void rebuild() {
-        clearChildren();
+        clearWidgets();
         buildWidgets();
     }
 
@@ -97,18 +97,18 @@ final class WaypointImportScreen extends ConfluxScreen {
         final int end = Math.min(sources.size(), scrollOffset + visibleRows());
         for (int i = scrollOffset; i < end; i++) {
             final int index = i;
-            final ButtonWidget toggle = addDrawableChild(Widgets.button(
+            final Button toggle = addRenderableWidget(Widgets.button(
                 rowLeft,
                 LIST_TOP + (i - scrollOffset) * ROW_HEIGHT,
                 20,
                 20,
-                Text.of(excludedSources.contains(index) ? "" : "✓"),
+                Component.nullToEmpty(excludedSources.contains(index) ? "" : "✓"),
                 button -> toggleSource(index)
             ));
             toggle.active = result == null;
         }
 
-        importButton = addDrawableChild(Widgets.button(
+        importButton = addRenderableWidget(Widgets.button(
             centerX - 104,
             height - 32,
             100,
@@ -120,7 +120,7 @@ final class WaypointImportScreen extends ConfluxScreen {
         if (result == null) {
             setEnterAction(() -> importButton != null && importButton.active, this::runImport);
         }
-        addDrawableChild(Widgets.button(
+        addRenderableWidget(Widgets.button(
             centerX + 4,
             height - 32,
             100,
@@ -147,7 +147,7 @@ final class WaypointImportScreen extends ConfluxScreen {
 
     @Override
     public void onClose() {
-        MinecraftAccess.setScreen(MinecraftClient.getInstance(), parent);
+        MinecraftAccess.setScreen(Minecraft.getInstance(), parent);
     }
 
     @Override
@@ -180,16 +180,12 @@ final class WaypointImportScreen extends ConfluxScreen {
     }
 
     @Override
-    //#if MC>=12002
-    //$$ public boolean mouseScrolled(
-    //$$     final double mouseX,
-    //$$     final double mouseY,
-    //$$     final double horizontalAmount,
-    //$$     final double amount
-    //$$ ) {
-    //#else
-    public boolean mouseScrolled(final double mouseX, final double mouseY, final double amount) {
-    //#endif
+    public boolean mouseScrolled(
+        final double mouseX,
+        final double mouseY,
+        final double horizontalAmount,
+        final double amount
+    ) {
         final int left = width / 2 - rowWidth() / 2;
         final boolean overList = mouseX >= left && mouseX <= left + rowWidth() + 6
             && mouseY >= LIST_TOP && mouseY <= LIST_TOP + visibleRows() * ROW_HEIGHT;
@@ -202,11 +198,7 @@ final class WaypointImportScreen extends ConfluxScreen {
             }
             return true;
         }
-        //#if MC>=12002
-        //$$ return super.mouseScrolled(mouseX, mouseY, horizontalAmount, amount);
-        //#else
-        return super.mouseScrolled(mouseX, mouseY, amount);
-        //#endif
+        return super.mouseScrolled(mouseX, mouseY, horizontalAmount, amount);
     }
 
     private String availabilityErrorKey() {
@@ -267,9 +259,9 @@ final class WaypointImportScreen extends ConfluxScreen {
                     source.displayName(),
                     source.waypoints().size()
                 ).getString();
-                final String fitted = this.textRenderer.trimToWidth(label, rowWidth() - 26);
+                final String fitted = this.font.plainSubstrByWidth(label, rowWidth() - 26);
                 draw.drawTextWithShadow(
-                    this.textRenderer, fitted, rowLeft + 26,
+                    this.font, fitted, rowLeft + 26,
                     LIST_TOP + (i - scrollOffset) * ROW_HEIGHT + 6,
                     excludedSources.contains(i) ? MUTED_TEXT_COLOR : TEXT_COLOR
                 );
@@ -305,7 +297,7 @@ final class WaypointImportScreen extends ConfluxScreen {
     }
 
     private void drawCentered(final GuiDraw draw, final String value, final int y, final int color) {
-        final String text = this.textRenderer.trimToWidth(value, Math.max(40, width - 32));
-        draw.drawTextWithShadow(this.textRenderer, text, width / 2f - this.textRenderer.getWidth(text) / 2f, y, color);
+        final String text = this.font.plainSubstrByWidth(value, Math.max(40, width - 32));
+        draw.drawTextWithShadow(this.font, text, width / 2f - this.font.width(text) / 2f, y, color);
     }
 }

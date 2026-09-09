@@ -111,32 +111,24 @@ import java.util.Optional;
 import java.util.OptionalInt;
 import java.util.Set;
 import java.util.UUID;
-import net.minecraft.client.MinecraftClient;
-//#if MC>=12000
-//$$ import net.minecraft.client.gui.DrawContext;
-//#endif
-//#if MC>=12109
-//$$ import net.minecraft.client.gui.Click;
-//$$ import net.minecraft.client.input.KeyInput;
-//#endif
-import net.minecraft.client.gui.screen.Screen;
-import net.minecraft.client.gui.widget.ButtonWidget;
-import net.minecraft.client.gui.widget.ClickableWidget;
-import net.minecraft.client.option.KeyBinding;
-import net.minecraft.client.render.GameRenderer;
-//#if MC>=12108
-//$$ import net.minecraft.client.gl.RenderPipelines;
-//#elseif MC>=12103
-//$$ import net.minecraft.client.render.RenderLayer;
-//#endif
-import net.minecraft.client.util.math.MatrixStack;
-import net.minecraft.client.world.ClientWorld;
-import net.minecraft.entity.Entity;
-import net.minecraft.text.Text;
-import net.minecraft.util.Identifier;
+import net.minecraft.client.Minecraft;
+import net.minecraft.client.gui.GuiGraphicsExtractor;
+import net.minecraft.client.input.MouseButtonEvent;
+import net.minecraft.client.input.KeyEvent;
+import net.minecraft.client.gui.screens.Screen;
+import net.minecraft.client.gui.components.Button;
+import net.minecraft.client.gui.components.AbstractWidget;
+import net.minecraft.client.KeyMapping;
+import net.minecraft.client.renderer.GameRenderer;
+import net.minecraft.client.renderer.RenderPipelines;
+import com.mojang.blaze3d.vertex.PoseStack;
+import net.minecraft.client.multiplayer.ClientLevel;
+import net.minecraft.world.entity.Entity;
+import net.minecraft.network.chat.Component;
+import net.minecraft.resources.Identifier;
 import net.minecraft.util.Util;
-import net.minecraft.util.math.BlockPos;
-import net.minecraft.util.math.MathHelper;
+import net.minecraft.core.BlockPos;
+import net.minecraft.util.Mth;
 import org.lwjgl.glfw.GLFW;
 
 /**
@@ -308,8 +300,8 @@ public final class FullscreenMapScreen extends ConfluxScreen {
     /** Radar markers are ~12px across; cull with enough margin that one straddling the edge doesn't pop. */
     private static final float RADAR_CULL_MARGIN = 8f;
 
-    /** Null when MaliLib owns the binding and closes this screen through the shared action handler. */
-    private final KeyBinding openMapKey;
+    /** Null when the shared action handler owns the binding and closes this screen. */
+    private final KeyMapping openMapKey;
     private final GameBridge gameBridge;
     private final MapWorldService mapWorlds;
     private final TileService tiles;
@@ -367,9 +359,9 @@ public final class FullscreenMapScreen extends ConfluxScreen {
     private MapIconButton structureSearchButton;
     private MapIconButton displayModeButton;
     private MapIconButton mapExportButton;
-    private ButtonWidget clientWorldButton;
-    private ButtonWidget worldSelectorButton;
-    private ButtonWidget dimensionSelectorButton;
+    private Button clientWorldButton;
+    private Button worldSelectorButton;
+    private Button dimensionSelectorButton;
     private TargetSelector openTargetSelector;
     private int targetDropdownScrollOffset;
     private Map<WorldIdentity, String> targetWorldLabels = Map.of();
@@ -382,21 +374,21 @@ public final class FullscreenMapScreen extends ConfluxScreen {
     private UUID locationMenuPlayerId;
     private ServerPlayerRadarState.PlayerView hoveredRadarPlayer;
     private FullscreenMapLocationMenu.Action pendingLocationAction;
-    private ButtonWidget setWaypointLocationButton;
-    private ButtonWidget editWaypointLocationButton;
-    private ButtonWidget shareLocationButton;
-    private ButtonWidget teleportLocationButton;
+    private Button setWaypointLocationButton;
+    private Button editWaypointLocationButton;
+    private Button shareLocationButton;
+    private Button teleportLocationButton;
     private String teleportLocationUnavailableKey;
-    private final Map<ButtonWidget, String> annotationTooltips = new LinkedHashMap<>();
-    private final Map<ButtonWidget, String> locationActionTooltips = new LinkedHashMap<>();
-    private final Map<AnnotationTool, ButtonWidget> annotationToolButtons = new EnumMap<>(AnnotationTool.class);
+    private final Map<Button, String> annotationTooltips = new LinkedHashMap<>();
+    private final Map<Button, String> locationActionTooltips = new LinkedHashMap<>();
+    private final Map<AnnotationTool, Button> annotationToolButtons = new EnumMap<>(AnnotationTool.class);
     private AnnotationToolbarBounds annotationToolbarBounds;
     private AnnotationToolbarBounds annotationColorMenuBounds;
     private MapIconButton annotationPersistenceButton;
     private MapIconButton annotationEraserButton;
-    private ButtonWidget annotationLabelButton;
-    private ButtonWidget annotationUndoButton;
-    private ButtonWidget annotationRedoButton;
+    private Button annotationLabelButton;
+    private Button annotationUndoButton;
+    private Button annotationRedoButton;
     private FullscreenDisplayMode controlsDisplayMode;
     private boolean annotationColorMenuOpen;
     private AnnotationTool annotationTool = AnnotationTool.SELECT;
@@ -410,16 +402,16 @@ public final class FullscreenMapScreen extends ConfluxScreen {
     private double annotationMoveDz;
     private final Set<UUID> erasingAnnotationIds = new LinkedHashSet<>();
     private long lastEraserButtonClickMs = Long.MIN_VALUE;
-    private ButtonWidget loadStateDetailButton;
+    private Button loadStateDetailButton;
     private MapExportScreen exportSelectionScreen;
     private boolean exportSelectionReturnsToForm;
     private final MapExportSelection exportSelection = new MapExportSelection();
 
-    public FullscreenMapScreen(final KeyBinding openMapKey) {
+    public FullscreenMapScreen(final KeyMapping openMapKey) {
         this(openMapKey, null);
     }
 
-    private FullscreenMapScreen(final KeyBinding openMapKey, final InitialFocus initialFocus) {
+    private FullscreenMapScreen(final KeyMapping openMapKey, final InitialFocus initialFocus) {
         super(Texts.translatable("confluxmap.screen.map.title"));
         this.openMapKey = openMapKey;
         this.initialFocus = initialFocus;
@@ -503,8 +495,8 @@ public final class FullscreenMapScreen extends ConfluxScreen {
     }
 
     private void rebuildExportSelectionControls() {
-        clearChildren();
-        addDrawableChild(Widgets.button(
+        clearWidgets();
+        addRenderableWidget(Widgets.button(
             width - MARGIN - 80,
             height - 32,
             80,
@@ -513,7 +505,7 @@ public final class FullscreenMapScreen extends ConfluxScreen {
             ignored -> cancelExportSelection()
         ));
         if (exportSelection.bounds().isPresent()) {
-            addDrawableChild(Widgets.button(
+            addRenderableWidget(Widgets.button(
                 width / 2 - 104,
                 height - 32,
                 100,
@@ -521,7 +513,7 @@ public final class FullscreenMapScreen extends ConfluxScreen {
                 Texts.translatable("confluxmap.screen.map_export.use_selection"),
                 ignored -> finishExportSelection()
             ));
-            addDrawableChild(Widgets.button(
+            addRenderableWidget(Widgets.button(
                 width / 2 + 4,
                 height - 32,
                 100,
@@ -536,7 +528,7 @@ public final class FullscreenMapScreen extends ConfluxScreen {
     }
 
     private void rebuildWaypointControls() {
-        clearChildren();
+        clearWidgets();
         sharedAvailability = viewSharedAvailability();
         localVisibilityButton = null;
         sharedVisibilityButton = null;
@@ -577,7 +569,7 @@ public final class FullscreenMapScreen extends ConfluxScreen {
         }
 
         final int x = width - MARGIN - CONTROL_SIZE;
-        final int top = MARGIN + this.textRenderer.fontHeight + 5;
+        final int top = MARGIN + this.font.lineHeight + 5;
         int y = top;
         viewGroupButton = addToolGroupButton(
             x, y, VIEW_GROUP_ICON, "confluxmap.map.tools.view", FullscreenMapToolPanel.Group.VIEW
@@ -599,13 +591,13 @@ public final class FullscreenMapScreen extends ConfluxScreen {
             FullscreenMapToolPanel.Group.ACTIONS
         );
         y += CONTROL_SIZE + CONTROL_GAP;
-        final MapIconButton settingsButton = addDrawableChild(new MapIconButton(
+        final MapIconButton settingsButton = addRenderableWidget(new MapIconButton(
             x,
             y,
             MAP_SETTINGS_ICON,
             Texts.translatable("confluxmap.screen.config.title"),
             ignored -> MinecraftAccess.setScreen(
-                MinecraftClient.getInstance(), new ConfigScreen(this)
+                Minecraft.getInstance(), new ConfigScreen(this)
             )
         ));
         annotationTooltips.put(settingsButton, "confluxmap.screen.config.title");
@@ -639,7 +631,7 @@ public final class FullscreenMapScreen extends ConfluxScreen {
         );
         final int selectorHeight = targetSelectorHeight();
         final int startX = (width - selectorWidth * 2 - TARGET_SELECTOR_GAP) / 2;
-        worldSelectorButton = addDrawableChild(Widgets.button(
+        worldSelectorButton = addRenderableWidget(Widgets.button(
             startX,
             MARGIN,
             selectorWidth,
@@ -647,7 +639,7 @@ public final class FullscreenMapScreen extends ConfluxScreen {
             targetSelectorLabel(TargetSelector.WORLD, selectorWidth),
             ignored -> toggleTargetSelector(TargetSelector.WORLD)
         ));
-        dimensionSelectorButton = addDrawableChild(Widgets.button(
+        dimensionSelectorButton = addRenderableWidget(Widgets.button(
             startX + selectorWidth + TARGET_SELECTOR_GAP,
             MARGIN,
             selectorWidth,
@@ -664,7 +656,7 @@ public final class FullscreenMapScreen extends ConfluxScreen {
             : COMPACT_TARGET_SELECTOR_HEIGHT;
     }
 
-    private Text targetSelectorLabel(final TargetSelector selector, final int buttonWidth) {
+    private Component targetSelectorLabel(final TargetSelector selector, final int buttonWidth) {
         final String value = selector == TargetSelector.WORLD
             ? worldLabel(viewSession().world())
             : dimensionDisplayName(viewSession().dimension());
@@ -674,11 +666,7 @@ public final class FullscreenMapScreen extends ConfluxScreen {
                 : "confluxmap.map.target.dimension"
         ).getString();
         final String full = prefix + ": " + value + " ▾";
-        //#if MC>=260100
-        //$$ return Texts.literal(this.font.plainSubstrByWidth(full, Math.max(20, buttonWidth - 8)));
-        //#else
-        return Texts.literal(this.textRenderer.trimToWidth(full, Math.max(20, buttonWidth - 8)));
-        //#endif
+        return Texts.literal(this.font.plainSubstrByWidth(full, Math.max(20, buttonWidth - 8)));
     }
 
     private void toggleTargetSelector(final TargetSelector selector) {
@@ -749,7 +737,7 @@ public final class FullscreenMapScreen extends ConfluxScreen {
         final String tooltipKey,
         final FullscreenMapToolPanel.Group group
     ) {
-        final MapIconButton button = addDrawableChild(new MapIconButton(
+        final MapIconButton button = addRenderableWidget(new MapIconButton(
             x, y, icon, Texts.translatable(tooltipKey), ignored -> toggleToolGroup(group)
         ));
         button.setSelected(toolPanel.isOpen(group));
@@ -776,7 +764,7 @@ public final class FullscreenMapScreen extends ConfluxScreen {
         int y = top;
         for (final FullscreenDisplayMode mode : FullscreenDisplayMode.values()) {
             final boolean available = displayModeAvailable(mode);
-            final MapIconButton button = addDrawableChild(new MapIconButton(
+            final MapIconButton button = addRenderableWidget(new MapIconButton(
                 secondaryControlsX(),
                 y,
                 DisplayModeIconCatalog.icon(mode, available),
@@ -800,7 +788,7 @@ public final class FullscreenMapScreen extends ConfluxScreen {
     private void rebuildWaypointGroupControls(final int top) {
         final int x = secondaryControlsX();
         int y = top;
-        localVisibilityButton = addDrawableChild(new MapIconButton(
+        localVisibilityButton = addRenderableWidget(new MapIconButton(
             x, y, LOCAL_WAYPOINT_ICON, ignored -> {
                 config.localWaypointsVisible = !config.localWaypointsVisible;
                 ConfluxMapClient.get().configIo().save(config);
@@ -809,7 +797,7 @@ public final class FullscreenMapScreen extends ConfluxScreen {
         ));
         y += CONTROL_SIZE + CONTROL_GAP;
         if (sharedAvailability.visible()) {
-            sharedVisibilityButton = addDrawableChild(new MapIconButton(
+            sharedVisibilityButton = addRenderableWidget(new MapIconButton(
                 x, y, SHARED_WAYPOINT_ICON, ignored -> {
                     config.sharedWaypointsVisible = !config.sharedWaypointsVisible;
                     ConfluxMapClient.get().configIo().save(config);
@@ -819,11 +807,11 @@ public final class FullscreenMapScreen extends ConfluxScreen {
             y += CONTROL_SIZE + CONTROL_GAP;
         }
         refreshWaypointVisibilityButtons();
-        manageWaypointsButton = addDrawableChild(new MapIconButton(
+        manageWaypointsButton = addRenderableWidget(new MapIconButton(
             x, y, MANAGE_WAYPOINT_ICON, Texts.translatable(
                 "confluxmap.map.waypoints.manage.tooltip"
             ), ignored -> MinecraftAccess.setScreen(
-                MinecraftClient.getInstance(), new WaypointListScreen(this, WaypointListScreen.Tab.LOCAL)
+                Minecraft.getInstance(), new WaypointListScreen(this, WaypointListScreen.Tab.LOCAL)
             )
         ));
         manageWaypointsButton.active = viewingLiveWorld();
@@ -859,13 +847,13 @@ public final class FullscreenMapScreen extends ConfluxScreen {
     private void rebuildActionControls(final int top) {
         final int x = secondaryControlsX();
         int y = top;
-        structureSearchButton = addDrawableChild(new MapIconButton(
+        structureSearchButton = addRenderableWidget(new MapIconButton(
             x, y, STRUCTURE_SEARCH_ICON, Texts.translatable("confluxmap.map.search"),
             ignored -> openStructureSearch()
         ));
         refreshStructureSearchButton();
         y += CONTROL_SIZE + CONTROL_GAP;
-        mapExportButton = addDrawableChild(new MapIconButton(
+        mapExportButton = addRenderableWidget(new MapIconButton(
             x, y, MAP_EXPORT_ICON, Texts.translatable("confluxmap.screen.map_export.tooltip"),
             ignored -> openMapExport()
         ));
@@ -873,13 +861,13 @@ public final class FullscreenMapScreen extends ConfluxScreen {
         annotationTooltips.put(mapExportButton, "confluxmap.screen.map_export.tooltip");
         y += CONTROL_SIZE + CONTROL_GAP;
         if (clientMultiworld.canManageProfiles()) {
-            clientWorldButton = addDrawableChild(new MapIconButton(
+            clientWorldButton = addRenderableWidget(new MapIconButton(
                 x, y, WORLD_PROFILE_ICON, Texts.translatable(
                     "confluxmap.map.client_world",
                     clientMultiworld.currentProfile().map(ClientWorldProfile::displayName).orElse("?")
                 ),
                 ignored -> MinecraftAccess.setScreen(
-                    MinecraftClient.getInstance(), new ClientWorldSelectScreen(this, openMapKey, false)
+                    Minecraft.getInstance(), new ClientWorldSelectScreen(this, openMapKey, false)
                 )
             ));
             annotationTooltips.put(clientWorldButton, "confluxmap.map.client_world");
@@ -926,9 +914,9 @@ public final class FullscreenMapScreen extends ConfluxScreen {
         for (final AnnotationTool tool : AnnotationTool.values()) {
             final int buttonX = controlX(left, stride, rows, index);
             final int buttonY = controlY(top, stride, rows, index);
-            final ButtonWidget button;
+            final Button button;
             if (tool == AnnotationTool.ERASER) {
-                annotationEraserButton = addDrawableChild(new MapIconButton(
+                annotationEraserButton = addRenderableWidget(new MapIconButton(
                     buttonX,
                     buttonY,
                     ANNOTATION_CONTROL_SIZE,
@@ -957,7 +945,7 @@ public final class FullscreenMapScreen extends ConfluxScreen {
             true
         );
         index++;
-        annotationPersistenceButton = addDrawableChild(new MapIconButton(
+        annotationPersistenceButton = addRenderableWidget(new MapIconButton(
             controlX(left, stride, rows, index),
             controlY(top, stride, rows, index),
             ANNOTATION_CONTROL_SIZE,
@@ -1032,14 +1020,14 @@ public final class FullscreenMapScreen extends ConfluxScreen {
         return top + index % rows * stride;
     }
 
-    private ButtonWidget addAnnotationIconButton(
+    private Button addAnnotationIconButton(
         final int x,
         final int y,
         final Identifier icon,
         final String tooltipKey,
-        final ButtonWidget.PressAction action
+        final Button.OnPress action
     ) {
-        final ButtonWidget button = addDrawableChild(new MapIconButton(
+        final Button button = addRenderableWidget(new MapIconButton(
             x, y, ANNOTATION_CONTROL_SIZE, icon, Texts.translatable(tooltipKey), action
         ));
         annotationTooltips.put(button, tooltipKey);
@@ -1052,103 +1040,29 @@ public final class FullscreenMapScreen extends ConfluxScreen {
         final int color,
         final boolean opensMenu
     ) {
-        //#if MC>=260100
-        //$$ final var button = addRenderableWidget(new Button(
-        //$$     x, y, ANNOTATION_CONTROL_SIZE, ANNOTATION_CONTROL_SIZE, Texts.literal(""),
-        //$$     ignored -> activateAnnotationColorButton(color, opensMenu), narration -> narration.get()
-        //$$ ) {
-        //$$     @Override
-        //$$     protected void extractContents(
-        //$$         final GuiGraphicsExtractor context,
-        //$$         final int mouseX,
-        //$$         final int mouseY,
-        //$$         final float delta
-        //$$     ) {
-        //$$         if (uiTheme.useVanillaButtonStyle()) {
-        //$$             extractDefaultSprite(context);
-        //$$         }
-        //$$         renderAnnotationColorButton(GuiDraw.of(context), this, color, opensMenu);
-        //$$     }
-        //$$ });
-        //#elseif MC>=12111
-        //$$ final ButtonWidget button = addDrawableChild(new ButtonWidget(
-        //$$     x, y, ANNOTATION_CONTROL_SIZE, ANNOTATION_CONTROL_SIZE, Texts.literal(""),
-        //$$     ignored -> activateAnnotationColorButton(color, opensMenu), narration -> narration.get()
-        //$$ ) {
-        //$$     @Override
-        //$$     protected void drawIcon(
-        //$$         final DrawContext context,
-        //$$         final int mouseX,
-        //$$         final int mouseY,
-        //$$         final float delta
-        //$$     ) {
-        //$$         if (uiTheme.useVanillaButtonStyle()) {
-        //$$             drawButton(context);
-        //$$         }
-        //$$         renderAnnotationColorButton(GuiDraw.of(context), this, color, opensMenu);
-        //$$     }
-        //$$ });
-        //#elseif MC>=12002
-        //$$ final ButtonWidget button = addDrawableChild(new ButtonWidget(
-        //$$     x, y, ANNOTATION_CONTROL_SIZE, ANNOTATION_CONTROL_SIZE, Texts.literal(""),
-        //$$     ignored -> activateAnnotationColorButton(color, opensMenu), narration -> narration.get()
-        //$$ ) {
-        //$$     @Override
-        //$$     protected void renderWidget(
-        //$$         final DrawContext context,
-        //$$         final int mouseX,
-        //$$         final int mouseY,
-        //$$         final float delta
-        //$$     ) {
-        //$$         if (uiTheme.useVanillaButtonStyle()) {
-        //$$             super.renderWidget(context, mouseX, mouseY, delta);
-        //$$         }
-        //$$         renderAnnotationColorButton(GuiDraw.of(context), this, color, opensMenu);
-        //$$     }
-        //$$ });
-        //#elseif MC>=12000
-        //$$ final ButtonWidget button = addDrawableChild(new ButtonWidget(
-        //$$     x, y, ANNOTATION_CONTROL_SIZE, ANNOTATION_CONTROL_SIZE, Texts.literal(""),
-        //$$     ignored -> activateAnnotationColorButton(color, opensMenu), narration -> narration.get()
-        //$$ ) {
-        //$$     @Override
-        //$$     protected void renderButton(
-        //$$         final DrawContext context,
-        //$$         final int mouseX,
-        //$$         final int mouseY,
-        //$$         final float delta
-        //$$     ) {
-        //$$         if (uiTheme.useVanillaButtonStyle()) {
-        //$$             super.renderButton(context, mouseX, mouseY, delta);
-        //$$         }
-        //$$         renderAnnotationColorButton(GuiDraw.of(context), this, color, opensMenu);
-        //$$     }
-        //$$ });
-        //#else
-        final ButtonWidget button = addDrawableChild(new ButtonWidget(
+        final var button = addRenderableWidget(new Button(
             x, y, ANNOTATION_CONTROL_SIZE, ANNOTATION_CONTROL_SIZE, Texts.literal(""),
-            ignored -> activateAnnotationColorButton(color, opensMenu)
+            ignored -> activateAnnotationColorButton(color, opensMenu), narration -> narration.get()
         ) {
             @Override
-            public void renderButton(
-                final MatrixStack matrices,
+            protected void extractContents(
+                final GuiGraphicsExtractor context,
                 final int mouseX,
                 final int mouseY,
                 final float delta
             ) {
                 if (uiTheme.useVanillaButtonStyle()) {
-                    super.renderButton(matrices, mouseX, mouseY, delta);
+                    extractDefaultSprite(context);
                 }
-                renderAnnotationColorButton(GuiDraw.of(matrices), this, color, opensMenu);
+                renderAnnotationColorButton(GuiDraw.of(context), this, color, opensMenu);
             }
         });
-        //#endif
         annotationTooltips.put(button, "confluxmap.map.annotation.color.tooltip");
     }
 
     private void renderAnnotationColorButton(
         final GuiDraw draw,
-        final ButtonWidget button,
+        final Button button,
         final int color,
         final boolean opensMenu
     ) {
@@ -1181,7 +1095,7 @@ public final class FullscreenMapScreen extends ConfluxScreen {
     }
 
     private void refreshAnnotationControls() {
-        for (final Map.Entry<AnnotationTool, ButtonWidget> entry : annotationToolButtons.entrySet()) {
+        for (final Map.Entry<AnnotationTool, Button> entry : annotationToolButtons.entrySet()) {
             entry.getValue().active = true;
             if (entry.getValue() instanceof MapIconButton iconButton) {
                 iconButton.setSelected(entry.getKey() == annotationTool);
@@ -1246,7 +1160,7 @@ public final class FullscreenMapScreen extends ConfluxScreen {
     }
 
     private void selectAnnotationTool(final AnnotationTool tool) {
-        final long now = Util.getMeasuringTimeMs();
+        final long now = Util.getMillis();
         final boolean openEraserSettings = tool == AnnotationTool.ERASER
             && lastEraserButtonClickMs != Long.MIN_VALUE
             && now - lastEraserButtonClickMs <= DOUBLE_CLICK_INTERVAL_MS;
@@ -1260,7 +1174,7 @@ public final class FullscreenMapScreen extends ConfluxScreen {
         rebuildWaypointControls();
         if (openEraserSettings) {
             lastEraserButtonClickMs = Long.MIN_VALUE;
-            MinecraftAccess.setScreen(MinecraftClient.getInstance(), new AnnotationEraserSettingsScreen(this, config));
+            MinecraftAccess.setScreen(Minecraft.getInstance(), new AnnotationEraserSettingsScreen(this, config));
         }
     }
 
@@ -1325,7 +1239,7 @@ public final class FullscreenMapScreen extends ConfluxScreen {
         if (store == null) {
             return;
         }
-        selectedAnnotation().ifPresent(annotation -> MinecraftAccess.setScreen(MinecraftClient.getInstance(),
+        selectedAnnotation().ifPresent(annotation -> MinecraftAccess.setScreen(Minecraft.getInstance(),
             new AnnotationLabelScreen(this, store, annotation)
         ));
     }
@@ -1336,7 +1250,7 @@ public final class FullscreenMapScreen extends ConfluxScreen {
         }
         final int buttonWidth = Math.min(180, Math.max(90, width - 2 * (MARGIN + 80)));
         final int x = (width - buttonWidth) / 2;
-        loadStateDetailButton = addDrawableChild(Widgets.button(
+        loadStateDetailButton = addRenderableWidget(Widgets.button(
             x,
             MARGIN,
             buttonWidth,
@@ -1408,7 +1322,7 @@ public final class FullscreenMapScreen extends ConfluxScreen {
         exportSelection.reset();
         mapPointerPress = false;
         annotationPointerPress = false;
-        MinecraftAccess.setScreen(MinecraftClient.getInstance(), this);
+        MinecraftAccess.setScreen(Minecraft.getInstance(), this);
     }
 
     MapExportRequest createExportRequest(
@@ -1448,7 +1362,7 @@ public final class FullscreenMapScreen extends ConfluxScreen {
         exportSelection.reset();
         mapPointerPress = false;
         if (screen != null && returnsToForm) {
-            MinecraftAccess.setScreen(MinecraftClient.getInstance(), screen);
+            MinecraftAccess.setScreen(Minecraft.getInstance(), screen);
         } else {
             rebuildWaypointControls();
         }
@@ -1475,12 +1389,12 @@ public final class FullscreenMapScreen extends ConfluxScreen {
         exportSelectionReturnsToForm = false;
         exportSelection.reset();
         screen.applySelection(completed.get());
-        MinecraftAccess.setScreen(MinecraftClient.getInstance(), screen);
+        MinecraftAccess.setScreen(Minecraft.getInstance(), screen);
     }
 
     private void addLocationMenuButtons() {
         final boolean heightKnown = locationMenuTarget.blockY().isPresent();
-        final MinecraftClient client = MinecraftClient.getInstance();
+        final Minecraft client = Minecraft.getInstance();
         final boolean playerPresent = client.player != null;
         final SessionGuard.Session viewed = viewSession();
         final SessionGuard.Session live = gameBridge.session();
@@ -1504,7 +1418,7 @@ public final class FullscreenMapScreen extends ConfluxScreen {
         );
         for (int index = 0; index < actions.size(); index++) {
             final FullscreenMapLocationMenu.Action action = actions.get(index);
-            final ButtonWidget button = addDrawableChild(Widgets.button(
+            final Button button = addRenderableWidget(Widgets.button(
                 locationMenuBounds.buttonX(),
                 locationMenuBounds.buttonY(index),
                 locationMenuBounds.buttonWidth(),
@@ -1600,7 +1514,7 @@ public final class FullscreenMapScreen extends ConfluxScreen {
         refreshStructureSearchButton();
     }
 
-    private Text visibilityTooltip(final boolean local) {
+    private Component visibilityTooltip(final boolean local) {
         final boolean visible = local ? config.localWaypointsVisible : config.sharedWaypointsVisible;
         return Texts.translatable(
             local
@@ -1644,20 +1558,11 @@ public final class FullscreenMapScreen extends ConfluxScreen {
     }
 
     @Override
-    //#if MC>=12109
-    //$$ public boolean keyPressed(final KeyInput input) {
-    //$$     final int keyCode = input.key();
-    //$$     final int modifiers = input.modifiers();
-    //#else
-    public boolean keyPressed(final int keyCode, final int scanCode, final int modifiers) {
-    //#endif
+    public boolean keyPressed(final KeyEvent input) {
+        final int keyCode = input.key();
+        final int modifiers = input.modifiers();
         if (exportSelectionScreen != null) {
-            //#if MC>=12109
-            //$$ if (keyCode == GLFW.GLFW_KEY_ESCAPE || openMapKey != null && openMapKey.matchesKey(input)) {
-            //#else
-            if (keyCode == GLFW.GLFW_KEY_ESCAPE
-                || openMapKey != null && openMapKey.matchesKey(keyCode, scanCode)) {
-            //#endif
+            if (keyCode == GLFW.GLFW_KEY_ESCAPE || openMapKey != null && openMapKey.matches(input)) {
                 cancelExportSelection();
                 return true;
             }
@@ -1704,19 +1609,11 @@ public final class FullscreenMapScreen extends ConfluxScreen {
             }
             return true;
         }
-        //#if MC>=12109
-        //$$ if (openMapKey != null && openMapKey.matchesKey(input)) {
-        //#else
-        if (openMapKey != null && openMapKey.matchesKey(keyCode, scanCode)) {
-        //#endif
+        if (openMapKey != null && openMapKey.matches(input)) {
             onClose();
             return true;
         }
-        //#if MC>=12109
-        //$$ return super.keyPressed(input);
-        //#else
-        return super.keyPressed(keyCode, scanCode, modifiers);
-        //#endif
+        return super.keyPressed(input);
     }
 
     /**
@@ -1726,24 +1623,16 @@ public final class FullscreenMapScreen extends ConfluxScreen {
      * drag) completes.
      */
     @Override
-    //#if MC>=12109
-    //$$ public boolean mouseClicked(final Click click, final boolean doubledClick) {
-    //$$     final double mouseX = click.x();
-    //$$     final double mouseY = click.y();
-    //$$     final int button = click.button();
-    //#else
-    public boolean mouseClicked(final double mouseX, final double mouseY, final int button) {
-    //#endif
+    public boolean mouseClicked(final MouseButtonEvent click, final boolean doubledClick) {
+        final double mouseX = click.x();
+        final double mouseY = click.y();
+        final int button = click.button();
         if (button == 0 && selectTargetDropdownOption(mouseX, mouseY)) {
             mapPointerPress = false;
             return true;
         }
         if (exportSelectionScreen != null) {
-            //#if MC>=12109
-            //$$ if (super.mouseClicked(click, doubledClick)) {
-            //#else
-            if (super.mouseClicked(mouseX, mouseY, button)) {
-            //#endif
+            if (super.mouseClicked(click, doubledClick)) {
                 return true;
             }
             if (button == 1) {
@@ -1763,11 +1652,7 @@ public final class FullscreenMapScreen extends ConfluxScreen {
         }
         if (locationMenuBounds != null) {
             if (locationMenuBounds.contains(mouseX, mouseY)) {
-                //#if MC>=12109
-                //$$ super.mouseClicked(click, doubledClick);
-                //#else
-                super.mouseClicked(mouseX, mouseY, button);
-                //#endif
+                super.mouseClicked(click, doubledClick);
                 mapPointerPress = false;
                 performPendingLocationAction();
                 return true;
@@ -1780,11 +1665,7 @@ public final class FullscreenMapScreen extends ConfluxScreen {
             mapPointerPress = false;
             return true;
         }
-        //#if MC>=12109
-        //$$ if (super.mouseClicked(click, doubledClick)) {
-        //#else
-        if (super.mouseClicked(mouseX, mouseY, button)) {
-        //#endif
+        if (super.mouseClicked(click, doubledClick)) {
             mapPointerPress = false;
             return true;
         }
@@ -1995,26 +1876,22 @@ public final class FullscreenMapScreen extends ConfluxScreen {
                 }
             }
             case CLEAR_PLAYER_HIGHLIGHT -> serverPlayerRadar.clearHighlight();
-            case SET_WAYPOINT -> target.blockY().ifPresent(y -> MinecraftAccess.setScreen(MinecraftClient.getInstance(),
+            case SET_WAYPOINT -> MinecraftAccess.setScreen(Minecraft.getInstance(),
                 WaypointEditScreen.forCreate(
                     this,
                     viewSession().dimension(),
                     target.blockX(),
-                    y,
+                    locationTargetY(target),
                     target.blockZ(),
                     this::viewWaypointStore
                 )
-            ));
+            );
             case EDIT_WAYPOINT -> {
                 if (waypoint != null) {
                     openWaypointFromLocationMenu(waypoint);
                 }
             }
-            case SHARE_LOCATION -> {
-                if (target.blockY().isPresent()) {
-                    shareTemporaryLocation(target);
-                }
-            }
+            case SHARE_LOCATION -> shareTemporaryLocation(target);
             case SHARE_WAYPOINT -> {
                 if (waypoint != null) {
                     shareWaypoint(waypoint);
@@ -2023,7 +1900,7 @@ public final class FullscreenMapScreen extends ConfluxScreen {
             case TELEPORT -> {
                 final SessionGuard.Session viewed = viewSession();
                 groundTeleport.teleport(
-                    target.blockX(), target.blockZ(), target.blockY(),
+                    target.blockX(), target.blockZ(), OptionalInt.of(locationTargetY(target)),
                     viewed.dimension(), viewed.world(), !viewingLiveSession()
                 );
             }
@@ -2040,8 +1917,8 @@ public final class FullscreenMapScreen extends ConfluxScreen {
     }
 
     private void shareTemporaryLocation(final FullscreenMapLocationMenu.Target target) {
-        final MinecraftClient client = MinecraftClient.getInstance();
-        if (client.player == null || target.blockY().isEmpty()) {
+        final Minecraft client = Minecraft.getInstance();
+        if (client.player == null) {
             return;
         }
         final String name = Texts.translatable("confluxmap.map.location_menu.temporary_name").getString();
@@ -2050,7 +1927,7 @@ public final class FullscreenMapScreen extends ConfluxScreen {
             name,
             viewSession().dimension(),
             target.blockX(),
-            target.blockY().getAsInt(),
+            locationTargetY(target),
             target.blockZ(),
             TEMPORARY_LOCATION_COLOR,
             "",
@@ -2063,8 +1940,19 @@ public final class FullscreenMapScreen extends ConfluxScreen {
         ));
     }
 
+    /**
+     * Returns the Y used when a cursor column has no captured/predicted surface yet.  The value
+     * is only a waypoint/staging hint: live teleports resolve the loaded target chunk before the
+     * final command, while a missing End surface remains a valid cursor location for annotations.
+     */
+    private int locationTargetY(final FullscreenMapLocationMenu.Target target) {
+        return target.blockY().orElseGet(() -> this.minecraft.player != null
+            ? this.minecraft.player.blockPosition().getY()
+            : FullscreenMapScreen.DEFAULT_CANDIDATE_WAYPOINT_Y);
+    }
+
     private void shareWaypoint(final WaypointRenderEntry waypoint) {
-        final MinecraftClient client = MinecraftClient.getInstance();
+        final Minecraft client = Minecraft.getInstance();
         if (waypoint.local()) {
             viewWaypointService().list().stream()
                 .filter(local -> local.id.equals(waypoint.id()))
@@ -2114,7 +2002,7 @@ public final class FullscreenMapScreen extends ConfluxScreen {
                 .filter(local -> local.id.equals(waypoint.id()))
                 .findFirst()
                 .ifPresent(local -> MinecraftAccess.setScreen(
-                    MinecraftClient.getInstance(), WaypointEditScreen.forEdit(
+                    Minecraft.getInstance(), WaypointEditScreen.forEdit(
                         this, local, this::viewWaypointStore
                     )
                 ));
@@ -2123,7 +2011,7 @@ public final class FullscreenMapScreen extends ConfluxScreen {
         sharedWaypoints.find(waypoint.id())
             .filter(sharedWaypoints::canUpdate)
             .ifPresent(shared -> MinecraftAccess.setScreen(
-                MinecraftClient.getInstance(), WaypointEditScreen.forPublicEdit(this, shared)
+                Minecraft.getInstance(), WaypointEditScreen.forPublicEdit(this, shared)
             ));
     }
 
@@ -2135,14 +2023,10 @@ public final class FullscreenMapScreen extends ConfluxScreen {
      * uses, returning to this screen on save/cancel.
      */
     @Override
-    //#if MC>=12109
-    //$$ public boolean mouseReleased(final Click click) {
-    //$$     final double mouseX = click.x();
-    //$$     final double mouseY = click.y();
-    //$$     final int button = click.button();
-    //#else
-    public boolean mouseReleased(final double mouseX, final double mouseY, final int button) {
-    //#endif
+    public boolean mouseReleased(final MouseButtonEvent click) {
+        final double mouseX = click.x();
+        final double mouseY = click.y();
+        final int button = click.button();
         if (exportSelectionScreen != null && button == 0 && mapPointerPress) {
             mapPointerPress = false;
             if (Math.hypot(mouseX - leftPressX, mouseY - leftPressY) < CLICK_DRAG_TOLERANCE_PX) {
@@ -2155,11 +2039,7 @@ public final class FullscreenMapScreen extends ConfluxScreen {
             return true;
         }
         if (button != 0 || !mapPointerPress) {
-            //#if MC>=12109
-            //$$ return super.mouseReleased(click);
-            //#else
-            return super.mouseReleased(mouseX, mouseY, button);
-            //#endif
+            return super.mouseReleased(click);
         }
         mapPointerPress = false;
         if (hoveredWaypoint != null
@@ -2225,14 +2105,10 @@ public final class FullscreenMapScreen extends ConfluxScreen {
     }
 
     @Override
-    //#if MC>=12109
-    //$$ public boolean mouseDragged(final Click click, final double deltaX, final double deltaY) {
-    //$$     final double mouseX = click.x();
-    //$$     final double mouseY = click.y();
-    //$$     final int button = click.button();
-    //#else
-    public boolean mouseDragged(final double mouseX, final double mouseY, final int button, final double deltaX, final double deltaY) {
-    //#endif
+    public boolean mouseDragged(final MouseButtonEvent click, final double deltaX, final double deltaY) {
+        final double mouseX = click.x();
+        final double mouseY = click.y();
+        final int button = click.button();
         if (button == 0 && annotationPointerPress) {
             if (annotationTool == AnnotationTool.ERASER) {
                 final AnnotationStore store = viewAnnotationStore();
@@ -2253,16 +2129,12 @@ public final class FullscreenMapScreen extends ConfluxScreen {
             centerZ -= deltaY * scale;
             return true;
         }
-        //#if MC>=12109
-        //$$ return super.mouseDragged(click, deltaX, deltaY);
-        //#else
-        return super.mouseDragged(mouseX, mouseY, button, deltaX, deltaY);
-        //#endif
+        return super.mouseDragged(click, deltaX, deltaY);
     }
 
     private boolean isOverMapControls(final double mouseX, final double mouseY) {
         final int left = width - MARGIN - CONTROL_SIZE;
-        final int top = MARGIN + this.textRenderer.fontHeight + 5;
+        final int top = MARGIN + this.font.lineHeight + 5;
         final boolean waypointControls = mouseX >= left && mouseX <= width - MARGIN
             && mouseY >= top && mouseY <= waypointControlsBottom;
         return waypointControls
@@ -2275,14 +2147,14 @@ public final class FullscreenMapScreen extends ConfluxScreen {
             if (!sharedWaypoints.availability().enabled()) {
                 return;
             }
-            MinecraftAccess.setScreen(MinecraftClient.getInstance(), new WaypointListScreen(
+            MinecraftAccess.setScreen(Minecraft.getInstance(), new WaypointListScreen(
                 this, WaypointListScreen.Tab.PUBLIC
             ));
             return;
         }
         for (final Waypoint local : viewWaypointService().list()) {
             if (local.id.equals(waypoint.id())) {
-                MinecraftAccess.setScreen(MinecraftClient.getInstance(), WaypointEditScreen.forEdit(
+                MinecraftAccess.setScreen(Minecraft.getInstance(), WaypointEditScreen.forEdit(
                     this, local, this::viewWaypointStore
                 ));
                 return;
@@ -2291,16 +2163,12 @@ public final class FullscreenMapScreen extends ConfluxScreen {
     }
 
     @Override
-    //#if MC>=12002
-    //$$ public boolean mouseScrolled(
-    //$$     final double mouseX,
-    //$$     final double mouseY,
-    //$$     final double horizontalAmount,
-    //$$     final double amount
-    //$$ ) {
-    //#else
-    public boolean mouseScrolled(final double mouseX, final double mouseY, final double amount) {
-    //#endif
+    public boolean mouseScrolled(
+        final double mouseX,
+        final double mouseY,
+        final double horizontalAmount,
+        final double amount
+    ) {
         final TargetDropdown targetDropdown = targetDropdown();
         if (amount != 0 && targetDropdown != null
             && (targetDropdown.contains(mouseX, mouseY)
@@ -2331,7 +2199,7 @@ public final class FullscreenMapScreen extends ConfluxScreen {
         final double amount
     ) {
         final double oldScale = scale;
-        final double newScale = MathHelper.clamp(oldScale * (amount > 0 ? 1.0 / ZOOM_STEP : ZOOM_STEP), MIN_SCALE, MAX_SCALE);
+        final double newScale = Mth.clamp(oldScale * (amount > 0 ? 1.0 / ZOOM_STEP : ZOOM_STEP), MIN_SCALE, MAX_SCALE);
         if (newScale != oldScale) {
             // Cursor-anchored: keep the world point under the cursor fixed on screen.
             final double cursorWorldX = centerX + (mouseX - viewportCenterX) * oldScale;
@@ -2387,7 +2255,7 @@ public final class FullscreenMapScreen extends ConfluxScreen {
 
     @Override
     protected void renderContents(final GuiDraw draw, final int mouseX, final int mouseY, final float tickDelta) {
-        final MatrixStack matrices = draw.matrices();
+        final PoseStack matrices = draw.matrices();
         final TileService visibleTiles = viewTiles();
         if (mapBrowser.browsing()) {
             mapBrowser.textures().beginFrame();
@@ -2449,9 +2317,9 @@ public final class FullscreenMapScreen extends ConfluxScreen {
                     : "confluxmap.screen.map_export.select_second"
         ).getString();
         draw.drawTextWithShadow(
-            this.textRenderer,
+            this.font,
             instruction,
-            width / 2f - this.textRenderer.getWidth(instruction) / 2f,
+            width / 2f - this.font.width(instruction) / 2f,
             MARGIN,
             TEXT_COLOR
         );
@@ -2472,7 +2340,7 @@ public final class FullscreenMapScreen extends ConfluxScreen {
         final float top = (float) (height / 2.0 + (minZ - centerZ) / scale);
         final float right = (float) (width / 2.0 + ((long) maxX + 1L - centerX) / scale);
         final float bottom = (float) (height / 2.0 + ((long) maxZ + 1L - centerZ) / scale);
-        final MatrixStack matrices = draw.matrices();
+        final PoseStack matrices = draw.matrices();
         RenderUtil.fillRect(matrices, left, top, right - left, bottom - top, 0x303399FF);
         RenderUtil.fillRect(matrices, left, top, right - left, 1f, 0xFF66CCFF);
         RenderUtil.fillRect(matrices, left, bottom - 1f, right - left, 1f, 0xFF66CCFF);
@@ -2480,7 +2348,7 @@ public final class FullscreenMapScreen extends ConfluxScreen {
         RenderUtil.fillRect(matrices, right - 1f, top, 1f, bottom - top, 0xFF66CCFF);
     }
 
-    private void drawPlayerTrail(final MatrixStack matrices) {
+    private void drawPlayerTrail(final PoseStack matrices) {
         if (!config.playerTrailEnabled || !viewingLiveSession()) {
             return;
         }
@@ -2541,7 +2409,7 @@ public final class FullscreenMapScreen extends ConfluxScreen {
         );
         AnnotationRenderer.drawLabels(
             draw,
-            this.textRenderer,
+            this.font,
             visible,
             projection,
             0,
@@ -2584,13 +2452,13 @@ public final class FullscreenMapScreen extends ConfluxScreen {
         return displayMode() == FullscreenDisplayMode.BIOME;
     }
 
-    private Text displayModeTooltip() {
+    private Component displayModeTooltip() {
         final String valueKey = switch (displayMode()) {
             case TERRAIN -> "confluxmap.map.display_mode.terrain";
             case CHUNK_LOAD_STATE -> "confluxmap.map.display_mode.chunk_load_state";
             case BIOME -> "confluxmap.map.display_mode.biome";
         };
-        final Text currentMode = Texts.translatable(
+        final Component currentMode = Texts.translatable(
             "confluxmap.map.display_mode",
             Texts.translatable(valueKey).getString()
         );
@@ -2610,7 +2478,7 @@ public final class FullscreenMapScreen extends ConfluxScreen {
         displayModeButton.active = true;
     }
 
-    private Text loadStateDetailLabel() {
+    private Component loadStateDetailLabel() {
         final String valueKey = config.chunkLoadDetailMode == ChunkLoadDetailMode.EXACT
             ? "confluxmap.map.load_state.detail.exact"
             : "confluxmap.map.load_state.detail.bands";
@@ -2621,7 +2489,7 @@ public final class FullscreenMapScreen extends ConfluxScreen {
     }
 
     private void drawChunkLoadStateOverlay(final GuiDraw draw) {
-        final MatrixStack matrices = draw.matrices();
+        final PoseStack matrices = draw.matrices();
         final int minChunkX = TileMath.blockToChunk(
             (int) Math.floor(centerX - width / 2.0 * scale)
         );
@@ -2660,12 +2528,12 @@ public final class FullscreenMapScreen extends ConfluxScreen {
             }
             if (style.drawLevelLabel()) {
                 final String level = "L" + entry.level();
-                final int textWidth = this.textRenderer.getWidth(level);
+                final int textWidth = this.font.width(level);
                 draw.drawTextWithShadow(
-                    this.textRenderer,
+                    this.font,
                     level,
                     screenX + (chunkSize - textWidth) / 2f,
-                    screenY + (chunkSize - this.textRenderer.fontHeight) / 2f,
+                    screenY + (chunkSize - this.font.lineHeight) / 2f,
                     TEXT_COLOR
                 );
             }
@@ -2682,7 +2550,7 @@ public final class FullscreenMapScreen extends ConfluxScreen {
     }
 
     private static void drawChunkLoadOutline(
-        final MatrixStack matrices,
+        final PoseStack matrices,
         final float x,
         final float y,
         final float size
@@ -2694,7 +2562,7 @@ public final class FullscreenMapScreen extends ConfluxScreen {
     }
 
     private void drawChunkLoadStateLegend(final GuiDraw draw) {
-        final int rowHeight = this.textRenderer.fontHeight + 3;
+        final int rowHeight = this.font.lineHeight + 3;
         final int legendWidth = Math.min(180, Math.max(130, width / 3));
         final int legendHeight = rowHeight * 5 + 8;
         final int x = MARGIN;
@@ -2705,7 +2573,7 @@ public final class FullscreenMapScreen extends ConfluxScreen {
                 ? "confluxmap.map.load_state.ready"
                 : "confluxmap.map.load_state.loading"
         ).getString();
-        draw.drawTextWithShadow(this.textRenderer, status, x + 5, y + 4, TEXT_COLOR);
+        draw.drawTextWithShadow(this.font, status, x + 5, y + 4, TEXT_COLOR);
         drawLegendRow(draw, x, y + 4 + rowHeight, ChunkLoadBand.ENTITY_TICKING);
         drawLegendRow(draw, x, y + 4 + rowHeight * 2, ChunkLoadBand.BLOCK_TICKING);
         drawLegendRow(draw, x, y + 4 + rowHeight * 3, ChunkLoadBand.BORDER);
@@ -2721,7 +2589,7 @@ public final class FullscreenMapScreen extends ConfluxScreen {
         draw.fill(x + 5, y + 1, x + 13, y + 9, LOAD_STATE_OUTLINE_COLOR);
         draw.fill(x + 6, y + 2, x + 12, y + 8, loadStateColor(band));
         draw.drawTextWithShadow(
-            this.textRenderer,
+            this.font,
             loadStateBandName(band),
             x + 17,
             y,
@@ -2751,7 +2619,7 @@ public final class FullscreenMapScreen extends ConfluxScreen {
     }
 
     private TargetDropdown targetDropdown() {
-        final ButtonWidget trigger = openTargetSelector == TargetSelector.WORLD
+        final Button trigger = openTargetSelector == TargetSelector.WORLD
             ? worldSelectorButton
             : openTargetSelector == TargetSelector.DIMENSION ? dimensionSelectorButton : null;
         if (trigger == null) {
@@ -2796,7 +2664,7 @@ public final class FullscreenMapScreen extends ConfluxScreen {
     }
 
     private static boolean contains(
-        final ButtonWidget button,
+        final Button button,
         final double mouseX,
         final double mouseY
     ) {
@@ -2890,20 +2758,14 @@ public final class FullscreenMapScreen extends ConfluxScreen {
                     rowY + TARGET_DROPDOWN_ROW_HEIGHT - 2, 0xFFFFFFFF
                 );
             }
-            //#if MC>=260100
-            //$$ final String label = this.font.plainSubstrByWidth(
-            //$$     targetOptionLabel(option), dropdown.width() - 10
-            //$$ );
-            //#else
-            final String label = this.textRenderer.trimToWidth(
+            final String label = this.font.plainSubstrByWidth(
                 targetOptionLabel(option), dropdown.width() - 10
             );
-            //#endif
             draw.drawTextWithShadow(
-                this.textRenderer,
+                this.font,
                 label,
                 dropdown.x() + 5,
-                rowY + (TARGET_DROPDOWN_ROW_HEIGHT - this.textRenderer.fontHeight) / 2f,
+                rowY + (TARGET_DROPDOWN_ROW_HEIGHT - this.font.lineHeight) / 2f,
                 selected ? 0xFFFFFFFF : 0xFFE0E0E0
             );
         }
@@ -2926,25 +2788,25 @@ public final class FullscreenMapScreen extends ConfluxScreen {
         final float tickDelta
     ) {
         renderTargetDropdown(draw, mouseX, mouseY);
-        final Text annotationTooltip = hoveredAnnotationTooltip();
-        final Text locationActionTooltip = hoveredLocationActionTooltip();
-        final Text tooltip;
-        if (displayModeButton != null && displayModeButton.isHovered()) {
+        final Component annotationTooltip = hoveredAnnotationTooltip();
+        final Component locationActionTooltip = hoveredLocationActionTooltip();
+        final Component tooltip;
+        if (displayModeButton != null && displayModeButton.isHoveredOrFocused()) {
             tooltip = displayModeTooltip();
-        } else if (localVisibilityButton != null && localVisibilityButton.isHovered()) {
+        } else if (localVisibilityButton != null && localVisibilityButton.isHoveredOrFocused()) {
             tooltip = visibilityTooltip(true);
-        } else if (sharedVisibilityButton != null && sharedVisibilityButton.isHovered()) {
+        } else if (sharedVisibilityButton != null && sharedVisibilityButton.isHoveredOrFocused()) {
             tooltip = sharedAvailability.disabledByServer()
                 ? Texts.translatable("confluxmap.shared_waypoints.disabled_by_server")
                 : sharedVisibilityButton.active
                     ? visibilityTooltip(false)
                     : Texts.translatable("confluxmap.map.waypoints.shared.unavailable");
-        } else if (manageWaypointsButton != null && manageWaypointsButton.isHovered()) {
+        } else if (manageWaypointsButton != null && manageWaypointsButton.isHoveredOrFocused()) {
             tooltip = Texts.translatable("confluxmap.map.waypoints.manage.tooltip");
         } else if (locationActionHeightUnavailable()) {
             tooltip = Texts.translatable("confluxmap.map.location_menu.height_unavailable");
         } else if (teleportLocationButton != null
-            && teleportLocationButton.isHovered()
+            && teleportLocationButton.isHoveredOrFocused()
             && !teleportLocationButton.active) {
             tooltip = Texts.translatable(
                 teleportLocationUnavailableKey == null
@@ -2953,7 +2815,7 @@ public final class FullscreenMapScreen extends ConfluxScreen {
             );
         } else if (locationActionTooltip != null) {
             tooltip = locationActionTooltip;
-        } else if (structureSearchButton != null && structureSearchButton.isHovered()) {
+        } else if (structureSearchButton != null && structureSearchButton.isHoveredOrFocused()) {
             tooltip = Texts.translatable(
                 structureSearchButton.active
                     ? "confluxmap.map.search.tooltip"
@@ -2973,12 +2835,12 @@ public final class FullscreenMapScreen extends ConfluxScreen {
         } else {
             return;
         }
-        draw.drawTooltip(this, this.textRenderer, tooltip, mouseX, mouseY);
+        draw.drawTooltip(this, this.font, tooltip, mouseX, mouseY);
     }
 
-    private Text hoveredLocationActionTooltip() {
-        for (final Map.Entry<ButtonWidget, String> entry : locationActionTooltips.entrySet()) {
-            if (entry.getKey().isHovered()) {
+    private Component hoveredLocationActionTooltip() {
+        for (final Map.Entry<Button, String> entry : locationActionTooltips.entrySet()) {
+            if (entry.getKey().isHoveredOrFocused()) {
                 return Texts.translatable(entry.getValue());
             }
         }
@@ -3000,9 +2862,9 @@ public final class FullscreenMapScreen extends ConfluxScreen {
         };
     }
 
-    private Text hoveredAnnotationTooltip() {
-        for (final Map.Entry<ButtonWidget, String> entry : annotationTooltips.entrySet()) {
-            if (!entry.getKey().isHovered()) {
+    private Component hoveredAnnotationTooltip() {
+        for (final Map.Entry<Button, String> entry : annotationTooltips.entrySet()) {
+            if (!entry.getKey().isHoveredOrFocused()) {
                 continue;
             }
             if (entry.getKey() == annotationPersistenceButton) {
@@ -3035,8 +2897,8 @@ public final class FullscreenMapScreen extends ConfluxScreen {
         if (locationMenuTarget == null || locationMenuTarget.blockY().isPresent()) {
             return false;
         }
-        return (setWaypointLocationButton != null && setWaypointLocationButton.isHovered())
-            || (shareLocationButton != null && shareLocationButton.isHovered());
+        return (setWaypointLocationButton != null && setWaypointLocationButton.isHoveredOrFocused())
+            || (shareLocationButton != null && shareLocationButton.isHoveredOrFocused());
     }
 
     private record AnnotationToolbarBounds(int x, int y, int width, int height) {
@@ -3045,7 +2907,7 @@ public final class FullscreenMapScreen extends ConfluxScreen {
         }
     }
 
-    private final class MapIconButton extends ButtonWidget {
+    private final class MapIconButton extends Button {
         private Identifier icon;
         private boolean selected;
 
@@ -3053,7 +2915,7 @@ public final class FullscreenMapScreen extends ConfluxScreen {
             final int x,
             final int y,
             final Identifier icon,
-            final PressAction onPress
+            final OnPress onPress
         ) {
             this(x, y, CONTROL_SIZE, icon, Texts.literal(""), onPress);
         }
@@ -3062,8 +2924,8 @@ public final class FullscreenMapScreen extends ConfluxScreen {
             final int x,
             final int y,
             final Identifier icon,
-            final net.minecraft.text.Text message,
-            final PressAction onPress
+            final net.minecraft.network.chat.Component message,
+            final OnPress onPress
         ) {
             this(x, y, CONTROL_SIZE, icon, message, onPress);
         }
@@ -3073,19 +2935,13 @@ public final class FullscreenMapScreen extends ConfluxScreen {
             final int y,
             final int size,
             final Identifier icon,
-            final net.minecraft.text.Text message,
-            final PressAction onPress
+            final net.minecraft.network.chat.Component message,
+            final OnPress onPress
         ) {
-            //#if MC>=12111
-            //$$ super(
-            //$$     x, y, size, size, message,
-            //$$     onPress, ButtonWidget.DEFAULT_NARRATION_SUPPLIER
-            //$$ );
-            //#elseif MC>=11904
-            //$$ super(x, y, size, size, message, onPress, ButtonWidget.DEFAULT_NARRATION_SUPPLIER);
-            //#else
-            super(x, y, size, size, message, onPress);
-            //#endif
+            super(
+                x, y, size, size, message,
+                onPress, Button.DEFAULT_NARRATION
+            );
             this.icon = icon;
         }
 
@@ -3105,150 +2961,21 @@ public final class FullscreenMapScreen extends ConfluxScreen {
          * reuses this path at the vanilla 20px size so both icon-button groups stay consistent.
          */
         @Override
-        //#if MC>=260100
-        //$$ protected void extractContents(
-        //$$     final GuiGraphicsExtractor context,
-        //$$     final int mouseX,
-        //$$     final int mouseY,
-        //$$     final float delta
-        //$$ ) {
-        //$$     extractDefaultSprite(context);
-        //$$     drawContents(GuiDraw.of(context), Widgets.x(this), Widgets.y(this));
-        //$$ }
-        //#elseif MC>=12111
-        //$$ protected void drawIcon(
-        //$$     final DrawContext context,
-        //$$     final int mouseX,
-        //$$     final int mouseY,
-        //$$     final float delta
-        //$$ ) {
-        //$$     drawButton(context);
-        //$$     drawContents(GuiDraw.of(context), Widgets.x(this), Widgets.y(this));
-        //$$ }
-        //#elseif MC>=12108
-        //$$ protected void renderWidget(
-        //$$     final DrawContext context,
-        //$$     final int mouseX,
-        //$$     final int mouseY,
-        //$$     final float delta
-        //$$ ) {
-        //$$     final int x = Widgets.x(this);
-        //$$     final int y = Widgets.y(this);
-        //$$     final Identifier background = !active
-        //$$         ? Ids.of("widget/button_disabled")
-        //$$         : isHovered() ? Ids.of("widget/button_highlighted") : Ids.of("widget/button");
-        //$$     context.drawGuiTexture(
-        //$$         RenderPipelines.GUI_TEXTURED,
-        //$$         background,
-        //$$         x,
-        //$$         y,
-        //$$         getWidth(),
-        //$$         getHeight(),
-        //$$         ((int) (alpha * 255.0f) << 24) | 0x00FFFFFF
-        //$$     );
-        //$$     drawContents(GuiDraw.of(context), x, y);
-        //$$ }
-        //#elseif MC>=12103
-        //$$ protected void renderWidget(
-        //$$     final DrawContext context,
-        //$$     final int mouseX,
-        //$$     final int mouseY,
-        //$$     final float delta
-        //$$ ) {
-        //$$     final int x = Widgets.x(this);
-        //$$     final int y = Widgets.y(this);
-        //$$     final Identifier background = !active
-        //$$         ? Ids.of("widget/button_disabled")
-        //$$         : isHovered() ? Ids.of("widget/button_highlighted") : Ids.of("widget/button");
-        //$$     context.drawGuiTexture(
-        //$$         RenderLayer::getGuiTextured,
-        //$$         background,
-        //$$         x,
-        //$$         y,
-        //$$         getWidth(),
-        //$$         getHeight(),
-        //$$         ((int) (alpha * 255.0f) << 24) | 0x00FFFFFF
-        //$$     );
-        //$$     context.draw();
-        //$$     drawContents(GuiDraw.of(context), x, y);
-        //$$ }
-        //#elseif MC>=12002
-        //$$ protected void renderWidget(
-        //$$     final DrawContext context,
-        //$$     final int mouseX,
-        //$$     final int mouseY,
-        //$$     final float delta
-        //$$ ) {
-        //$$     final int x = Widgets.x(this);
-        //$$     final int y = Widgets.y(this);
-        //$$     final Identifier background = !active
-        //$$         ? Ids.of("widget/button_disabled")
-        //$$         : isHovered() ? Ids.of("widget/button_highlighted") : Ids.of("widget/button");
-        //$$     context.setShaderColor(1.0f, 1.0f, 1.0f, alpha);
-        //$$     context.drawGuiTexture(background, x, y, getWidth(), getHeight());
-        //$$     context.setShaderColor(1.0f, 1.0f, 1.0f, 1.0f);
-        //$$     context.draw();
-        //$$     drawContents(GuiDraw.of(context), x, y);
-        //$$ }
-        //#elseif MC>=12000
-        //$$ protected void renderButton(
-        //$$     final DrawContext context,
-        //$$     final int mouseX,
-        //$$     final int mouseY,
-        //$$     final float delta
-        //$$ ) {
-        //$$     context.setShaderColor(1.0f, 1.0f, 1.0f, alpha);
-        //$$     final int v = 46 + (!active ? 0 : isHovered() ? 2 : 1) * 20;
-        //$$     final int x = Widgets.x(this);
-        //$$     final int y = Widgets.y(this);
-        //$$     final int leftW = getWidth() / 2;
-        //$$     final int rightW = getWidth() - leftW;
-        //$$     final int topH = getHeight() / 2;
-        //$$     final int bottomH = getHeight() - topH;
-        //$$     context.drawTexture(WIDGETS_TEXTURE, x, y, 0, v, leftW, topH);
-        //$$     context.drawTexture(WIDGETS_TEXTURE, x + leftW, y, 200 - rightW, v, rightW, topH);
-        //$$     context.drawTexture(WIDGETS_TEXTURE, x, y + topH, 0, v + 20 - bottomH, leftW, bottomH);
-        //$$     context.drawTexture(
-        //$$         WIDGETS_TEXTURE, x + leftW, y + topH,
-        //$$         200 - rightW, v + 20 - bottomH, rightW, bottomH
-        //$$     );
-        //$$     context.setShaderColor(1.0f, 1.0f, 1.0f, 1.0f);
-        //$$     context.draw();
-        //$$     drawContents(GuiDraw.of(context), x, y);
-        //$$ }
-        //#else
-        public void renderButton(
-            final MatrixStack matrices,
+        protected void extractContents(
+            final GuiGraphicsExtractor context,
             final int mouseX,
             final int mouseY,
             final float delta
         ) {
-            RenderSystem.setShader(GameRenderer::getPositionTexShader);
-            RenderSystem.setShaderTexture(0, WIDGETS_TEXTURE);
-            RenderSystem.setShaderColor(1.0f, 1.0f, 1.0f, alpha);
-            RenderSystem.enableBlend();
-            RenderSystem.defaultBlendFunc();
-            RenderSystem.enableDepthTest();
-            final int v = 46 + getYImage(isHovered()) * 20;
-            final int x = Widgets.x(this);
-            final int y = Widgets.y(this);
-            final int leftW = getWidth() / 2;
-            final int rightW = getWidth() - leftW;
-            final int topH = getHeight() / 2;
-            final int bottomH = getHeight() - topH;
-            drawTexture(matrices, x, y, 0, v, leftW, topH);
-            drawTexture(matrices, x + leftW, y, 200 - rightW, v, rightW, topH);
-            drawTexture(matrices, x, y + topH, 0, v + 20 - bottomH, leftW, bottomH);
-            drawTexture(matrices, x + leftW, y + topH, 200 - rightW, v + 20 - bottomH, rightW, bottomH);
-            drawContents(GuiDraw.of(matrices), x, y);
+            extractDefaultSprite(context);
+            drawContents(GuiDraw.of(context), Widgets.x(this), Widgets.y(this));
         }
-        //#endif
 
         private void drawContents(final GuiDraw draw, final int x, final int y) {
-            final MatrixStack matrices = draw.matrices();
+            final PoseStack matrices = draw.matrices();
             final UiIcon resolvedIcon = uiTheme.icon(icon);
             final MapIconButtonVisualState visual = MapIconButtonVisualState.of(
-                active, selected, isHovered(), resolvedIcon.colorMode(),
+                active, selected, isHoveredOrFocused(), resolvedIcon.colorMode(),
                 uiTheme.useVanillaButtonStyle()
             );
             if (visual.background() != 0) {
@@ -3269,7 +2996,7 @@ public final class FullscreenMapScreen extends ConfluxScreen {
             final int iconX = x + (getWidth() - CONTROL_ICON_SIZE) / 2;
             final int iconY = y + (getHeight() - CONTROL_ICON_SIZE) / 2;
             final UiTextureRegion texture = resolvedIcon.region();
-            RenderUtil.bindTexture(MinecraftClient.getInstance(), texture.texture());
+            RenderUtil.bindTexture(Minecraft.getInstance(), texture.texture());
             RenderUtil.drawTintedQuad(
                 matrices,
                 iconX,
@@ -3391,7 +3118,7 @@ public final class FullscreenMapScreen extends ConfluxScreen {
      * authoritative data is newer, contains synchronized pixels where the server is newer, and
      * falls back to prediction only where neither real source has coverage.
      */
-    private void drawTiles(final MatrixStack matrices) {
+    private void drawTiles(final PoseStack matrices) {
         final int lod = currentLod();
         final double pxPerBlock = 1.0 / scale;
         final double blocksPerTile = TileMath.blocksPerTile(lod);
@@ -3418,14 +3145,14 @@ public final class FullscreenMapScreen extends ConfluxScreen {
                     centerX, centerZ, width, height, scale
                 );
                 final ChunkViewport playerView;
-                if (this.client.player == null) {
+                if (this.minecraft.player == null) {
                     playerView = null;
                 } else {
-                    final int playerChunkX = this.client.player.getBlockPos().getX() >> 4;
-                    final int playerChunkZ = this.client.player.getBlockPos().getZ() >> 4;
+                    final int playerChunkX = this.minecraft.player.blockPosition().getX() >> 4;
+                    final int playerChunkZ = this.minecraft.player.blockPosition().getZ() >> 4;
                     final int advertisedRadius = companion.serverViewDistance();
                     final int radius = advertisedRadius >= 0
-                        ? advertisedRadius : MinecraftAccess.viewDistance(this.client);
+                        ? advertisedRadius : MinecraftAccess.viewDistance(this.minecraft);
                     playerView = ChunkViewport.centered(playerChunkX, playerChunkZ, radius);
                 }
                 ConfluxMapClient.get().mapSyncClient().reportViewport(
@@ -3467,7 +3194,7 @@ public final class FullscreenMapScreen extends ConfluxScreen {
     }
 
     private void drawPredictedTiles(
-        final MatrixStack matrices,
+        final PoseStack matrices,
         final SessionGuard.Session session,
         final String layerId,
         final int lod,
@@ -3534,7 +3261,7 @@ public final class FullscreenMapScreen extends ConfluxScreen {
         final int mouseY
     ) {
         hoveredRadarPlayer = null;
-        if (!viewingLiveWorld() || this.client.world == null) {
+        if (!viewingLiveWorld() || this.minecraft.level == null) {
             return;
         }
         final Optional<PlayerView> playerView = gameBridge.viewpoint(tickDelta);
@@ -3551,7 +3278,7 @@ public final class FullscreenMapScreen extends ConfluxScreen {
             config.radarShowPlayers
                 ? serverPlayerRadar.playersIn(viewedDimension, nowMs)
                 : List.of(),
-            this.client.player == null ? null : this.client.player.getUuid(),
+            this.minecraft.player == null ? null : this.minecraft.player.getUUID(),
             viewedDimension.equals(gameBridge.session().dimension()) ? player.y() : Double.NaN
         );
         final Optional<ServerPlayerRadarState.HighlightView> highlight =
@@ -3575,10 +3302,10 @@ public final class FullscreenMapScreen extends ConfluxScreen {
             double ex = entry.x();
             double ez = entry.z();
             int yDelta = entry.yDelta();
-            final Entity live = this.client.world.getEntityById(entry.entityId());
+            final Entity live = this.minecraft.level.getEntity(entry.entityId());
             if (live != null) {
-                ex = MathHelper.lerp(tickDelta, live.prevX, live.getX());
-                ez = MathHelper.lerp(tickDelta, live.prevZ, live.getZ());
+                ex = Mth.lerp(tickDelta, live.xo, live.getX());
+                ez = Mth.lerp(tickDelta, live.zo, live.getZ());
                 yDelta = (int) Math.round(live.getY() - player.y());
             }
 
@@ -3629,7 +3356,7 @@ public final class FullscreenMapScreen extends ConfluxScreen {
             }
         }
         RadarMarkerRenderer.drawAll(
-            draw, this.client, config, radarIconManager, markers,
+            draw, this.minecraft, config, radarIconManager, markers,
             RadarMarkerRenderer.Presentation.detailed(config.radarShowPlayerNames),
             marker -> !radarMarkerIntersectsUi(marker)
         );
@@ -3645,8 +3372,8 @@ public final class FullscreenMapScreen extends ConfluxScreen {
         final String name = marker.entry().name();
         final MapOverlayBounds bounds = MapOverlayBounds.radar(
             marker.x(), marker.y(), iconHalf,
-            name == null ? 0f : this.textRenderer.getWidth(name),
-            this.textRenderer.fontHeight,
+            name == null ? 0f : this.font.width(name),
+            this.font.lineHeight,
             marker.entry().category(),
             config.radarShowPlayerNames
         );
@@ -3715,11 +3442,11 @@ public final class FullscreenMapScreen extends ConfluxScreen {
                 final float labelX = screenX + 10f;
                 final float labelY = screenY - 4f;
                 final MapOverlayBounds labelBounds = MapOverlayBounds.text(
-                    labelX, labelY, this.textRenderer.getWidth(label), this.textRenderer.fontHeight
+                    labelX, labelY, this.font.width(label), this.font.lineHeight
                 );
                 if (!mapOverlayIntersectsUi(labelBounds)) {
                     draw.drawTextWithShadow(
-                        this.textRenderer, label, labelX, labelY, TEXT_COLOR
+                        this.font, label, labelX, labelY, TEXT_COLOR
                     );
                 }
             }
@@ -3727,7 +3454,7 @@ public final class FullscreenMapScreen extends ConfluxScreen {
     }
 
     /** Faint lines on LOD-0 tile boundaries (256-block spacing), skipped once they'd be denser than {@link #MIN_GRID_SPACING_PX}. */
-    private void drawGrid(final MatrixStack matrices) {
+    private void drawGrid(final PoseStack matrices) {
         final double pxPerBlock = 1.0 / scale;
         final double spacingPx = TileMath.TILE_SIZE * pxPerBlock;
         if (spacingPx < MIN_GRID_SPACING_PX) {
@@ -3754,7 +3481,7 @@ public final class FullscreenMapScreen extends ConfluxScreen {
      * and skipped once a chunk would render under {@link #MIN_CHUNK_GRID_SPACING_PX} wide, to
      * avoid moire noise when zoomed far out.
      */
-    private void drawChunkGrid(final MatrixStack matrices, final int mouseX, final int mouseY) {
+    private void drawChunkGrid(final PoseStack matrices, final int mouseX, final int mouseY) {
         if (!config.fullmapChunkGrid) {
             return;
         }
@@ -3783,7 +3510,7 @@ public final class FullscreenMapScreen extends ConfluxScreen {
     }
 
     /** Fills the 16x16-block chunk under the cursor and outlines it, layered on top of the grid lines drawn just above. */
-    private void drawHoveredChunkHighlight(final MatrixStack matrices, final int mouseX, final int mouseY, final double pxPerBlock) {
+    private void drawHoveredChunkHighlight(final PoseStack matrices, final int mouseX, final int mouseY, final double pxPerBlock) {
         final double hoverWorldX = centerX + (mouseX - width / 2.0) * scale;
         final double hoverWorldZ = centerZ + (mouseY - height / 2.0) * scale;
         final int chunkX = TileMath.blockToChunk((int) Math.floor(hoverWorldX));
@@ -3801,7 +3528,7 @@ public final class FullscreenMapScreen extends ConfluxScreen {
 
     /** Draws a translucent marker at the detached camera's world position. */
     private void drawCameraMarker(
-        final MatrixStack matrices,
+        final PoseStack matrices,
         final Optional<PlayerView> viewpoint
     ) {
         if (!viewingLiveSession() || !gameBridge.isCameraDetached()) {
@@ -3815,7 +3542,7 @@ public final class FullscreenMapScreen extends ConfluxScreen {
         final float screenX = (float) (width / 2.0 + (camera.x() - centerX) * pxPerBlock);
         final float screenY = (float) (height / 2.0 + (camera.z() - centerZ) * pxPerBlock);
         PlayerMarkerRenderer.draw(
-            this.client,
+            this.minecraft,
             matrices,
             uiTheme,
             config.playerMarkerStyle,
@@ -3828,7 +3555,7 @@ public final class FullscreenMapScreen extends ConfluxScreen {
     }
 
     /** Always north-locked, so only the arrow itself rotates with the player's facing (mirrors {@code MinimapHudRenderer}'s north-locked mode). */
-    private void drawPlayerMarker(final MatrixStack matrices, final float tickDelta) {
+    private void drawPlayerMarker(final PoseStack matrices, final float tickDelta) {
         if (!viewingLiveSession()) {
             return;
         }
@@ -3841,7 +3568,7 @@ public final class FullscreenMapScreen extends ConfluxScreen {
         final float screenX = (float) (width / 2.0 + (player.x() - centerX) * pxPerBlock);
         final float screenY = (float) (height / 2.0 + (player.z() - centerZ) * pxPerBlock);
         PlayerMarkerRenderer.draw(
-            this.client,
+            this.minecraft,
             matrices,
             uiTheme,
             config.playerMarkerStyle,
@@ -3908,18 +3635,18 @@ public final class FullscreenMapScreen extends ConfluxScreen {
             final float markerBottom = marker.screenY() + MARKER_HALF_SIZE + 1f;
             if (!mapOverlayIntersectsUi(markerLeft, markerTop, markerRight, markerBottom)) {
                 WaypointMarkerRenderer.draw(
-                    draw, this.client.textRenderer, waypoint, marker.screenX(), marker.screenY(),
+                    draw, this.minecraft.font, waypoint, marker.screenX(), marker.screenY(),
                     MARKER_HALF_SIZE, visibilityAlpha(selected, hasHighlight), isHovered, relation
                 );
             }
             if (scale <= NAME_LABEL_MAX_SCALE || isHovered) {
                 final float labelX = marker.screenX() + MARKER_HALF_SIZE + 2;
                 final float labelY = marker.screenY() - 4;
-                final float labelRight = labelX + this.textRenderer.getWidth(waypoint.name());
-                final float labelBottom = labelY + this.textRenderer.fontHeight;
+                final float labelRight = labelX + this.font.width(waypoint.name());
+                final float labelBottom = labelY + this.font.lineHeight;
                 if (!mapOverlayIntersectsUi(labelX, labelY, labelRight, labelBottom)) {
                     draw.drawTextWithShadow(
-                        this.textRenderer, waypoint.name(), labelX, labelY,
+                        this.font, waypoint.name(), labelX, labelY,
                         withAlpha(TEXT_COLOR, visibilityAlpha(selected, hasHighlight))
                     );
                 }
@@ -3986,7 +3713,7 @@ public final class FullscreenMapScreen extends ConfluxScreen {
             return true;
         }
         for (final var child : children()) {
-            if (!(child instanceof ClickableWidget widget) || !widget.visible) {
+            if (!(child instanceof AbstractWidget widget) || !widget.visible) {
                 continue;
             }
             if (intersects(
@@ -4025,7 +3752,7 @@ public final class FullscreenMapScreen extends ConfluxScreen {
             ? shortWorldId(session.world().worldId()) + " · "
                 + dimensionDisplayName(session.dimension())
             : dimensionDisplayName(session.dimension());
-        draw.drawTextWithShadow(this.textRenderer, text, MARGIN, MARGIN, TEXT_COLOR);
+        draw.drawTextWithShadow(this.font, text, MARGIN, MARGIN, TEXT_COLOR);
     }
 
     private static String shortWorldId(final String worldId) {
@@ -4039,7 +3766,7 @@ public final class FullscreenMapScreen extends ConfluxScreen {
             ? layerSelector.current().pivotY()
             : layer.param();
         final String text = MapLayerText.label(layer, currentY);
-        draw.drawTextWithShadow(this.textRenderer, text, MARGIN, MARGIN + this.textRenderer.fontHeight + 2, TEXT_COLOR);
+        draw.drawTextWithShadow(this.font, text, MARGIN, MARGIN + this.font.lineHeight + 2, TEXT_COLOR);
     }
 
     private void drawPredictionLabel(final GuiDraw draw) {
@@ -4065,7 +3792,7 @@ public final class FullscreenMapScreen extends ConfluxScreen {
                 : modeLine;
         }
         draw.drawTextWithShadow(
-            this.textRenderer, text, MARGIN, MARGIN + this.textRenderer.fontHeight * 2 + 4, TEXT_COLOR
+            this.font, text, MARGIN, MARGIN + this.font.lineHeight * 2 + 4, TEXT_COLOR
         );
     }
 
@@ -4116,7 +3843,7 @@ public final class FullscreenMapScreen extends ConfluxScreen {
             }
         }
         final int row = predictionLabelVisible() ? 3 : 2;
-        draw.drawTextWithShadow(this.textRenderer, text, MARGIN, MARGIN + row * (this.textRenderer.fontHeight + 2), color);
+        draw.drawTextWithShadow(this.font, text, MARGIN, MARGIN + row * (this.font.lineHeight + 2), color);
     }
 
     private static String formatSyncDuration(final long durationNanos) {
@@ -4141,11 +3868,11 @@ public final class FullscreenMapScreen extends ConfluxScreen {
         final String text = Texts.translatable(
             "confluxmap.map.scale", FullscreenZoomLabel.format(scale)
         ).getString();
-        final int textWidth = this.textRenderer.getWidth(text);
+        final int textWidth = this.font.width(text);
         final int x = embeddedLayout == null
             ? width - MARGIN - textWidth
             : embeddedLayout.mapRightAlignedX(textWidth, MARGIN);
-        draw.drawTextWithShadow(this.textRenderer, text, x, MARGIN, TEXT_COLOR);
+        draw.drawTextWithShadow(this.font, text, x, MARGIN, TEXT_COLOR);
     }
 
     /**
@@ -4170,8 +3897,8 @@ public final class FullscreenMapScreen extends ConfluxScreen {
             final String biomeName = cursorBiomeName(blockX, blockZ);
             text = blockX + ", " + blockZ + (biomeName == null ? "" : " · " + biomeName);
         }
-        final int textWidth = this.textRenderer.getWidth(text);
-        draw.drawTextWithShadow(this.textRenderer, text, width / 2f - textWidth / 2f, height - MARGIN - 10, TEXT_COLOR);
+        final int textWidth = this.font.width(text);
+        draw.drawTextWithShadow(this.font, text, width / 2f - textWidth / 2f, height - MARGIN - 10, TEXT_COLOR);
     }
 
     private String chunkLoadStateCursorText(final int mouseX, final int mouseY) {
@@ -4206,14 +3933,14 @@ public final class FullscreenMapScreen extends ConfluxScreen {
     private String cursorBiomeName(final int blockX, final int blockZ) {
         final SessionGuard.Session session = viewSession();
         final MapLayer layer = viewLayer();
-        final ClientWorld world = this.client.world;
+        final ClientLevel world = this.minecraft.level;
         if (viewingLiveSession() && world != null) {
-            final int playerY = gameBridge.player().map(p -> p.blockY()).orElse(world.getBottomY());
+            final int playerY = gameBridge.player().map(p -> p.blockY()).orElse(world.getMinY());
             final int biomeY = FullscreenMapLayerPolicy.biomeSampleY(
                 layer, playerY, layerSelector.current().pivotY()
             );
             final BlockPos pos = new BlockPos(
-                blockX, MathHelper.clamp(biomeY, world.getBottomY(), world.getTopY() - 1), blockZ
+                blockX, Mth.clamp(biomeY, world.getMinY(), world.getMaxY() - 1), blockZ
             );
             if (ClientChunkLookup.isLoaded(world, blockX, blockZ)) {
                 final Identifier biomeId = Regs.biomeIdAt(world, pos);
@@ -4244,7 +3971,7 @@ public final class FullscreenMapScreen extends ConfluxScreen {
     private static String predictedBiomeName(final int cubiomesId) {
         String fallback = null;
         for (final String name : CubiomesBiomeIds.namesForId(cubiomesId)) {
-            final String key = Util.createTranslationKey("biome", Ids.of("minecraft", name));
+            final String key = Util.makeDescriptionId("biome", Ids.of("minecraft", name));
             final String translated = Texts.translatable(key).getString();
             if (!translated.equals(key)) {
                 return translated;
@@ -4263,12 +3990,12 @@ public final class FullscreenMapScreen extends ConfluxScreen {
             return;
         }
         final String text = Texts.translatable("confluxmap.map.update_badge", info.get().latestVersion()).getString();
-        final int textWidth = this.textRenderer.getWidth(text);
-        draw.drawTextWithShadow(this.textRenderer, text, width - MARGIN - textWidth, height - MARGIN - 10, UPDATE_TEXT_COLOR);
+        final int textWidth = this.font.width(text);
+        draw.drawTextWithShadow(this.font, text, width - MARGIN - textWidth, height - MARGIN - 10, UPDATE_TEXT_COLOR);
     }
 
     private static String translatedBiomeName(final Identifier biomeId) {
-        return Texts.translatable(Util.createTranslationKey("biome", biomeId)).getString();
+        return Texts.translatable(Util.makeDescriptionId("biome", biomeId)).getString();
     }
 
     private static String dimensionDisplayName(final DimensionId dimension) {
@@ -4300,7 +4027,7 @@ public final class FullscreenMapScreen extends ConfluxScreen {
             return;
         }
         final DimensionId dimension = viewSession().dimension();
-        MinecraftAccess.setScreen(MinecraftClient.getInstance(), new StructureSearchScreen(
+        MinecraftAccess.setScreen(Minecraft.getInstance(), new StructureSearchScreen(
             this,
             structureMarkers,
             dimension,
@@ -4336,7 +4063,7 @@ public final class FullscreenMapScreen extends ConfluxScreen {
         final OptionalInt playerY = player.isPresent()
             ? OptionalInt.of(player.get().blockY())
             : OptionalInt.empty();
-        MinecraftAccess.setScreen(MinecraftClient.getInstance(), WaypointEditScreen.forCreate(
+        MinecraftAccess.setScreen(Minecraft.getInstance(), WaypointEditScreen.forCreate(
             returnScreen,
             viewSession().dimension(),
             Texts.translatable(marker.translationKey()).getString(),
@@ -4355,7 +4082,7 @@ public final class FullscreenMapScreen extends ConfluxScreen {
         final OptionalInt playerY = player.isPresent()
             ? OptionalInt.of(player.get().blockY())
             : OptionalInt.empty();
-        MinecraftAccess.setScreen(MinecraftClient.getInstance(), WaypointEditScreen.forCreate(
+        MinecraftAccess.setScreen(Minecraft.getInstance(), WaypointEditScreen.forCreate(
             returnScreen,
             viewSession().dimension(),
             name,

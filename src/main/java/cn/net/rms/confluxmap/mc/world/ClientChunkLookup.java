@@ -1,18 +1,18 @@
 package cn.net.rms.confluxmap.mc.world;
 
 import cn.net.rms.confluxmap.core.util.TileMath;
-import net.minecraft.client.world.ClientWorld;
+import net.minecraft.client.multiplayer.ClientLevel;
 
 /**
- * Checks the client chunk manager instead of {@link ClientWorld#isChunkLoaded(int, int)}, whose
+ * Checks the client chunk manager instead of {@link ClientLevel#isChunkLoaded(int, int)}, whose
  * 1.17.1 implementation reports every coordinate as loaded.
  */
 public final class ClientChunkLookup {
     private ClientChunkLookup() {
     }
 
-    public static boolean isLoaded(final ClientWorld world, final int blockX, final int blockZ) {
-        return isLoaded(blockX, blockZ, world.getChunkManager()::isChunkLoaded);
+    public static boolean isLoaded(final ClientLevel world, final int blockX, final int blockZ) {
+        return isLoaded(blockX, blockZ, world.getChunkSource()::hasChunk);
     }
 
     static boolean isLoaded(

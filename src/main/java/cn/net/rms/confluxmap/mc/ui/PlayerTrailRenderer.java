@@ -6,7 +6,7 @@ import cn.net.rms.confluxmap.mc.render.RenderUtil;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.concurrent.TimeUnit;
-import net.minecraft.client.util.math.MatrixStack;
+import com.mojang.blaze3d.vertex.PoseStack;
 
 /** Draws recent player positions as small red dots with age-based fading. */
 public final class PlayerTrailRenderer {
@@ -17,7 +17,7 @@ public final class PlayerTrailRenderer {
     }
 
     public static void draw(
-        final MatrixStack matrices,
+        final PoseStack matrices,
         final PlayerTrail trail,
         final PlayerTrailProjection projection,
         final int durationSeconds,

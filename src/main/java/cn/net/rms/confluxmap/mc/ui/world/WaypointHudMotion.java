@@ -1,6 +1,6 @@
 package cn.net.rms.confluxmap.mc.ui.world;
 
-import net.minecraft.util.math.MathHelper;
+import net.minecraft.util.Mth;
 
 /** Pure targeting and animation math for the in-world waypoint HUD. */
 final class WaypointHudMotion {
@@ -55,11 +55,11 @@ final class WaypointHudMotion {
     static float advance(final float current, final boolean targeted, final float deltaSeconds) {
         final float duration = targeted ? EXPAND_DURATION_SECONDS : COLLAPSE_DURATION_SECONDS;
         final float direction = targeted ? 1.0f : -1.0f;
-        return MathHelper.clamp(current + direction * Math.max(0.0f, deltaSeconds) / duration, 0.0f, 1.0f);
+        return Mth.clamp(current + direction * Math.max(0.0f, deltaSeconds) / duration, 0.0f, 1.0f);
     }
 
     static float smoothStep(final float progress) {
-        final float clamped = MathHelper.clamp(progress, 0.0f, 1.0f);
+        final float clamped = Mth.clamp(progress, 0.0f, 1.0f);
         return clamped * clamped * (3.0f - 2.0f * clamped);
     }
 }

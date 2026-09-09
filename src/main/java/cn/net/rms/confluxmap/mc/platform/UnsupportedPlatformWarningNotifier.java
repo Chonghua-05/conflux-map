@@ -6,21 +6,21 @@ import cn.net.rms.confluxmap.core.config.ConfluxConfig;
 import cn.net.rms.confluxmap.mc.ui.screen.UnsupportedPlatformWarningScreen;
 import cn.net.rms.confluxmap.nativepredict.PlatformWarningEnvironment;
 import cn.net.rms.confluxmap.nativepredict.UnsupportedPlatformWarningPolicy;
-import net.fabricmc.fabric.api.client.event.lifecycle.v1.ClientTickEvents;
-import net.minecraft.client.MinecraftClient;
-import net.minecraft.client.gui.screen.Screen;
-import net.minecraft.client.gui.screen.TitleScreen;
+import cn.net.rms.confluxmap.neoforge.compat.ClientTickEvents;
+import net.minecraft.client.Minecraft;
+import net.minecraft.client.gui.screens.Screen;
+import net.minecraft.client.gui.screens.TitleScreen;
 
 /** Opens the unsupported-platform warning once the first main menu is ready. */
 public final class UnsupportedPlatformWarningNotifier {
-    private final MinecraftClient client;
+    private final Minecraft client;
     private final ConfluxConfig config;
     private final ConfigIo configIo;
     private final PlatformWarningEnvironment.Selection selection;
     private final UnsupportedPlatformWarningPolicy policy;
 
     public UnsupportedPlatformWarningNotifier(
-        final MinecraftClient client,
+        final Minecraft client,
         final ConfluxConfig config,
         final ConfigIo configIo
     ) {

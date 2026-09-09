@@ -18,7 +18,7 @@ public final class Proto {
     private Proto() {
     }
 
-    /** Channel identifier registered with Fabric's networking API on both sides. */
+    /** Channel identifier registered with NeoForge's networking API on both sides. */
     public static final String CHANNEL_ID = "confluxmap:map_sync";
 
     /**
@@ -91,14 +91,14 @@ public final class Proto {
     // ---- Hard caps (enforced everywhere untrusted bytes cross a boundary) ----
 
     /**
-     * Fabric 1.17.1 S2C custom payload limit ({@code CustomPayloadS2CPacket.MAX_PAYLOAD_SIZE}
+     * Vanilla/loader custom payload limit ({@code CustomPayloadS2CPacket.MAX_PAYLOAD_SIZE}
      * verified in the research report). Messages above this cannot reach the client intact, so
      * the codec rejects them before a half-sent packet can be observed.
      */
     public static final int MAX_S2C_PAYLOAD = 1 << 20; // 1 MiB
 
     /**
-     * Practical C2S cap. Fabric's hard limit is 32767 bytes for the whole custom-payload
+     * Practical C2S cap. The loader's hard limit is 32767 bytes for the whole custom-payload
      * packet; 8 KiB is well below that and large enough for any HELLO / MAP_VIEW_REQ the
      * client legitimately sends (tiles-per-req is itself capped at {@value #MAX_TILES_PER_REQ}).
      */

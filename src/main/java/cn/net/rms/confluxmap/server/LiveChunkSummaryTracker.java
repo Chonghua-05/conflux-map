@@ -21,10 +21,10 @@ import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.ConcurrentLinkedQueue;
 import net.minecraft.server.MinecraftServer;
-import net.minecraft.server.world.ServerWorld;
-import net.minecraft.util.WorldSavePath;
-import net.minecraft.util.math.ChunkPos;
-import net.minecraft.world.chunk.WorldChunk;
+import net.minecraft.server.level.ServerLevel;
+import net.minecraft.world.level.storage.LevelResource;
+import net.minecraft.world.level.ChunkPos;
+import net.minecraft.world.level.chunk.LevelChunk;
 
 /** Tracks loaded chunks, refreshes requested summaries, and persists final unload snapshots. */
 final class LiveChunkSummaryTracker {
@@ -37,7 +37,7 @@ final class LiveChunkSummaryTracker {
     private final ChunkSummarizer summarizer;
     private final RegionChangeListener regionChanges;
     private final LiveChunkSummaryCache summaries = new LiveChunkSummaryCache();
-    private final Map<LoadedKey, WorldChunk> loadedChunks = new HashMap<>();
+    private final Map<LoadedKey, LevelChunk> loadedChunks = new HashMap<>();
     private final ArrayDeque<LoadedKey> refreshQueue = new ArrayDeque<>();
     private final Set<LoadedKey> queuedForRefresh = new HashSet<>();
     private final LiveDirtyQueue<LoadedKey> dirtyChunks = new LiveDirtyQueue<>();
@@ -46,9 +46,9 @@ final class LiveChunkSummaryTracker {
     private final ConcurrentLinkedQueue<LiveDemand> incomingDemands = new ConcurrentLinkedQueue<>();
     private final List<LiveDemand> activeDemands = new ArrayList<>();
     private final Map<UUID, LiveDemand> watchedDemands = new HashMap<>();
-    private final Map<ServerWorld, Integer> dimensionIndices = new HashMap<>();
+    private final Map<ServerLevel, Integer> dimensionIndices = new HashMap<>();
 
-    private record LoadedKey(ServerWorld world, long chunkPos) {
+    private record LoadedKey(ServerLevel world, long chunkPos) {
     }
 
     private record LiveKey(String dimension, int chunkX, int chunkZ) {
@@ -96,19 +96,19 @@ final class LiveChunkSummaryTracker {
         this.regionChanges = regionChanges;
     }
 
-    void onChunkLoad(final ServerWorld world, final WorldChunk chunk) {
+    void onChunkLoad(final ServerLevel world, final LevelChunk chunk) {
         final LoadedKey loaded = trackLoaded(world, chunk);
         if (queuedForRefresh.add(loaded)) {
             refreshQueue.addLast(loaded);
         }
     }
 
-    void onChunkDirty(final ServerWorld world, final WorldChunk chunk) {
+    void onChunkDirty(final ServerLevel world, final LevelChunk chunk) {
         final LoadedKey loaded = trackLoaded(world, chunk);
         dirtyChunks.mark(loaded);
     }
 
-    void onChunkUnload(final ServerWorld world, final WorldChunk chunk) {
+    void onChunkUnload(final ServerLevel world, final LevelChunk chunk) {
         final ChunkPos pos = chunk.getPos();
         final int chunkX = chunkX(pos);
         final int chunkZ = chunkZ(pos);
@@ -120,7 +120,7 @@ final class LiveChunkSummaryTracker {
         activeChunks.remove(new LiveKey(dimension, chunkX, chunkZ));
         final SummaryCodec.Chunk summary = summaries.get(dimension, chunkX, chunkZ);
         if (summary != null) {
-            queuePersistence(world, dimension, chunkX, chunkZ, summary, chunk.needsSaving());
+            queuePersistence(world, dimension, chunkX, chunkZ, summary, chunk.isUnsaved());
         }
     }
 
@@ -226,8 +226,8 @@ final class LiveChunkSummaryTracker {
     }
 
     void prepareStop() {
-        final List<Map.Entry<LoadedKey, WorldChunk>> remaining = new ArrayList<>(loadedChunks.entrySet());
-        for (final Map.Entry<LoadedKey, WorldChunk> entry : remaining) {
+        final List<Map.Entry<LoadedKey, LevelChunk>> remaining = new ArrayList<>(loadedChunks.entrySet());
+        for (final Map.Entry<LoadedKey, LevelChunk> entry : remaining) {
             onChunkUnload(entry.getKey().world(), entry.getValue());
         }
     }
@@ -263,7 +263,7 @@ final class LiveChunkSummaryTracker {
         final int inspectionBudget = Math.min(available, MAX_LIVE_INSPECTIONS_PER_TICK);
         for (int inspected = 0; inspected < inspectionBudget && captured < budget; inspected++) {
             final LoadedKey key = refreshQueue.removeFirst();
-            final WorldChunk chunk = loadedChunks.get(key);
+            final LevelChunk chunk = loadedChunks.get(key);
             if (chunk == null) {
                 queuedForRefresh.remove(key);
                 continue;
@@ -291,7 +291,7 @@ final class LiveChunkSummaryTracker {
         int captured = 0;
         while (captured < budget) {
             final LoadedKey key = dirtyChunks.pollMatching(candidate -> {
-                final WorldChunk candidateChunk = loadedChunks.get(candidate);
+                final LevelChunk candidateChunk = loadedChunks.get(candidate);
                 if (candidateChunk == null) {
                     return true;
                 }
@@ -310,7 +310,7 @@ final class LiveChunkSummaryTracker {
             if (key == null) {
                 break;
             }
-            final WorldChunk chunk = loadedChunks.get(key);
+            final LevelChunk chunk = loadedChunks.get(key);
             if (chunk == null) {
                 continue;
             }
@@ -320,7 +320,7 @@ final class LiveChunkSummaryTracker {
         return captured;
     }
 
-    private LoadedKey trackLoaded(final ServerWorld world, final WorldChunk chunk) {
+    private LoadedKey trackLoaded(final ServerLevel world, final LevelChunk chunk) {
         final ChunkPos pos = chunk.getPos();
         final int chunkX = chunkX(pos);
         final int chunkZ = chunkZ(pos);
@@ -350,7 +350,7 @@ final class LiveChunkSummaryTracker {
         return false;
     }
 
-    private void capture(final ServerWorld world, final WorldChunk chunk) {
+    private void capture(final ServerLevel world, final LevelChunk chunk) {
         final ChunkPos pos = chunk.getPos();
         final int chunkX = chunkX(pos);
         final int chunkZ = chunkZ(pos);
@@ -360,7 +360,7 @@ final class LiveChunkSummaryTracker {
                 dimension,
                 chunkX,
                 chunkZ,
-                summarizer.summarize(new WorldChunkColumnSource(world, chunk, world.getTime()))
+                summarizer.summarize(new WorldChunkColumnSource(world, chunk, world.getGameTime()))
             );
             if (changed) {
                 regionChanges.onChanged(dimension, Math.floorDiv(chunkX, 16), Math.floorDiv(chunkZ, 16));
@@ -374,7 +374,7 @@ final class LiveChunkSummaryTracker {
     }
 
     private void queuePersistence(
-        final ServerWorld world,
+        final ServerLevel world,
         final String dimension,
         final int chunkX,
         final int chunkZ,
@@ -386,7 +386,7 @@ final class LiveChunkSummaryTracker {
         final int localX = Math.floorMod(chunkX, 16);
         final int localZ = Math.floorMod(chunkZ, 16);
         final long observedMtime = RegionStoragePaths.mcaMtimeMs(
-            world.getServer().getSavePath(WorldSavePath.ROOT), dimension, regionX, regionZ
+            world.getServer().getWorldPath(LevelResource.ROOT), dimension, regionX, regionZ
         );
         pendingRegions.computeIfAbsent(
             new PendingRegionKey(dimension, regionX, regionZ),
@@ -406,7 +406,7 @@ final class LiveChunkSummaryTracker {
         if (pendingRegions.isEmpty() || maxRegions <= 0) {
             return;
         }
-        final Path worldRoot = server.getSavePath(WorldSavePath.ROOT);
+        final Path worldRoot = server.getWorldPath(LevelResource.ROOT);
         int flushed = 0;
         final Iterator<Map.Entry<PendingRegionKey, Map<Integer, PendingChunk>>> iterator =
             pendingRegions.entrySet().iterator();
@@ -454,9 +454,9 @@ final class LiveChunkSummaryTracker {
         return false;
     }
 
-    private static int worldIndex(final MinecraftServer server, final ServerWorld target) {
+    private static int worldIndex(final MinecraftServer server, final ServerLevel target) {
         int index = 0;
-        for (final ServerWorld world : server.getWorlds()) {
+        for (final ServerLevel world : server.getAllLevels()) {
             if (world == target) {
                 return index;
             }
@@ -465,31 +465,19 @@ final class LiveChunkSummaryTracker {
         return -1;
     }
 
-    private static String dimension(final ServerWorld world) {
-        return world.getRegistryKey().getValue().toString();
+    private static String dimension(final ServerLevel world) {
+        return world.dimension().identifier().toString();
     }
 
     private static int chunkX(final ChunkPos pos) {
-        //#if MC>=260100
-        //$$ return pos.x();
-        //#else
-        return pos.x;
-        //#endif
+        return pos.x();
     }
 
     private static int chunkZ(final ChunkPos pos) {
-        //#if MC>=260100
-        //$$ return pos.z();
-        //#else
-        return pos.z;
-        //#endif
+        return pos.z();
     }
 
     private static long chunkLong(final ChunkPos pos) {
-        //#if MC>=260100
-        //$$ return pos.pack();
-        //#else
-        return pos.toLong();
-        //#endif
+        return pos.pack();
     }
 }

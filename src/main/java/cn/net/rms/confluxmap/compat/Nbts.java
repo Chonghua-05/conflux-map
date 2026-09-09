@@ -1,106 +1,58 @@
 package cn.net.rms.confluxmap.compat;
 
-import net.minecraft.nbt.NbtCompound;
-import net.minecraft.nbt.NbtList;
+import net.minecraft.nbt.CompoundTag;
+import net.minecraft.nbt.ListTag;
 
 /** Default-preserving reads across the optional NBT API introduced in 1.21.5. */
 public final class Nbts {
     private Nbts() {
     }
 
-    public static boolean hasCompound(final NbtCompound compound, final String key) {
-        //#if MC>=12105
-        //$$ return compound.getCompound(key).isPresent();
-        //#else
-        return compound.contains(key, 10);
-        //#endif
+    public static boolean hasCompound(final CompoundTag compound, final String key) {
+        return compound.getCompound(key).isPresent();
     }
 
-    public static NbtCompound compound(final NbtCompound compound, final String key) {
-        //#if MC>=12105
-        //$$ return compound.getCompound(key).orElseGet(NbtCompound::new);
-        //#else
-        return compound.contains(key, 10) ? compound.getCompound(key) : new NbtCompound();
-        //#endif
+    public static CompoundTag compound(final CompoundTag compound, final String key) {
+        return compound.getCompound(key).orElseGet(CompoundTag::new);
     }
 
-    public static String string(final NbtCompound compound, final String key) {
-        //#if MC>=12105
-        //$$ return compound.getString(key, "");
-        //#else
-        return compound.getString(key);
-        //#endif
+    public static String string(final CompoundTag compound, final String key) {
+        return compound.getStringOr(key, "");
     }
 
-    public static int integer(final NbtCompound compound, final String key) {
-        //#if MC>=12105
-        //$$ return compound.getInt(key, 0);
-        //#else
-        return compound.getInt(key);
-        //#endif
+    public static int integer(final CompoundTag compound, final String key) {
+        return compound.getIntOr(key, 0);
     }
 
-    public static int byteValue(final NbtCompound compound, final String key) {
-        //#if MC>=12105
-        //$$ return compound.getByte(key, (byte) 0);
-        //#else
-        return compound.getByte(key);
-        //#endif
+    public static int byteValue(final CompoundTag compound, final String key) {
+        return compound.getByteOr(key, (byte) 0);
     }
 
-    public static long longValue(final NbtCompound compound, final String key) {
-        //#if MC>=12105
-        //$$ return compound.getLong(key, 0L);
-        //#else
-        return compound.getLong(key);
-        //#endif
+    public static long longValue(final CompoundTag compound, final String key) {
+        return compound.getLongOr(key, 0L);
     }
 
-    public static long[] longArray(final NbtCompound compound, final String key) {
-        //#if MC>=12105
-        //$$ return compound.getLongArray(key).orElseGet(() -> new long[0]);
-        //#else
-        return compound.getLongArray(key);
-        //#endif
+    public static long[] longArray(final CompoundTag compound, final String key) {
+        return compound.getLongArray(key).orElseGet(() -> new long[0]);
     }
 
-    public static int[] intArray(final NbtCompound compound, final String key) {
-        //#if MC>=12105
-        //$$ return compound.getIntArray(key).orElseGet(() -> new int[0]);
-        //#else
-        return compound.getIntArray(key);
-        //#endif
+    public static int[] intArray(final CompoundTag compound, final String key) {
+        return compound.getIntArray(key).orElseGet(() -> new int[0]);
     }
 
-    public static byte[] byteArray(final NbtCompound compound, final String key) {
-        //#if MC>=12105
-        //$$ return compound.getByteArray(key).orElseGet(() -> new byte[0]);
-        //#else
-        return compound.getByteArray(key);
-        //#endif
+    public static byte[] byteArray(final CompoundTag compound, final String key) {
+        return compound.getByteArray(key).orElseGet(() -> new byte[0]);
     }
 
-    public static NbtList list(final NbtCompound compound, final String key, final int elementType) {
-        //#if MC>=12105
-        //$$ return compound.getList(key).orElseGet(NbtList::new);
-        //#else
-        return compound.contains(key, 9) ? compound.getList(key, elementType) : new NbtList();
-        //#endif
+    public static ListTag list(final CompoundTag compound, final String key, final int elementType) {
+        return compound.getList(key).orElseGet(ListTag::new);
     }
 
-    public static NbtCompound compound(final NbtList list, final int index) {
-        //#if MC>=12105
-        //$$ return list.getCompound(index).orElseGet(NbtCompound::new);
-        //#else
-        return list.getCompound(index);
-        //#endif
+    public static CompoundTag compound(final ListTag list, final int index) {
+        return list.getCompound(index).orElseGet(CompoundTag::new);
     }
 
-    public static String string(final NbtList list, final int index) {
-        //#if MC>=12105
-        //$$ return list.getString(index, "");
-        //#else
-        return list.getString(index);
-        //#endif
+    public static String string(final ListTag list, final int index) {
+        return list.getStringOr(index, "");
     }
 }

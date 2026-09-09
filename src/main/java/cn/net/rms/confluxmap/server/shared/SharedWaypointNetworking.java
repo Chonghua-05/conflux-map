@@ -11,14 +11,15 @@ import cn.net.rms.confluxmap.core.net.shared.SharedWaypointProtocolException;
 import cn.net.rms.confluxmap.server.ConfluxMapCompanion;
 import cn.net.rms.confluxmap.server.ServerConfig;
 import java.util.UUID;
-import net.fabricmc.fabric.api.networking.v1.ServerPlayConnectionEvents;
-import net.fabricmc.fabric.api.networking.v1.ServerPlayNetworking;
-import net.fabricmc.fabric.api.event.lifecycle.v1.ServerTickEvents;
-import net.minecraft.server.MinecraftServer;
-import net.minecraft.server.network.ServerPlayerEntity;
-import net.minecraft.util.Identifier;
+import net.neoforged.neoforge.common.NeoForge;
+import net.neoforged.neoforge.event.entity.player.PlayerEvent;
 
-/** Fabric transport adapter for the independent shared-waypoint protocol channel. */
+import net.neoforged.neoforge.event.tick.ServerTickEvent;
+import net.minecraft.server.MinecraftServer;
+import net.minecraft.server.level.ServerPlayer;
+import net.minecraft.resources.Identifier;
+
+/** NeoForge transport adapter for the independent shared-waypoint protocol channel. */
 public final class SharedWaypointNetworking {
     public static final Identifier CHANNEL = Ids.of(SharedWaypointProto.CHANNEL_ID);
 
@@ -37,9 +38,9 @@ public final class SharedWaypointNetworking {
         }
         registered = true;
         PlayNetworking.registerServer(CHANNEL, this::onReceive);
-        ServerTickEvents.END_SERVER_TICK.register(this::onServerTick);
-        ServerPlayConnectionEvents.DISCONNECT.register((handler, server) -> {
-            final UUID playerId = handler.getPlayer().getUuid();
+        NeoForge.EVENT_BUS.addListener((ServerTickEvent.Post e) -> onServerTick(e.getServer()));
+        NeoForge.EVENT_BUS.addListener((PlayerEvent.PlayerLoggedOutEvent event) -> { if (!(event.getEntity() instanceof final ServerPlayer player)) return;
+            final UUID playerId = player.getUUID();
             sessions.disconnect(playerId);
             // Service-owned idempotency results deliberately survive reconnects.
         });
@@ -47,14 +48,14 @@ public final class SharedWaypointNetworking {
 
     private void onReceive(
         final MinecraftServer server,
-        final ServerPlayerEntity player,
+        final ServerPlayer player,
         final byte[] payload
     ) {
         // Master-disabled companions never answer either protocol channel.
         if (!companion.isEnabled()) {
             return;
         }
-        if (sessions.isMuted(player.getUuid())) {
+        if (sessions.isMuted(player.getUUID())) {
             return;
         }
         final int readable = payload.length;
@@ -66,7 +67,7 @@ public final class SharedWaypointNetworking {
         try {
             message = SharedWaypointCodec.decodeC2S(
                 payload,
-                sessions.negotiatedMinor(player.getUuid())
+                sessions.negotiatedMinor(player.getUUID())
             );
         } catch (final SharedWaypointProtocolException | RuntimeException e) {
             recordMalformed(player, readable, e.getMessage());
@@ -77,10 +78,10 @@ public final class SharedWaypointNetworking {
 
     private void handle(
         final MinecraftServer server,
-        final ServerPlayerEntity player,
+        final ServerPlayer player,
         final SharedWaypointMessage message
     ) {
-        if (!companion.isEnabled() || server.getPlayerManager().getPlayer(player.getUuid()) != player) {
+        if (!companion.isEnabled() || server.getPlayerList().getPlayer(player.getUUID()) != player) {
             return;
         }
         final SharedWaypointSessionHandler.Dispatch dispatch = sessions.handle(
@@ -97,8 +98,8 @@ public final class SharedWaypointNetworking {
     }
 
     private void broadcast(final MinecraftServer server, final SharedWaypointMessage message) {
-        for (final ServerPlayerEntity player : server.getPlayerManager().getPlayerList()) {
-            if (sessions.isSubscribed(player.getUuid())) {
+        for (final ServerPlayer player : server.getPlayerList().getPlayers()) {
+            if (sessions.isSubscribed(player.getUUID())) {
                 send(player, message);
             }
         }
@@ -109,7 +110,7 @@ public final class SharedWaypointNetworking {
             return;
         }
         SharedWaypointSessionHandler.Environment environment = null;
-        for (final ServerPlayerEntity player : server.getPlayerManager().getPlayerList()) {
+        for (final ServerPlayer player : server.getPlayerList().getPlayers()) {
             final SharedWaypointSessionHandler.Peer peer = peer(player);
             if (!sessions.updateOperator(peer)) {
                 continue;
@@ -122,11 +123,11 @@ public final class SharedWaypointNetworking {
     }
 
     private void recordMalformed(
-        final ServerPlayerEntity player,
+        final ServerPlayer player,
         final int payloadBytes,
         final String reason
     ) {
-        final SharedWaypointSessionHandler.MalformedOutcome outcome = sessions.recordMalformed(player.getUuid());
+        final SharedWaypointSessionHandler.MalformedOutcome outcome = sessions.recordMalformed(player.getUUID());
         ConfluxMapMod.LOGGER.warn(
             "shared-waypoint: dropped malformed {}-byte payload from {} (strike {}/{}, reason={})",
             payloadBytes,
@@ -152,8 +153,8 @@ public final class SharedWaypointNetworking {
             return;
         }
         final SharedWaypointSessionHandler.Environment environment = environment(server);
-        for (final ServerPlayerEntity player : server.getPlayerManager().getPlayerList()) {
-            if (sessions.isCompatible(player.getUuid())) {
+        for (final ServerPlayer player : server.getPlayerList().getPlayers()) {
+            if (sessions.isCompatible(player.getUUID())) {
                 send(player, sessions.status(peer(player), environment));
             }
         }
@@ -185,27 +186,27 @@ public final class SharedWaypointNetworking {
         );
     }
 
-    private static SharedWaypointSessionHandler.Peer peer(final ServerPlayerEntity player) {
+    private static SharedWaypointSessionHandler.Peer peer(final ServerPlayer player) {
         return new SharedWaypointSessionHandler.Peer(
-            player.getUuid(),
+            player.getUUID(),
             MinecraftAccess.playerName(player),
             MinecraftAccess.hasPermission(player, 2)
         );
     }
 
     private void send(
-        final ServerPlayerEntity player,
+        final ServerPlayer player,
         final SharedWaypointMessage message
     ) {
         // canSend prevents an unknown custom payload from reaching unmodded/older clients.
-        if (!ServerPlayNetworking.canSend(player, CHANNEL)) {
+        if (!PlayNetworking.canSend(player, CHANNEL)) {
             return;
         }
         final byte[] payload;
         try {
             payload = SharedWaypointCodec.encode(
                 message,
-                sessions.negotiatedMinor(player.getUuid())
+                sessions.negotiatedMinor(player.getUUID())
             );
         } catch (final SharedWaypointProtocolException | RuntimeException e) {
             ConfluxMapMod.LOGGER.error(

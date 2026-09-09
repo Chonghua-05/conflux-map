@@ -7,10 +7,10 @@ import cn.net.rms.confluxmap.compat.Texts;
 import cn.net.rms.confluxmap.compat.Widgets;
 import cn.net.rms.confluxmap.mc.ui.GuiDraw;
 import java.util.UUID;
-import net.minecraft.client.MinecraftClient;
-import net.minecraft.client.gui.screen.Screen;
-import net.minecraft.client.gui.widget.TextFieldWidget;
-import net.minecraft.text.Text;
+import net.minecraft.client.Minecraft;
+import net.minecraft.client.gui.screens.Screen;
+import net.minecraft.client.gui.components.EditBox;
+import net.minecraft.network.chat.Component;
 
 /** Small non-pausing editor for the optional text attached to one annotation. */
 public final class AnnotationLabelScreen extends ConfluxScreen {
@@ -21,7 +21,7 @@ public final class AnnotationLabelScreen extends ConfluxScreen {
     private final AnnotationStore store;
     private final UUID annotationId;
     private final String initialLabel;
-    private TextFieldWidget labelField;
+    private EditBox labelField;
 
     public AnnotationLabelScreen(
         final Screen parent,
@@ -43,8 +43,8 @@ public final class AnnotationLabelScreen extends ConfluxScreen {
     @Override
     protected void init() {
         final int fieldWidth = Math.min(FIELD_WIDTH, width - 24);
-        labelField = new TextFieldWidget(
-            this.textRenderer,
+        labelField = new EditBox(
+            this.font,
             width / 2 - fieldWidth / 2,
             70,
             fieldWidth,
@@ -52,11 +52,11 @@ public final class AnnotationLabelScreen extends ConfluxScreen {
             Texts.literal("")
         );
         labelField.setMaxLength(Annotation.MAX_LABEL_LENGTH);
-        labelField.setText(initialLabel);
-        addDrawableChild(labelField);
+        labelField.setValue(initialLabel);
+        addRenderableWidget(labelField);
         setInitialFocus(labelField);
 
-        addDrawableChild(Widgets.button(
+        addRenderableWidget(Widgets.button(
             width / 2 - 104,
             104,
             100,
@@ -65,7 +65,7 @@ public final class AnnotationLabelScreen extends ConfluxScreen {
             ignored -> saveAndReturn()
         ));
         setEnterAction(() -> true, this::saveAndReturn);
-        addDrawableChild(Widgets.button(
+        addRenderableWidget(Widgets.button(
             width / 2 + 4,
             104,
             100,
@@ -76,12 +76,12 @@ public final class AnnotationLabelScreen extends ConfluxScreen {
     }
 
     private void saveAndReturn() {
-        store.get(annotationId).ifPresent(annotation -> store.update(annotation.withLabel(labelField.getText())));
+        store.get(annotationId).ifPresent(annotation -> store.update(annotation.withLabel(labelField.getValue())));
         returnToParent();
     }
 
     private void returnToParent() {
-        MinecraftAccess.setScreen(MinecraftClient.getInstance(), parent);
+        MinecraftAccess.setScreen(Minecraft.getInstance(), parent);
     }
 
     @Override
@@ -98,9 +98,9 @@ public final class AnnotationLabelScreen extends ConfluxScreen {
     ) {
         draw.renderBackground(this, mouseX, mouseY, tickDelta);
         draw.drawTextWithShadow(
-            this.textRenderer,
+            this.font,
             Texts.translatable("confluxmap.screen.annotation.label.prompt"),
-            width / 2f - this.textRenderer.getWidth(
+            width / 2f - this.font.width(
                 Texts.translatable("confluxmap.screen.annotation.label.prompt")
             ) / 2f,
             50,

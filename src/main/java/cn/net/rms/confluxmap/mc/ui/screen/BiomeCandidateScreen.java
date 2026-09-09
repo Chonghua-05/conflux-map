@@ -16,13 +16,11 @@ import java.util.List;
 import java.util.OptionalInt;
 import java.util.concurrent.RejectedExecutionException;
 import java.util.regex.Pattern;
-import net.minecraft.client.MinecraftClient;
-//#if MC>=12109
-//$$ import net.minecraft.client.gui.Click;
-//#endif
-import net.minecraft.client.gui.widget.ButtonWidget;
-import net.minecraft.client.gui.widget.TextFieldWidget;
-import net.minecraft.util.Identifier;
+import net.minecraft.client.Minecraft;
+import net.minecraft.client.input.MouseButtonEvent;
+import net.minecraft.client.gui.components.Button;
+import net.minecraft.client.gui.components.EditBox;
+import net.minecraft.resources.Identifier;
 
 /** Candidate query and result actions for one biome. */
 final class BiomeCandidateScreen extends ConfluxScreen {
@@ -41,8 +39,8 @@ final class BiomeCandidateScreen extends ConfluxScreen {
     private final DimensionId dimension;
     private final Identifier biome;
     private final SplitMapPane mapPane;
-    private final List<ButtonWidget> mapButtons = new ArrayList<>();
-    private final List<ButtonWidget> waypointButtons = new ArrayList<>();
+    private final List<Button> mapButtons = new ArrayList<>();
+    private final List<Button> waypointButtons = new ArrayList<>();
 
     private int centerX;
     private int centerZ;
@@ -55,11 +53,11 @@ final class BiomeCandidateScreen extends ConfluxScreen {
     private boolean searching;
     private boolean draggingScrollBar;
     private double scrollBarGrabOffset;
-    private TextFieldWidget centerXField;
-    private TextFieldWidget centerZField;
-    private TextFieldWidget radiusField;
-    private TextFieldWidget limitField;
-    private ButtonWidget searchButton;
+    private EditBox centerXField;
+    private EditBox centerZField;
+    private EditBox radiusField;
+    private EditBox limitField;
+    private Button searchButton;
     private int fieldWidth;
     private int panelContentWidth = 1;
     private String statusKey;
@@ -98,7 +96,7 @@ final class BiomeCandidateScreen extends ConfluxScreen {
     }
 
     private void rebuild() {
-        clearChildren();
+        clearWidgets();
         mapButtons.clear();
         waypointButtons.clear();
         panelContentWidth = requiredPanelContentWidth();
@@ -111,11 +109,11 @@ final class BiomeCandidateScreen extends ConfluxScreen {
         centerZField = integerField(right, 32, centerZ, false);
         radiusField = integerField(left, 64, radius, true);
         limitField = integerField(right, 64, limit, true);
-        addDrawableChild(centerXField);
-        addDrawableChild(centerZField);
-        addDrawableChild(radiusField);
-        addDrawableChild(limitField);
-        searchButton = addDrawableChild(Widgets.button(
+        addRenderableWidget(centerXField);
+        addRenderableWidget(centerZField);
+        addRenderableWidget(radiusField);
+        addRenderableWidget(limitField);
+        searchButton = addRenderableWidget(Widgets.button(
             layout.panelCenterX() - Math.min(100, layout.panelContentWidth()) / 2,
             88,
             Math.min(100, layout.panelContentWidth()),
@@ -128,7 +126,7 @@ final class BiomeCandidateScreen extends ConfluxScreen {
         scrollOffset = listUi.scrollOffset();
         for (int index = 0; index < results.size(); index++) {
             final BiomeCandidateSearch.Candidate candidate = results.get(index);
-            mapButtons.add(addDrawableChild(Widgets.button(
+            mapButtons.add(addRenderableWidget(Widgets.button(
                 listUi.actionX(),
                 listUi.mapButtonY(index),
                 listUi.actionWidth(),
@@ -136,7 +134,7 @@ final class BiomeCandidateScreen extends ConfluxScreen {
                 Texts.translatable("confluxmap.screen.structure_candidates.map"),
                 ignored -> focus(candidate)
             )));
-            waypointButtons.add(addDrawableChild(Widgets.button(
+            waypointButtons.add(addRenderableWidget(Widgets.button(
                 listUi.actionX(),
                 listUi.waypointButtonY(index),
                 listUi.actionWidth(),
@@ -148,7 +146,7 @@ final class BiomeCandidateScreen extends ConfluxScreen {
             )));
         }
         final int backWidth = Math.min(100, layout.panelContentWidth());
-        addDrawableChild(Widgets.button(
+        addRenderableWidget(Widgets.button(
             layout.panelCenterX() - backWidth / 2,
             height - 24,
             backWidth,
@@ -160,29 +158,25 @@ final class BiomeCandidateScreen extends ConfluxScreen {
         updateRows();
     }
 
-    private TextFieldWidget integerField(
+    private EditBox integerField(
         final int x,
         final int y,
         final int value,
         final boolean positive
     ) {
-        final TextFieldWidget field = new TextFieldWidget(
-            this.textRenderer, x, y, fieldWidth, FIELD_HEIGHT, Texts.literal("")
+        final EditBox field = new EditBox(
+            this.font, x, y, fieldWidth, FIELD_HEIGHT, Texts.literal("")
         );
         field.setMaxLength(11);
         final Pattern pattern = positive ? POSITIVE_INTEGER : INTEGER;
-        //#if MC>=260100
-        //$$ final String[] lastValid = {Integer.toString(value)};
-        //$$ field.setResponder(text -> {
-        //$$     if (pattern.matcher(text).matches()) {
-        //$$         lastValid[0] = text;
-        //$$     } else {
-        //$$         field.setValue(lastValid[0]);
-        //$$     }
-        //$$ });
-        //#else
-        field.setTextPredicate(text -> pattern.matcher(text).matches());
-        //#endif
+        final String[] lastValid = {Integer.toString(value)};
+        field.setResponder(text -> {
+            if (pattern.matcher(text).matches()) {
+                lastValid[0] = text;
+            } else {
+                field.setValue(lastValid[0]);
+            }
+        });
         Widgets.setText(field, Integer.toString(value));
         return field;
     }
@@ -229,7 +223,7 @@ final class BiomeCandidateScreen extends ConfluxScreen {
                     queryRadius,
                     queryLimit
                 );
-                MinecraftClient.getInstance().execute(() -> acceptResults(
+                Minecraft.getInstance().execute(() -> acceptResults(
                     generation, found, sampler != null
                 ));
             });
@@ -246,7 +240,7 @@ final class BiomeCandidateScreen extends ConfluxScreen {
         final boolean predictionAvailable
     ) {
         if (generation != queryGeneration
-            || MinecraftAccess.screen(MinecraftClient.getInstance()) != this) {
+            || MinecraftAccess.screen(Minecraft.getInstance()) != this) {
             return;
         }
         results = found;
@@ -316,7 +310,7 @@ final class BiomeCandidateScreen extends ConfluxScreen {
             Math.max(
                 CandidateListUi.preferredContentWidth()
                     + CandidateListUi.scrollBarReservedWidth(),
-                this.textRenderer.getWidth(getTitle()) + 16
+                this.font.width(getTitle()) + 16
             )
         );
     }
@@ -334,14 +328,10 @@ final class BiomeCandidateScreen extends ConfluxScreen {
     }
 
     @Override
-    //#if MC>=12109
-    //$$ public boolean mouseClicked(final Click click, final boolean doubledClick) {
-    //$$     final double mouseX = click.x();
-    //$$     final double mouseY = click.y();
-    //$$     final int button = click.button();
-    //#else
-    public boolean mouseClicked(final double mouseX, final double mouseY, final int button) {
-    //#endif
+    public boolean mouseClicked(final MouseButtonEvent click, final boolean doubledClick) {
+        final double mouseX = click.x();
+        final double mouseY = click.y();
+        final int button = click.button();
         final CandidateListUi listUi = candidateListUi();
         if (button == 0 && listUi.containsScrollBar(mouseX, mouseY)) {
             draggingScrollBar = true;
@@ -349,30 +339,16 @@ final class BiomeCandidateScreen extends ConfluxScreen {
             updateScrollFromMouse(mouseY);
             return true;
         }
-        //#if MC>=12109
-        //$$ if (super.mouseClicked(click, doubledClick)) {
-        //#else
-        if (super.mouseClicked(mouseX, mouseY, button)) {
-        //#endif
+        if (super.mouseClicked(click, doubledClick)) {
             return true;
         }
         return mapPane.mouseClicked(mouseX, mouseY, button, splitLayout());
     }
 
     @Override
-    //#if MC>=12109
-    //$$ public boolean mouseDragged(final Click click, final double deltaX, final double deltaY) {
-    //$$     final double mouseY = click.y();
-    //$$     final int button = click.button();
-    //#else
-    public boolean mouseDragged(
-        final double mouseX,
-        final double mouseY,
-        final int button,
-        final double deltaX,
-        final double deltaY
-    ) {
-    //#endif
+    public boolean mouseDragged(final MouseButtonEvent click, final double deltaX, final double deltaY) {
+        final double mouseY = click.y();
+        final int button = click.button();
         if (button == 0 && draggingScrollBar) {
             updateScrollFromMouse(mouseY);
             return true;
@@ -380,20 +356,12 @@ final class BiomeCandidateScreen extends ConfluxScreen {
         if (mapPane.mouseDragged(button, deltaX, deltaY)) {
             return true;
         }
-        //#if MC>=12109
-        //$$ return super.mouseDragged(click, deltaX, deltaY);
-        //#else
-        return super.mouseDragged(mouseX, mouseY, button, deltaX, deltaY);
-        //#endif
+        return super.mouseDragged(click, deltaX, deltaY);
     }
 
     @Override
-    //#if MC>=12109
-    //$$ public boolean mouseReleased(final Click click) {
-    //$$     final int button = click.button();
-    //#else
-    public boolean mouseReleased(final double mouseX, final double mouseY, final int button) {
-    //#endif
+    public boolean mouseReleased(final MouseButtonEvent click) {
+        final int button = click.button();
         if (button == 0 && draggingScrollBar) {
             draggingScrollBar = false;
             return true;
@@ -401,11 +369,7 @@ final class BiomeCandidateScreen extends ConfluxScreen {
         if (mapPane.mouseReleased(button)) {
             return true;
         }
-        //#if MC>=12109
-        //$$ return super.mouseReleased(click);
-        //#else
-        return super.mouseReleased(mouseX, mouseY, button);
-        //#endif
+        return super.mouseReleased(click);
     }
 
     private void updateScrollFromMouse(final double mouseY) {
@@ -419,9 +383,7 @@ final class BiomeCandidateScreen extends ConfluxScreen {
     public boolean mouseScrolled(
         final double mouseX,
         final double mouseY,
-        //#if MC>=12002
-        //$$ final double horizontalAmount,
-        //#endif
+        final double horizontalAmount,
         final double amount
     ) {
         final SplitMapLayout layout = splitLayout();
@@ -434,17 +396,13 @@ final class BiomeCandidateScreen extends ConfluxScreen {
         if (mapPane.mouseScrolled(mouseX, mouseY, amount, layout)) {
             return true;
         }
-        //#if MC>=12002
-        //$$ return super.mouseScrolled(mouseX, mouseY, horizontalAmount, amount);
-        //#else
-        return super.mouseScrolled(mouseX, mouseY, amount);
-        //#endif
+        return super.mouseScrolled(mouseX, mouseY, horizontalAmount, amount);
     }
 
     @Override
     public void onClose() {
         queryGeneration++;
-        MinecraftAccess.setScreen(MinecraftClient.getInstance(), picker);
+        MinecraftAccess.setScreen(Minecraft.getInstance(), picker);
     }
 
     @Override
@@ -469,8 +427,8 @@ final class BiomeCandidateScreen extends ConfluxScreen {
         for (int index = scrollOffset; index < end; index++) {
             final BiomeCandidateSearch.Candidate candidate = results.get(index);
             draw.drawTextWithShadow(
-                this.textRenderer,
-                this.textRenderer.trimToWidth(
+                this.font,
+                this.font.plainSubstrByWidth(
                     CandidateListUi.coordinateText(candidate.blockX(), candidate.blockZ()),
                     listUi.textWidth()
                 ),
@@ -479,8 +437,8 @@ final class BiomeCandidateScreen extends ConfluxScreen {
                 0xFFFFFFFF
             );
             draw.drawTextWithShadow(
-                this.textRenderer,
-                this.textRenderer.trimToWidth(
+                this.font,
+                this.font.plainSubstrByWidth(
                     Texts.translatable(
                         "confluxmap.value.blocks",
                         CandidateListUi.distanceInBlocks(
@@ -519,19 +477,15 @@ final class BiomeCandidateScreen extends ConfluxScreen {
         final SplitMapLayout layout = splitLayout();
         final String visibleText = fitToWidth(text, layout.panelContentWidth());
         draw.drawTextWithShadow(
-            this.textRenderer,
+            this.font,
             visibleText,
-            layout.panelCenterX() - this.textRenderer.getWidth(visibleText) / 2f,
+            layout.panelCenterX() - this.font.width(visibleText) / 2f,
             y,
             color
         );
     }
 
     private String fitToWidth(final String text, final int maxWidth) {
-        //#if MC>=260100
-        //$$ return this.font.plainSubstrByWidth(text, maxWidth);
-        //#else
-        return this.textRenderer.trimToWidth(text, maxWidth);
-        //#endif
+        return this.font.plainSubstrByWidth(text, maxWidth);
     }
 }

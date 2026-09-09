@@ -4,9 +4,9 @@ import cn.net.rms.confluxmap.compat.Regs;
 import java.util.Map;
 import java.util.Optional;
 import java.util.concurrent.ConcurrentHashMap;
-import net.minecraft.block.Block;
-import net.minecraft.block.MapColor;
-import net.minecraft.util.Identifier;
+import net.minecraft.world.level.block.Block;
+import net.minecraft.world.level.material.MapColor;
+import net.minecraft.resources.Identifier;
 
 /**
  * Registry-backed {@link ChunkSummarizer.MapColorResolver}: block id string to the block's
@@ -40,7 +40,7 @@ public final class RegistryMapColors implements ChunkSummarizer.MapColorResolver
             return -1;
         }
         try {
-            final MapColor color = block.get().getDefaultMapColor();
+            final MapColor color = block.get().defaultMapColor();
             return color == null ? -1 : color.id;
         } catch (final RuntimeException e) {
             return -1;

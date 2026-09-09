@@ -2,7 +2,7 @@ package cn.net.rms.confluxmap.mc.input;
 
 import org.lwjgl.glfw.GLFW;
 
-/** One user action shared by the vanilla and optional MaliLib keybind backends. */
+/** One user action exposed by the NeoForge key mapping layer. */
 enum KeybindAction {
     TOGGLE_MINIMAP("toggle_minimap", "toggleMinimap", GLFW.GLFW_KEY_H, "H"),
     CYCLE_ZOOM("zoom_in", "zoomIn", GLFW.GLFW_KEY_RIGHT_BRACKET, "RIGHT_BRACKET"),

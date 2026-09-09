@@ -44,13 +44,13 @@ import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicLong;
-import net.minecraft.nbt.NbtCompound;
+import net.minecraft.nbt.CompoundTag;
 import net.minecraft.server.MinecraftServer;
-import net.minecraft.server.network.ServerPlayerEntity;
-import net.minecraft.server.world.ServerWorld;
-import net.minecraft.util.WorldSavePath;
-import net.minecraft.util.math.ChunkPos;
-import net.minecraft.world.chunk.WorldChunk;
+import net.minecraft.server.level.ServerPlayer;
+import net.minecraft.server.level.ServerLevel;
+import net.minecraft.world.level.storage.LevelResource;
+import net.minecraft.world.level.ChunkPos;
+import net.minecraft.world.level.chunk.LevelChunk;
 
 /**
  * Serves summary-backed corrections without asking the world chunk manager to generate chunks.
@@ -113,12 +113,12 @@ public final class RegionSummaryService {
     private SummaryDiskCache diskCache;
 
     private record ProgressiveKey(
-        ServerWorld world, int lod, int tileX, int tileZ, boolean forceAbsolute
+        ServerLevel world, int lod, int tileX, int tileZ, boolean forceAbsolute
     ) {
     }
 
     private record RegionPageKey(
-        ServerWorld world,
+        ServerLevel world,
         int lod,
         ChunkRegionSlice slice,
         boolean forceAbsolute,
@@ -127,7 +127,7 @@ public final class RegionSummaryService {
     }
 
     private record RegionBaselineKey(
-        ServerWorld world, int lod, int tileX, int tileZ, PixelWindow window
+        ServerLevel world, int lod, int tileX, int tileZ, PixelWindow window
     ) {
     }
 
@@ -247,23 +247,23 @@ public final class RegionSummaryService {
     }
 
     /** Starts serving a loaded chunk from memory and enrolls it in bounded live refreshes. */
-    public void onChunkLoad(final ServerWorld world, final WorldChunk chunk) {
+    public void onChunkLoad(final ServerLevel world, final LevelChunk chunk) {
         liveChunks.onChunkLoad(world, chunk);
     }
 
     /** Prioritizes a loaded chunk whose block columns changed while a map viewer is watching it. */
-    public void onChunkDirty(final ServerWorld world, final WorldChunk chunk) {
+    public void onChunkDirty(final ServerLevel world, final LevelChunk chunk) {
         liveChunks.onChunkDirty(world, chunk);
     }
 
     /** Captures the final in-memory state and queues one batched level-0 cache write. */
-    public void onChunkUnload(final ServerWorld world, final WorldChunk chunk) {
+    public void onChunkUnload(final ServerLevel world, final LevelChunk chunk) {
         liveChunks.onChunkUnload(world, chunk);
     }
 
     public void request(
         final MinecraftServer server,
-        final ServerPlayerEntity player,
+        final ServerPlayer player,
         final MapViewReqC2S request,
         final MessageSender sender
     ) {
@@ -278,7 +278,7 @@ public final class RegionSummaryService {
 
     public void request(
         final MinecraftServer server,
-        final ServerPlayerEntity player,
+        final ServerPlayer player,
         final MapViewReqC2S request,
         final int requestPayloadBytes,
         final MessageSender sender
@@ -288,14 +288,14 @@ public final class RegionSummaryService {
 
     public void request(
         final MinecraftServer server,
-        final ServerPlayerEntity player,
+        final ServerPlayer player,
         final MapViewReqC2S request,
         final int requestPayloadBytes,
         final boolean forceAbsolute,
         final MessageSender sender
     ) {
         request(
-            server, player.getUuid(), request, requestPayloadBytes, forceAbsolute, sender
+            server, player.getUUID(), request, requestPayloadBytes, forceAbsolute, sender
         );
     }
 
@@ -339,7 +339,7 @@ public final class RegionSummaryService {
 
     public void requestRegions(
         final MinecraftServer server,
-        final ServerPlayerEntity player,
+        final ServerPlayer player,
         final MapRegionViewReqC2S request,
         final MessageSender sender
     ) {
@@ -354,7 +354,7 @@ public final class RegionSummaryService {
 
     public void requestRegions(
         final MinecraftServer server,
-        final ServerPlayerEntity player,
+        final ServerPlayer player,
         final MapRegionViewReqC2S request,
         final int requestPayloadBytes,
         final MessageSender sender
@@ -364,7 +364,7 @@ public final class RegionSummaryService {
 
     public void requestRegions(
         final MinecraftServer server,
-        final ServerPlayerEntity player,
+        final ServerPlayer player,
         final MapRegionViewReqC2S request,
         final int requestPayloadBytes,
         final boolean forceAbsolute,
@@ -378,7 +378,7 @@ public final class RegionSummaryService {
 
     public void requestRegions(
         final MinecraftServer server,
-        final ServerPlayerEntity player,
+        final ServerPlayer player,
         final MapRegionViewReqC2S request,
         final int requestPayloadBytes,
         final boolean forceAbsolute,
@@ -386,7 +386,7 @@ public final class RegionSummaryService {
         final MessageSender sender
     ) {
         requestRegions(
-            server, player.getUuid(), request, requestPayloadBytes, forceAbsolute,
+            server, player.getUUID(), request, requestPayloadBytes, forceAbsolute,
             correctionProfile, sender
         );
     }
@@ -620,7 +620,7 @@ public final class RegionSummaryService {
                 channel.regionQueue.entrySet().iterator();
             while (jobs.hasNext()) {
                 final RegionJob job = jobs.next().getValue();
-                final ServerWorld world = worldAt(server, job.dimIndex());
+                final ServerLevel world = worldAt(server, job.dimIndex());
                 final boolean budgeted = world != null && config.shareCorrections;
                 final RegionPageResult result;
                 if (budgeted) {
@@ -684,7 +684,7 @@ public final class RegionSummaryService {
     }
 
     private synchronized SummaryDiskCache diskFor(final MinecraftServer server) {
-        final Path root = server.getSavePath(WorldSavePath.ROOT);
+        final Path root = server.getWorldPath(LevelResource.ROOT);
         if (diskCache == null || !root.equals(diskRoot)) {
             diskRoot = root;
             diskCache = new SummaryDiskCache(root);
@@ -693,7 +693,7 @@ public final class RegionSummaryService {
     }
 
     private RegionPageResult readyRegionPage(
-        final ServerWorld world,
+        final ServerLevel world,
         final SummaryDiskCache disk,
         final RegionJob job,
         final long nowNanos
@@ -756,7 +756,7 @@ public final class RegionSummaryService {
     }
 
     private RegionPageResult buildRegionPage(
-        final ServerWorld world,
+        final ServerLevel world,
         final SummaryDiskCache disk,
         final int lod,
         final ChunkRegionSlice slice,
@@ -764,8 +764,8 @@ public final class RegionSummaryService {
         final CorrectionProfile correctionProfile,
         final RegionPageWork work
     ) {
-        final String dimension = world.getRegistryKey().getValue().toString();
-        final Path worldRoot = world.getServer().getSavePath(WorldSavePath.ROOT);
+        final String dimension = world.dimension().identifier().toString();
+        final Path worldRoot = world.getServer().getWorldPath(LevelResource.ROOT);
         final long mtimeBefore;
         long started = System.nanoTime();
         try {
@@ -850,12 +850,12 @@ public final class RegionSummaryService {
     }
 
     private boolean regionPageCurrent(
-        final ServerWorld world,
+        final ServerLevel world,
         final ChunkRegionSlice slice,
         final RegionPageResult result
     ) {
-        final String dimension = world.getRegistryKey().getValue().toString();
-        final Path worldRoot = world.getServer().getSavePath(WorldSavePath.ROOT);
+        final String dimension = world.dimension().identifier().toString();
+        final Path worldRoot = world.getServer().getWorldPath(LevelResource.ROOT);
         return result.sourceMcaMtimeMs() == RegionStoragePaths.mcaMtimeMs(
             worldRoot, dimension, slice.regionX(), slice.regionZ()
         ) && result.liveEpoch() == liveChunks.regionEpoch(
@@ -887,7 +887,7 @@ public final class RegionSummaryService {
     }
 
     private RegionBaselineTask regionBaseline(
-        final ServerWorld world,
+        final ServerLevel world,
         final int lod,
         final ChunkRegionSlice slice,
         final boolean forceAbsolute,
@@ -1005,7 +1005,7 @@ public final class RegionSummaryService {
         long ioNanos = 0L;
         long computeNanos = 0L;
         try {
-            final ServerWorld world = worldAt(server, job.dimIndex());
+            final ServerLevel world = worldAt(server, job.dimIndex());
             if (world == null || !config.shareCorrections) {
                 return unavailable(job, ioNanos, computeNanos);
             }
@@ -1047,7 +1047,7 @@ public final class RegionSummaryService {
     }
 
     private PatchDispatcher.BuiltPatch progressiveJob(
-        final ServerWorld world,
+        final ServerLevel world,
         final SummaryDiskCache disk,
         final PatchDispatcher.TileJob job
     ) {
@@ -1068,8 +1068,8 @@ public final class RegionSummaryService {
                         ProgressiveRegionPatch.emptyPatchBody()
                     ), 0L, Math.max(0L, System.nanoTime() - responseStartedNanos));
                 }
-                final String dimension = world.getRegistryKey().getValue().toString();
-                final Path worldRoot = world.getServer().getSavePath(WorldSavePath.ROOT);
+                final String dimension = world.dimension().identifier().toString();
+                final Path worldRoot = world.getServer().getWorldPath(LevelResource.ROOT);
                 existing = new ProgressiveRegionPatch(
                     dimension,
                     worldRoot,
@@ -1106,12 +1106,12 @@ public final class RegionSummaryService {
         );
     }
 
-    private ProgressiveRegionPatch.BaselineFactory baselineFactory(final ServerWorld world) {
+    private ProgressiveRegionPatch.BaselineFactory baselineFactory(final ServerLevel world) {
         return baselineFactory(world, null);
     }
 
     private ProgressiveRegionPatch.BaselineFactory regionBaselineFactory(
-        final ServerWorld world, final int lod, final ChunkRegionSlice slice
+        final ServerLevel world, final int lod, final ChunkRegionSlice slice
     ) {
         return baselineFactory(world, pixelWindow(lod, slice));
     }
@@ -1130,7 +1130,7 @@ public final class RegionSummaryService {
     }
 
     private ProgressiveRegionPatch.BaselineFactory baselineFactory(
-        final ServerWorld world, final PixelWindow window
+        final ServerLevel world, final PixelWindow window
     ) {
         final WorldPreset preset = WorldPresetDetector.detect(world);
         if (preset == WorldPreset.FLAT) {
@@ -1142,8 +1142,8 @@ public final class RegionSummaryService {
         if (NativeLib.available() && preset.predictable()) {
             final cn.net.rms.confluxmap.core.model.DimensionId dimension =
                 cn.net.rms.confluxmap.core.model.DimensionId.of(
-                    world.getRegistryKey().getValue().getNamespace(),
-                    world.getRegistryKey().getValue().getPath()
+                    world.dimension().identifier().getNamespace(),
+                    world.dimension().identifier().getPath()
                 );
             final int nativeDim = PredictionDimensions.nativeDim(dimension);
             final java.util.OptionalInt version = McVersions.toCubiomes(MinecraftVersion.current());
@@ -1280,7 +1280,7 @@ public final class RegionSummaryService {
     }
 
     private PatchBuilder.Result buildPatch(
-        final ServerWorld world,
+        final ServerLevel world,
         final SummaryTile summary,
         final long sinceRevision,
         final boolean forceAbsolute
@@ -1306,8 +1306,8 @@ public final class RegionSummaryService {
         if (NativeLib.available() && preset.predictable()) {
             final cn.net.rms.confluxmap.core.model.DimensionId dimension =
                 cn.net.rms.confluxmap.core.model.DimensionId.of(
-                    world.getRegistryKey().getValue().getNamespace(),
-                    world.getRegistryKey().getValue().getPath()
+                    world.dimension().identifier().getNamespace(),
+                    world.dimension().identifier().getPath()
                 );
             final int nativeDim = PredictionDimensions.nativeDim(dimension);
             final java.util.OptionalInt version = McVersions.toCubiomes(MinecraftVersion.current());
@@ -1328,7 +1328,7 @@ public final class RegionSummaryService {
 
     /** Reads every LOD-0 region covered by one coarse prediction tile. */
     private SummaryTile readTile(
-        final ServerWorld world, final int tileX, final int tileZ, final int lod, final SummaryDiskCache disk
+        final ServerLevel world, final int tileX, final int tileZ, final int lod, final SummaryDiskCache disk
     ) {
         final int regionsPerSide = 1 << Math.max(0, lod);
         final long baseRegionX = (long) tileX * regionsPerSide;
@@ -1337,7 +1337,7 @@ public final class RegionSummaryService {
             || baseRegionZ < Integer.MIN_VALUE || baseRegionZ > Integer.MAX_VALUE) {
             throw new IllegalArgumentException("requested tile is outside the region coordinate range");
         }
-        final String dimension = world.getRegistryKey().getValue().toString();
+        final String dimension = world.dimension().identifier().toString();
         final List<SummaryCodec.Region> regions = new ArrayList<>(regionsPerSide * regionsPerSide);
         for (int dz = 0; dz < regionsPerSide; dz++) {
             for (int dx = 0; dx < regionsPerSide; dx++) {
@@ -1350,9 +1350,9 @@ public final class RegionSummaryService {
     }
 
     private SummaryCodec.Region readRegion(
-        final ServerWorld world, final String dimension, final int regionX, final int regionZ, final SummaryDiskCache disk
+        final ServerLevel world, final String dimension, final int regionX, final int regionZ, final SummaryDiskCache disk
     ) {
-        final Path worldRoot = world.getServer().getSavePath(WorldSavePath.ROOT);
+        final Path worldRoot = world.getServer().getWorldPath(LevelResource.ROOT);
         final long mtimeBefore = RegionStoragePaths.mcaMtimeMs(worldRoot, dimension, regionX, regionZ);
         final SummaryCodec.Region cached = disk.loadCurrent(dimension, regionX, regionZ, mtimeBefore);
         if (cached != null && cached.sourceMcaMtimeMs() > 0L) {
@@ -1376,7 +1376,7 @@ public final class RegionSummaryService {
                     chunks[index] = cached.chunks()[index];
                     continue;
                 }
-                final NbtCompound nbt;
+                final CompoundTag nbt;
                 try {
                     nbt = readChunkNbt(world, pos);
                 } catch (IOException ignored) {
@@ -1400,27 +1400,17 @@ public final class RegionSummaryService {
         return liveChunks.overlay(dimension, region);
     }
 
-    static NbtCompound readChunkNbt(final ServerWorld world, final ChunkPos pos) throws IOException {
-        //#if MC>=12100
-        //$$ try {
-        //$$     return world.getChunkManager().chunkLoadingManager.getNbt(pos).join().orElse(null);
-        //$$ } catch (final CompletionException e) {
-        //$$     throw new IOException("failed to read chunk " + pos, e.getCause());
-        //$$ }
-        //#elseif MC>=12000
-        //$$ try {
-        //$$     return world.getChunkManager().threadedAnvilChunkStorage.getNbt(pos).join().orElse(null);
-        //$$ } catch (final CompletionException e) {
-        //$$     throw new IOException("failed to read chunk " + pos, e.getCause());
-        //$$ }
-        //#else
-        return world.getChunkManager().threadedAnvilChunkStorage.getNbt(pos);
-        //#endif
+    static CompoundTag readChunkNbt(final ServerLevel world, final ChunkPos pos) throws IOException {
+        try {
+            return world.getChunkSource().chunkMap.read(pos).join().orElse(null);
+        } catch (final CompletionException e) {
+            throw new IOException("failed to read chunk " + pos, e.getCause());
+        }
     }
 
-    private static ServerWorld worldAt(final MinecraftServer server, final int index) {
+    private static ServerLevel worldAt(final MinecraftServer server, final int index) {
         int i = 0;
-        for (final ServerWorld world : server.getWorlds()) {
+        for (final ServerLevel world : server.getAllLevels()) {
             if (i++ == index) {
                 return world;
             }
@@ -1534,9 +1524,9 @@ public final class RegionSummaryService {
         }
     }
 
-    private static int worldIndex(final MinecraftServer server, final ServerWorld target) {
+    private static int worldIndex(final MinecraftServer server, final ServerLevel target) {
         int index = 0;
-        for (final ServerWorld world : server.getWorlds()) {
+        for (final ServerLevel world : server.getAllLevels()) {
             if (world == target) {
                 return index;
             }
@@ -1547,8 +1537,8 @@ public final class RegionSummaryService {
 
     private static int worldIndex(final MinecraftServer server, final String dimension) {
         int index = 0;
-        for (final ServerWorld world : server.getWorlds()) {
-            if (world.getRegistryKey().getValue().toString().equals(dimension)) {
+        for (final ServerLevel world : server.getAllLevels()) {
+            if (world.dimension().identifier().toString().equals(dimension)) {
                 return index;
             }
             index++;
@@ -1557,19 +1547,11 @@ public final class RegionSummaryService {
     }
 
     private static int chunkX(final ChunkPos pos) {
-        //#if MC>=260100
-        //$$ return pos.x();
-        //#else
-        return pos.x;
-        //#endif
+        return pos.x();
     }
 
     private static int chunkZ(final ChunkPos pos) {
-        //#if MC>=260100
-        //$$ return pos.z();
-        //#else
-        return pos.z;
-        //#endif
+        return pos.z();
     }
 
 }

@@ -5,17 +5,17 @@ import cn.net.rms.confluxmap.bridge.PlayerView;
 import cn.net.rms.confluxmap.core.model.DimensionId;
 import cn.net.rms.confluxmap.core.task.SessionGuard;
 import java.util.Optional;
-import net.minecraft.client.MinecraftClient;
-import net.minecraft.client.network.ClientPlayerEntity;
-import net.minecraft.entity.Entity;
-import net.minecraft.util.Identifier;
-import net.minecraft.util.math.MathHelper;
+import net.minecraft.client.Minecraft;
+import net.minecraft.client.player.LocalPlayer;
+import net.minecraft.world.entity.Entity;
+import net.minecraft.resources.Identifier;
+import net.minecraft.util.Mth;
 
 public final class McGameBridge implements GameBridge {
-    private final MinecraftClient client;
+    private final Minecraft client;
     private final SessionGuard guard;
 
-    public McGameBridge(final MinecraftClient client, final SessionGuard guard) {
+    public McGameBridge(final Minecraft client, final SessionGuard guard) {
         this.client = client;
         this.guard = guard;
     }
@@ -27,8 +27,8 @@ public final class McGameBridge implements GameBridge {
 
     @Override
     public Optional<PlayerView> player(final float tickDelta) {
-        final ClientPlayerEntity player = client.player;
-        if (player == null || client.world == null) {
+        final LocalPlayer player = client.player;
+        if (player == null || client.level == null) {
             return Optional.empty();
         }
         return viewOf(player, tickDelta);
@@ -36,8 +36,8 @@ public final class McGameBridge implements GameBridge {
 
     @Override
     public Optional<PlayerView> viewpoint(final float tickDelta) {
-        final ClientPlayerEntity player = client.player;
-        if (player == null || client.world == null) {
+        final LocalPlayer player = client.player;
+        if (player == null || client.level == null) {
             return Optional.empty();
         }
         // Some client-side mods temporarily move the camera into a separate entity (for
@@ -53,19 +53,19 @@ public final class McGameBridge implements GameBridge {
 
     @Override
     public boolean isCameraDetached() {
-        final ClientPlayerEntity player = client.player;
+        final LocalPlayer player = client.player;
         final Entity cameraEntity = client.getCameraEntity();
         return player != null && cameraEntity != null && cameraEntity != player;
     }
 
     private Optional<PlayerView> viewOf(final Entity entity, final float tickDelta) {
-        final Identifier dim = client.world.getRegistryKey().getValue();
+        final Identifier dim = client.level.dimension().identifier();
         return Optional.of(new PlayerView(
-            MathHelper.lerp(tickDelta, entity.prevX, entity.getX()),
-            MathHelper.lerp(tickDelta, entity.prevY, entity.getY()),
-            MathHelper.lerp(tickDelta, entity.prevZ, entity.getZ()),
+            Mth.lerp(tickDelta, entity.xo, entity.getX()),
+            Mth.lerp(tickDelta, entity.yo, entity.getY()),
+            Mth.lerp(tickDelta, entity.zo, entity.getZ()),
             entity.getEyeY(),
-            entity.getYaw(tickDelta),
+            entity.getViewYRot(tickDelta),
             DimensionId.of(dim.getNamespace(), dim.getPath())
         ));
     }

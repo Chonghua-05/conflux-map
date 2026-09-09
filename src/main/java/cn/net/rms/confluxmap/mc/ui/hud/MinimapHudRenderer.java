@@ -49,24 +49,16 @@ import java.util.List;
 import java.util.Optional;
 import java.util.function.Consumer;
 import java.util.function.BooleanSupplier;
-//#if MC>=260100
-//$$ import net.fabricmc.fabric.api.client.rendering.v1.hud.HudElementRegistry;
-//#else
-import net.fabricmc.fabric.api.client.rendering.v1.HudRenderCallback;
-//#endif
-import net.minecraft.client.MinecraftClient;
-//#if MC>=12000
-//$$ import net.minecraft.client.gui.DrawContext;
-//#endif
-//#if MC>=12100
-//$$ import net.minecraft.client.render.RenderTickCounter;
-//#endif
-import net.minecraft.client.util.math.MatrixStack;
-import net.minecraft.entity.Entity;
-import net.minecraft.text.Text;
-import net.minecraft.util.Identifier;
-import net.minecraft.util.math.BlockPos;
-import net.minecraft.util.math.MathHelper;
+import cn.net.rms.confluxmap.neoforge.compat.HudElementRegistry;
+import net.minecraft.client.Minecraft;
+import net.minecraft.client.gui.GuiGraphicsExtractor;
+import net.minecraft.client.DeltaTracker;
+import com.mojang.blaze3d.vertex.PoseStack;
+import net.minecraft.world.entity.Entity;
+import net.minecraft.network.chat.Component;
+import net.minecraft.resources.Identifier;
+import net.minecraft.core.BlockPos;
+import net.minecraft.util.Mth;
 
 /**
  * Renders the always-on minimap HUD, showing whichever layer {@link LayerSelector}
@@ -88,7 +80,7 @@ public final class MinimapHudRenderer {
     /** Half of the ~7px-across VoxelMap-style diamond/cross marker (deliverable B). */
     private static final float WAYPOINT_MARKER_HALF_SIZE = 3.5f;
 
-    private final MinecraftClient client;
+    private final Minecraft client;
     private final ConfluxConfig config;
     private final GameBridge gameBridge;
     private final TileService tiles;
@@ -107,7 +99,7 @@ public final class MinimapHudRenderer {
     private final BooleanSupplier liveTerrainPaused;
 
     public MinimapHudRenderer(
-        final MinecraftClient client,
+        final Minecraft client,
         final ConfluxConfig config,
         final GameBridge gameBridge,
         final TileService tiles,
@@ -143,41 +135,23 @@ public final class MinimapHudRenderer {
     }
 
     public void register() {
-        //#if MC>=260100
-        //$$ // 26.1 replaced the single HUD callback with an ordered element list; appending last
-        //$$ // keeps this drawing over the vanilla HUD exactly as the callback did.
-        //$$ HudElementRegistry.addLast(cn.net.rms.confluxmap.compat.Ids.of("confluxmap", "minimap"), this::render);
-        //#else
-        HudRenderCallback.EVENT.register(this::render);
-        //#endif
+        // 26.1 replaced the single HUD callback with an ordered element list; appending last
+        // keeps this drawing over the vanilla HUD exactly as the callback did.
+        HudElementRegistry.addLast(cn.net.rms.confluxmap.compat.Ids.of("confluxmap", "minimap"), this::render);
     }
 
     /**
-     * {@link net.fabricmc.fabric.api.client.rendering.v1.HudRenderCallback} fires once
-     * per rendered frame regardless of whether a {@link net.minecraft.client.gui.screen.Screen}
+     * NeoForge's HUD layer callback fires once per rendered frame regardless of whether a
+     * {@link net.minecraft.client.gui.screens.Screen}
      * is open (the HUD layer draws before the screen layer, it just ends up covered).
      * That makes this the single per-frame call site for {@link TileTextureManager#beginFrame()} -
      * {@link FullscreenMapScreen} relies on it having already run this frame and never
      * calls it itself, so it's never invoked twice in one frame.
      */
-    //#if MC>=260100
-    //$$ private void render(final GuiGraphicsExtractor context, final DeltaTracker tickCounter) {
-    //$$     final GuiDraw draw = GuiDraw.of(context);
-    //$$     final PoseStack matrices = draw.matrices();
-    //$$     final float tickDelta = tickCounter.getGameTimeDeltaPartialTick(false);
-    //#elseif MC>=12100
-    //$$ private void render(final DrawContext context, final RenderTickCounter tickCounter) {
-    //$$     final GuiDraw draw = GuiDraw.of(context);
-    //$$     final MatrixStack matrices = draw.matrices();
-    //$$     final float tickDelta = tickCounter.getTickDelta(false);
-    //#elseif MC>=12000
-    //$$ private void render(final DrawContext context, final float tickDelta) {
-    //$$     final GuiDraw draw = GuiDraw.of(context);
-    //$$     final MatrixStack matrices = draw.matrices();
-    //#else
-    private void render(final MatrixStack matrices, final float tickDelta) {
-        final GuiDraw draw = GuiDraw.of(matrices);
-    //#endif
+    private void render(final GuiGraphicsExtractor context, final DeltaTracker tickCounter) {
+        final GuiDraw draw = GuiDraw.of(context);
+        final PoseStack matrices = draw.matrices();
+        final float tickDelta = tickCounter.getGameTimeDeltaPartialTick(false);
         textures.beginFrame();
         final boolean fullscreenOpen = MinecraftAccess.screen(client) instanceof FullscreenMapScreen;
         final boolean containerOpen = MinecraftAccess.isContainerScreen(MinecraftAccess.screen(client));
@@ -208,8 +182,8 @@ public final class MinimapHudRenderer {
 
         tiles.setViewpoint(player.blockX(), player.blockZ());
 
-        final int screenWidth = client.getWindow().getScaledWidth();
-        final int screenHeight = client.getWindow().getScaledHeight();
+        final int screenWidth = client.getWindow().getGuiScaledWidth();
+        final int screenHeight = client.getWindow().getGuiScaledHeight();
         final MinimapPlacement.Layout placement = MinimapPlacement.resolve(
             screenWidth,
             screenHeight,
@@ -251,21 +225,21 @@ public final class MinimapHudRenderer {
             // this cannot leak outside the circle regardless of framebuffer state.
             final int canvasPx = Math.max(
                 64,
-                (int) Math.round(contentSize * client.getWindow().getScaleFactor())
+                (int) Math.round(contentSize * client.getWindow().getGuiScale())
             );
             canvas.begin(canvasPx);
-            final MatrixStack fbo = new MatrixStack();
+            final PoseStack fbo = new PoseStack();
             final float unit = canvasPx / (float) contentSize;
             fbo.scale(unit, unit, 1f);
             RenderUtil.fillRect(fbo, 0, 0, contentSize, contentSize, BACKGROUND_COLOR);
-            fbo.push();
+            fbo.pushPose();
             fbo.translate(contentSize / 2f, contentSize / 2f, 0);
             if (rotate) {
                 RenderUtil.rotateZ(fbo, mapAngle);
             }
             RenderUtil.beginTexturedQuads();
             drawTiles(fbo, contentSize, circle, mapAngle, player);
-            fbo.pop();
+            fbo.popPose();
             drawPlayerTrail(
                 fbo, player,
                 contentSize / 2f, contentSize / 2f, contentSize, mapAngle
@@ -289,7 +263,7 @@ public final class MinimapHudRenderer {
             drawFrame(matrices, x0, y0, size, true, minimapFrame);
             AnnotationRenderer.drawLabels(
                 draw,
-                client.textRenderer,
+                client.font,
                 visibleAnnotations,
                 annotationProjection(player, centerX, centerY, contentSize, mapAngle),
                 viewport.x(),
@@ -306,13 +280,13 @@ public final class MinimapHudRenderer {
                 client, viewport.x(), viewport.y(), contentSize, contentSize
             );
             RenderUtil.beginTexturedQuads();
-            matrices.push();
+            matrices.pushPose();
             matrices.translate(centerX, centerY, 0);
             if (rotate) {
                 RenderUtil.rotateZ(matrices, mapAngle);
             }
             drawTiles(matrices, contentSize, circle, mapAngle, player);
-            matrices.pop();
+            matrices.popPose();
             drawPlayerTrail(matrices, player, centerX, centerY, contentSize, mapAngle);
             if (!visibleAnnotations.isEmpty()) {
                 final AnnotationProjection annotationProjection = annotationProjection(
@@ -321,7 +295,7 @@ public final class MinimapHudRenderer {
                 AnnotationRenderer.drawGeometry(matrices, visibleAnnotations, annotationProjection, null);
                 AnnotationRenderer.drawLabels(
                     draw,
-                    client.textRenderer,
+                    client.font,
                     visibleAnnotations,
                     annotationProjection,
                     viewport.x(),
@@ -347,7 +321,7 @@ public final class MinimapHudRenderer {
     }
 
     private void drawCameraMarker(
-        final MatrixStack matrices,
+        final PoseStack matrices,
         final PlayerView viewpoint,
         final float centerX,
         final float centerY,
@@ -371,7 +345,7 @@ public final class MinimapHudRenderer {
 
     /** Draws the real player's position relative to the active map viewpoint. */
     private void drawLocalPlayerMarker(
-        final MatrixStack matrices,
+        final PoseStack matrices,
         final Optional<PlayerMarkerPlacement> placement,
         final boolean rotate
     ) {
@@ -421,8 +395,8 @@ public final class MinimapHudRenderer {
                 screenDy *= limit / distance;
             }
         } else {
-            screenDx = MathHelper.clamp(screenDx, -limit, limit);
-            screenDy = MathHelper.clamp(screenDy, -limit, limit);
+            screenDx = Mth.clamp(screenDx, -limit, limit);
+            screenDy = Mth.clamp(screenDy, -limit, limit);
         }
         return Optional.of(new PlayerMarkerPlacement(
             centerX + screenDx,
@@ -438,7 +412,7 @@ public final class MinimapHudRenderer {
     }
 
     private void drawPlayerTrail(
-        final MatrixStack matrices,
+        final PoseStack matrices,
         final PlayerView player,
         final float centerX,
         final float centerY,
@@ -542,7 +516,7 @@ public final class MinimapHudRenderer {
             }
 
             WaypointMarkerRenderer.draw(
-                draw, client.textRenderer, waypoint, markerX, markerY,
+                draw, client.font, waypoint, markerX, markerY,
                 WAYPOINT_MARKER_HALF_SIZE, 1f, false,
                 WaypointVerticalRelation.between(waypoint.y(), player.y())
             );
@@ -561,7 +535,7 @@ public final class MinimapHudRenderer {
      * already translated/rotated the matrix). Clipping crops the excess.
      */
     private void drawTiles(
-        final MatrixStack matrices,
+        final PoseStack matrices,
         final int size,
         final boolean circle,
         final float mapAngle,
@@ -650,7 +624,7 @@ public final class MinimapHudRenderer {
         final PlayerView player,
         final float tickDelta
     ) {
-        if (!config.radarEnabled || client.world == null) {
+        if (!config.radarEnabled || client.level == null) {
             return;
         }
         final float blocksPerPixel = BLOCKS_PER_PIXEL[config.minimapZoomIndex];
@@ -672,7 +646,7 @@ public final class MinimapHudRenderer {
         final List<RadarEntry> entries = ServerPlayerRadarEntries.merge(
             radarScanner.snapshot(),
             serverPlayers,
-            client.player == null ? null : client.player.getUuid(),
+            client.player == null ? null : client.player.getUUID(),
             player.y()
         );
         final Optional<ServerPlayerRadarState.HighlightView> highlight =
@@ -694,10 +668,10 @@ public final class MinimapHudRenderer {
             int yDelta = entry.yDelta();
             // Prefer a live, per-frame interpolated position over the scan-time snapshot so
             // motion is smooth every frame instead of snapping once per scan interval (spec sec 5).
-            final Entity live = client.world.getEntityById(entry.entityId());
+            final Entity live = client.level.getEntity(entry.entityId());
             if (live != null) {
-                ex = MathHelper.lerp(tickDelta, live.prevX, live.getX());
-                ez = MathHelper.lerp(tickDelta, live.prevZ, live.getZ());
+                ex = Mth.lerp(tickDelta, live.xo, live.getX());
+                ez = Mth.lerp(tickDelta, live.zo, live.getZ());
                 yDelta = (int) Math.round(live.getY() - player.y());
             }
 
@@ -766,8 +740,8 @@ public final class MinimapHudRenderer {
     ) {
         final float x = centerX + dirX * cos - dirY * sin;
         final float y = centerY + dirX * sin + dirY * cos;
-        final int width = client.textRenderer.getWidth(letter);
-        draw.drawTextWithShadow(client.textRenderer, letter, x - width / 2f, y - 4f, TEXT_COLOR);
+        final int width = client.font.width(letter);
+        draw.drawTextWithShadow(client.font, letter, x - width / 2f, y - 4f, TEXT_COLOR);
     }
 
     private void drawInfoText(final GuiDraw draw, final PlayerView player, final int x0, final int y0, final int size) {
@@ -792,7 +766,7 @@ public final class MinimapHudRenderer {
         }
         final float belowY = y0 + size + MinimapInformationLayout.GAP;
         final float yAfterBelowLines = belowY + lines * lineHeight;
-        float y = yAfterBelowLines <= client.getWindow().getScaledHeight()
+        float y = yAfterBelowLines <= client.getWindow().getGuiScaledHeight()
             ? belowY
             : Math.max(0, y0 - lines * lineHeight - MinimapInformationLayout.GAP);
         final float centerX = x0 + size / 2f;
@@ -830,30 +804,30 @@ public final class MinimapHudRenderer {
     }
 
     private void drawCenteredLine(final GuiDraw draw, final String text, final float centerX, final float y) {
-        final int width = client.textRenderer.getWidth(text);
+        final int width = client.font.width(text);
         final float x = Math.max(
             0,
-            Math.min(client.getWindow().getScaledWidth() - width, centerX - width / 2f)
+            Math.min(client.getWindow().getGuiScaledWidth() - width, centerX - width / 2f)
         );
-        draw.drawTextWithShadow(client.textRenderer, text, x, y, TEXT_COLOR);
+        draw.drawTextWithShadow(client.font, text, x, y, TEXT_COLOR);
     }
 
     private String biomeName(final PlayerView player) {
-        if (client.world == null
-            || !ClientChunkLookup.isLoaded(client.world, player.blockX(), player.blockZ())) {
+        if (client.level == null
+            || !ClientChunkLookup.isLoaded(client.level, player.blockX(), player.blockZ())) {
             return "";
         }
         final Identifier id = Regs.biomeIdAt(
-            client.world, new BlockPos(player.blockX(), player.blockY(), player.blockZ())
+            client.level, new BlockPos(player.blockX(), player.blockY(), player.blockZ())
         );
         if (id == null) {
             return "";
         }
-        final Text name = Texts.translatable("biome." + id.getNamespace() + "." + id.getPath());
+        final Component name = Texts.translatable("biome." + id.getNamespace() + "." + id.getPath());
         return name.getString();
     }
 
-    private void drawBorder(final MatrixStack matrices, final int x0, final int y0, final int size) {
+    private void drawBorder(final PoseStack matrices, final int x0, final int y0, final int size) {
         RenderUtil.fillRect(matrices, x0, y0, size, BORDER_THICKNESS, BORDER_COLOR);
         RenderUtil.fillRect(matrices, x0, y0 + size - BORDER_THICKNESS, size, BORDER_THICKNESS, BORDER_COLOR);
         RenderUtil.fillRect(matrices, x0, y0, BORDER_THICKNESS, size, BORDER_COLOR);
@@ -861,7 +835,7 @@ public final class MinimapHudRenderer {
     }
 
     private void drawFrame(
-        final MatrixStack matrices,
+        final PoseStack matrices,
         final int x0,
         final int y0,
         final int size,

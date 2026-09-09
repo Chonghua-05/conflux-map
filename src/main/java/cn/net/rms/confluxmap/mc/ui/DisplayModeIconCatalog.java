@@ -2,7 +2,7 @@ package cn.net.rms.confluxmap.mc.ui;
 
 import cn.net.rms.confluxmap.compat.Ids;
 import cn.net.rms.confluxmap.core.loadstate.FullscreenDisplayMode;
-import net.minecraft.util.Identifier;
+import net.minecraft.resources.Identifier;
 
 /** Texture identifiers representing the fullscreen map's client-selectable display modes. */
 public final class DisplayModeIconCatalog {

@@ -15,33 +15,12 @@ import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
-//#if MC<12103
-import java.util.function.Function;
-//#endif
-import net.minecraft.client.model.ModelPart;
-//#if MC>=12103
-//$$ import net.minecraft.client.model.ModelTransform;
-//#endif
-//#if MC<12103
-import net.minecraft.client.model.TexturedModelData;
-//#endif
-import net.minecraft.client.render.entity.model.EntityModel;
-//#if MC<12103
-import net.minecraft.client.render.entity.model.CompositeEntityModel;
-import net.minecraft.client.render.entity.model.EntityModelLayer;
-import net.minecraft.client.render.entity.model.EntityModels;
-//#endif
-import net.minecraft.client.render.entity.model.ModelWithHead;
-//#if MC<12103
-import net.minecraft.client.render.entity.model.SinglePartEntityModel;
-//#endif
-import net.minecraft.client.util.math.MatrixStack;
-//#if MC>=11900
-//$$ import org.joml.Vector3f;
-//#else
-import net.minecraft.util.math.Vec3f;
-import net.minecraft.util.math.Vector4f;
-//#endif
+import net.minecraft.client.model.geom.ModelPart;
+import net.minecraft.client.model.geom.PartPose;
+import net.minecraft.client.model.EntityModel;
+import net.minecraft.client.model.HeadedModel;
+import com.mojang.blaze3d.vertex.PoseStack;
+import org.joml.Vector3f;
 
 /** Extracts textured quads for only the face-like portion of a neutralized vanilla entity model. */
 final class EntityHeadGeometry {
@@ -50,12 +29,6 @@ final class EntityHeadGeometry {
     private static final int CONTENT_PAD = 0;
     /** Keeps equally dominant cuboids together for multi-part subjects such as wither heads. */
     private static final float DOMINANT_SCORE_RATIO = 0.99f;
-    //#if MC<12103
-    private static final String MAIN_LAYER = "main";
-    private static final Map<String, ModelPart> DATA_ROOTS = new LinkedHashMap<>();
-
-    private static Map<String, TexturedModelData> mainLayerData;
-    //#endif
 
     private record RawVertex(float x, float y, float z, float u, float v) {
     }
@@ -117,41 +90,19 @@ final class EntityHeadGeometry {
         final int cellX,
         final int cellY
     ) {
-        //#if MC>=12103
-        //$$ final List<ModelPart> modelParts = model.getParts();
-        //$$ final List<ModelTransform> liveTransforms = modelParts.stream()
-        //$$     .map(ModelPart::getTransform)
-        //$$     .toList();
-        //$$ model.resetTransforms();
-        //$$ try {
-        //$$     return project(model, entityType, cellX, cellY);
-        //$$ } finally {
-        //$$     for (int i = 0; i < modelParts.size(); i++) {
-        //$$         modelParts.get(i).setTransform(liveTransforms.get(i));
-        //$$     }
-        //$$ }
-        //#else
-        return projectNeutral(
-            model, entityType, cellX, cellY, EntityHeadGeometry::vanillaDataRoot
-        );
-        //#endif
-    }
-
-    //#if MC<12103
-    static float[] projectNeutral(
-        final EntityModel<?> model,
-        final String entityType,
-        final int cellX,
-        final int cellY,
-        final Function<String, ModelPart> neutralRootResolver
-    ) {
-        final ModelPart dataRoot = neutralRootResolver.apply(entityType);
-        if (dataRoot != null) {
-            return project(selectFromRoot(dataRoot, entityType), entityType, cellX, cellY);
+        final List<ModelPart> modelParts = model.allParts();
+        final List<PartPose> liveTransforms = modelParts.stream()
+            .map(ModelPart::storePose)
+            .toList();
+        model.resetPose();
+        try {
+            return project(model, entityType, cellX, cellY);
+        } finally {
+            for (int i = 0; i < modelParts.size(); i++) {
+                modelParts.get(i).loadPose(liveTransforms.get(i));
+            }
         }
-        return project(model, entityType, cellX, cellY);
     }
-    //#endif
 
     /** Projects an already-selected part group; separated so tests can drive raw model trees. */
     static float[] project(
@@ -173,19 +124,19 @@ final class EntityHeadGeometry {
         final float pitchSin = (float) Math.sin(pitchRadians);
         final boolean resetPartRotation = profile.resetPartRotation();
         for (final ModelPart part : parts) {
-            final MatrixStack matrices = new MatrixStack();
-            final float partPitch = part.pitch;
-            final float partYaw = part.yaw;
-            final float partRoll = part.roll;
+            final PoseStack matrices = new PoseStack();
+            final float partPitch = part.xRot;
+            final float partYaw = part.yRot;
+            final float partRoll = part.zRot;
             // VoxelMap resets the selected head-group rotation before applying the portrait pose
             // globally. Keep child transforms intact: the muzzle and ears live below this part.
-            part.setAngles(
+            part.setRotation(
                 resetPartRotation ? 0f : partPitch,
                 resetPartRotation ? 0f : partYaw,
                 resetPartRotation ? 0f : partRoll
             );
             try {
-                part.forEachCuboid(matrices, (entry, path, index, cuboid) -> {
+                part.visit(matrices, (entry, path, index, cuboid) -> {
                     final RawCuboid converted = readCuboid(
                         entry, cuboid, pitchCos, pitchSin, yawCos, yawSin
                     );
@@ -196,7 +147,7 @@ final class EntityHeadGeometry {
             } finally {
                 // Entity models are renderer-owned singletons; do not leak the portrait pose back
                 // into the next world render or another entity that shares this model.
-                part.setAngles(partPitch, partYaw, partRoll);
+                part.setRotation(partPitch, partYaw, partRoll);
             }
         }
         if (cuboids.isEmpty()) {
@@ -297,52 +248,8 @@ final class EntityHeadGeometry {
                 return selected;
             }
         }
-        //#if MC>=12103
-        //$$ return List.of();
-        //#else
-        if (model instanceof ModelWithHead) {
-            return List.of(((ModelWithHead) model).getHead());
-        }
-        // AnimalModel exposes its head group only as a protected iterable, and discards the root
-        // it built those parts from, so no named tree is reachable for that model family.
-        // CompositeEntityModel is excluded because its only iterable is every part it owns.
-        if (!(model instanceof CompositeEntityModel)) {
-            final List<ModelPart> headGroup = smallestPartGroup(model);
-            if (!headGroup.isEmpty()) {
-                return headGroup;
-            }
-        }
-        final ModelPart dataRoot = vanillaDataRoot(entityType);
-        return dataRoot == null ? List.of() : selectFromRoot(dataRoot, entityType);
-        //#endif
+        return List.of();
     }
-
-    //#if MC<12103
-    /**
-     * Rebuilds a vanilla layer's named part tree from the model data the game built the live model
-     * from. Models such as {@code LlamaEntityModel} keep neither their root part nor a head group,
-     * so their live parts carry no name at all; the data tree is geometrically identical and the
-     * portrait pose is neutral anyway. Render thread only.
-     */
-    private static ModelPart vanillaDataRoot(final String entityType) {
-        if (entityType == null) {
-            return null;
-        }
-        if (mainLayerData == null) {
-            mainLayerData = new LinkedHashMap<>();
-            for (final Map.Entry<EntityModelLayer, TexturedModelData> layer : EntityModels.getModels().entrySet()) {
-                if (MAIN_LAYER.equals(layer.getKey().getName())) {
-                    mainLayerData.put(layer.getKey().getId().toString(), layer.getValue());
-                }
-            }
-        }
-        final TexturedModelData data = mainLayerData.get(entityType);
-        if (data == null) {
-            return null;
-        }
-        return DATA_ROOTS.computeIfAbsent(entityType, key -> data.createModel());
-    }
-    //#endif
 
     /** Path-based selection over a named part tree, shared by every version and by the tests. */
     static List<ModelPart> selectFromRoot(final ModelPart root, final String entityType) {
@@ -366,24 +273,11 @@ final class EntityHeadGeometry {
     }
 
     private static ModelPart rootPart(final EntityModel<?> model) {
-        //#if MC>=12103
-        //$$ return model.getRootPart();
-        //#else
-        if (model instanceof SinglePartEntityModel) {
-            return ((SinglePartEntityModel<?>) model).getPart();
-        }
-        final List<ModelPart> topLevel = topLevelParts(model);
-        return topLevel.size() == 1 && !children(topLevel.get(0)).isEmpty() ? topLevel.get(0) : null;
-        //#endif
+        return model.root();
     }
 
     private static List<ModelPart> fullModelParts(final EntityModel<?> model) {
-        //#if MC>=12103
-        //$$ return List.of(model.getRootPart());
-        //#else
-        final ModelPart root = rootPart(model);
-        return root == null ? topLevelParts(model) : List.of(root);
-        //#endif
+        return List.of(model.root());
     }
 
     private static void collectPaths(
@@ -487,8 +381,8 @@ final class EntityHeadGeometry {
     }
 
     private static RawCuboid readCuboid(
-        final MatrixStack.Entry entry,
-        final ModelPart.Cuboid cuboid,
+        final PoseStack.Pose entry,
+        final ModelPart.Cube cuboid,
         final float pitchCos,
         final float pitchSin,
         final float yawCos,
@@ -546,81 +440,25 @@ final class EntityHeadGeometry {
     }
 
     private static RawVertex readVertex(
-        final MatrixStack.Entry entry,
+        final PoseStack.Pose entry,
         final Object vertex,
         final float pitchCos,
         final float pitchSin,
         final float yawCos,
         final float yawSin
     ) {
-        //#if MC>=12109
-        //$$ if (!(vertex instanceof ModelPart.Vertex)) {
-        //$$     return null;
-        //$$ }
-        //$$ final ModelPart.Vertex direct = (ModelPart.Vertex) vertex;
-        //#if MC>=260100
-        //$$ final Vector3f transformed = new Vector3f(
-        //$$     direct.worldX(), direct.worldY(), direct.worldZ()
-        //$$ ).mulPosition(entry.pose());
-        //#else
-        //$$ final Vector3f transformed = new Vector3f(
-        //$$     direct.worldX(), direct.worldY(), direct.worldZ()
-        //$$ ).mulPosition(entry.getPositionMatrix());
-        //#endif
-        //$$ final float y = transformed.y * pitchCos - transformed.z * pitchSin;
-        //$$ final float pitchedZ = transformed.y * pitchSin + transformed.z * pitchCos;
-        //$$ final float x = transformed.x * yawCos + pitchedZ * yawSin;
-        //$$ final float z = -transformed.x * yawSin + pitchedZ * yawCos;
-        //$$ return new RawVertex(x, y, z, direct.u(), direct.v());
-        //#else
-        Object position = null;
-        final List<Float> scalars = new ArrayList<>(2);
-        for (final Field field : vertex.getClass().getDeclaredFields()) {
-            if (Modifier.isStatic(field.getModifiers())) {
-                continue;
-            }
-            try {
-                field.setAccessible(true);
-                if (field.getType() == float.class) {
-                    scalars.add(field.getFloat(vertex));
-                } else if (position == null) {
-                    position = field.get(vertex);
-                }
-            } catch (final ReflectiveOperationException | RuntimeException ignored) {
-                return null;
-            }
-        }
-        if (position == null || scalars.size() < 2) {
+        if (!(vertex instanceof ModelPart.Vertex)) {
             return null;
         }
-        //#if MC>=11900
-        //$$ if (!(position instanceof Vector3f)) {
-        //$$     return null;
-        //$$ }
-        //$$ final Vector3f source = (Vector3f) position;
-        //$$ final Vector3f transformed = new Vector3f(source).mul(1f / 16f)
-        //$$     .mulPosition(entry.getPositionMatrix());
-        //$$ final float y = transformed.y * pitchCos - transformed.z * pitchSin;
-        //$$ final float pitchedZ = transformed.y * pitchSin + transformed.z * pitchCos;
-        //$$ final float x = transformed.x * yawCos + pitchedZ * yawSin;
-        //$$ final float z = -transformed.x * yawSin + pitchedZ * yawCos;
-        //$$ return new RawVertex(x, y, z, scalars.get(0), scalars.get(1));
-        //#else
-        if (!(position instanceof Vec3f)) {
-            return null;
-        }
-        final Vec3f source = (Vec3f) position;
-        final Vector4f transformed = new Vector4f(
-            source.getX() / 16f, source.getY() / 16f, source.getZ() / 16f, 1f
-        );
-        transformed.transform(entry.getModel());
-        final float y = transformed.getY() * pitchCos - transformed.getZ() * pitchSin;
-        final float pitchedZ = transformed.getY() * pitchSin + transformed.getZ() * pitchCos;
-        final float x = transformed.getX() * yawCos + pitchedZ * yawSin;
-        final float z = -transformed.getX() * yawSin + pitchedZ * yawCos;
-        return new RawVertex(x, y, z, scalars.get(0), scalars.get(1));
-        //#endif
-        //#endif
+        final ModelPart.Vertex direct = (ModelPart.Vertex) vertex;
+        final Vector3f transformed = new Vector3f(
+            direct.worldX(), direct.worldY(), direct.worldZ()
+        ).mulPosition(entry.pose());
+        final float y = transformed.y * pitchCos - transformed.z * pitchSin;
+        final float pitchedZ = transformed.y * pitchSin + transformed.z * pitchCos;
+        final float x = transformed.x * yawCos + pitchedZ * yawSin;
+        final float z = -transformed.x * yawSin + pitchedZ * yawCos;
+        return new RawVertex(x, y, z, direct.u(), direct.v());
     }
 
     private static Object firstArrayField(final Object owner) {

@@ -7,18 +7,18 @@ import cn.net.rms.confluxmap.core.predict.CubiomesBiomeIds;
 import cn.net.rms.confluxmap.core.predict.FlatBaseline;
 import java.util.List;
 import java.util.Optional;
-import net.minecraft.block.BlockState;
-import net.minecraft.block.Blocks;
-import net.minecraft.server.world.ServerWorld;
-import net.minecraft.world.biome.Biome;
-import net.minecraft.world.gen.chunk.ChunkGenerator;
-import net.minecraft.world.gen.chunk.FlatChunkGenerator;
+import net.minecraft.world.level.block.state.BlockState;
+import net.minecraft.world.level.block.Blocks;
+import net.minecraft.server.level.ServerLevel;
+import net.minecraft.world.level.biome.Biome;
+import net.minecraft.world.level.chunk.ChunkGenerator;
+import net.minecraft.world.level.levelgen.FlatLevelSource;
 
 /**
  * Derives a superflat dimension's uniform {@link FlatBaseline} from its live {@link
- * FlatChunkGenerator} config. The layer list is indexed from the dimension's own bottom, exactly
+ * FlatLevelSource} config. The layer list is indexed from the dimension's own bottom, exactly
  * as {@code FlatChunkGenerator} places it ({@code chunk.getBottomY() + layerIndex}), so the index
- * has to be lifted by {@link net.minecraft.world.HeightLimitView#getBottomY()} to become the
+ * has to be lifted by {@link net.minecraft.world.level.LevelHeightAccessor#getBottomY()} to become the
  * absolute Y that {@link ChunkSummarizer} reports off the {@code MOTION_BLOCKING} heightmap. The
  * two only coincide on 1.17, whose overworld starts at Y=0; from 1.18 on the bottom is -64, and
  * an unlifted index left the predicted underlay height-shaded 64 blocks too high and made every
@@ -32,17 +32,13 @@ public final class FlatWorldBaseline {
     }
 
     /** Empty when the dimension is not superflat (callers should have checked the preset). */
-    public static Optional<FlatBaseline> of(final ServerWorld world) {
-        final ChunkGenerator generator = world.getChunkManager().getChunkGenerator();
-        if (!(generator instanceof final FlatChunkGenerator flat)) {
+    public static Optional<FlatBaseline> of(final ServerLevel world) {
+        final ChunkGenerator generator = world.getChunkSource().getGenerator();
+        if (!(generator instanceof final FlatLevelSource flat)) {
             return Optional.empty();
         }
-        //#if MC>=11800
-        //$$ final int biomeId = biomeId(world, flat.getConfig().getBiome().value());
-        //#else
-        final int biomeId = biomeId(world, flat.getConfig().getBiome());
-        //#endif
-        return Optional.of(fromLayers(flat.getConfig().getLayerBlocks(), world.getBottomY(), biomeId));
+        final int biomeId = biomeId(world, flat.settings().getBiome().value());
+        return Optional.of(fromLayers(flat.settings().getLayers(), world.getMinY(), biomeId));
     }
 
     /**
@@ -60,16 +56,16 @@ public final class FlatWorldBaseline {
             return new FlatBaseline(biomeId, 0, SurfaceKind.VOID.ordinal(), Proto.MAP_COLOR_NONE, 0);
         }
         final int surfaceY = bottomY + top;
-        if (layers.get(top).isOf(Blocks.WATER)) {
+        if (layers.get(top).is(Blocks.WATER)) {
             int floor = top;
-            while (floor >= 0 && layers.get(floor) != null && layers.get(floor).isOf(Blocks.WATER)) {
+            while (floor >= 0 && layers.get(floor) != null && layers.get(floor).is(Blocks.WATER)) {
                 floor--;
             }
             return new FlatBaseline(
                 biomeId, surfaceY, SurfaceKind.WATER.ordinal(), 12, Math.min(255, top - floor)
             );
         }
-        final String blockName = Regs.blocks().getId(layers.get(top).getBlock()).toString();
+        final String blockName = Regs.blocks().getKey(layers.get(top).getBlock()).toString();
         final ChunkSummarizer.BlockInfo info = ChunkSummarizer.classify(blockName, MAP_COLORS);
         if (info.kind() == SurfaceKind.UNKNOWN) {
             return new FlatBaseline(biomeId, 0, SurfaceKind.VOID.ordinal(), Proto.MAP_COLOR_NONE, 0);
@@ -82,15 +78,15 @@ public final class FlatWorldBaseline {
      * raw registry ids for vanilla biomes); modded biomes fall back to their raw registry id so
      * the diff's biome equality still holds against observed chunk data.
      */
-    private static int biomeId(final ServerWorld world, final Biome biome) {
+    private static int biomeId(final ServerLevel world, final Biome biome) {
         final var registry = Regs.biomes(world);
-        final var id = registry.getId(biome);
+        final var id = registry.getKey(biome);
         if (id != null) {
             final var mapped = CubiomesBiomeIds.idForName(id.getPath());
             if (mapped.isPresent()) {
                 return mapped.getAsInt();
             }
         }
-        return registry.getRawId(biome) & 255;
+        return registry.getId(biome) & 255;
     }
 }

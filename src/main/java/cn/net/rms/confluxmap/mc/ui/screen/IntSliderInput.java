@@ -4,11 +4,11 @@ import cn.net.rms.confluxmap.compat.Widgets;
 import java.util.function.IntConsumer;
 import java.util.function.IntFunction;
 import java.util.regex.Pattern;
-import net.minecraft.client.font.TextRenderer;
-import net.minecraft.client.gui.widget.ClickableWidget;
-import net.minecraft.client.gui.widget.SliderWidget;
-import net.minecraft.client.gui.widget.TextFieldWidget;
-import net.minecraft.text.Text;
+import net.minecraft.client.gui.Font;
+import net.minecraft.client.gui.components.AbstractWidget;
+import net.minecraft.client.gui.components.AbstractSliderButton;
+import net.minecraft.client.gui.components.EditBox;
+import net.minecraft.network.chat.Component;
 
 /** A slider and raw integer field backed by one range-checked value. */
 final class IntSliderInput {
@@ -21,12 +21,12 @@ final class IntSliderInput {
     private final IntSliderValue value;
     private final IntConsumer setter;
     private final ValueSlider slider;
-    private final TextFieldWidget input;
+    private final EditBox input;
     private String lastAcceptedText;
     private boolean synchronizingInput;
 
     IntSliderInput(
-        final TextRenderer textRenderer,
+        final Font textRenderer,
         final int x,
         final int y,
         final int width,
@@ -35,7 +35,7 @@ final class IntSliderInput {
         final int max,
         final int initialValue,
         final IntConsumer setter,
-        final IntFunction<Text> message
+        final IntFunction<Component> message
     ) {
         this.value = new IntSliderValue(min, max, initialValue);
         this.setter = setter;
@@ -47,7 +47,7 @@ final class IntSliderInput {
         final int inputWidth = Math.min(preferredInputWidth, Math.max(1, width - CONTROL_GAP - 1));
         final int sliderWidth = Math.max(1, width - CONTROL_GAP - inputWidth);
         this.slider = new ValueSlider(x, y, sliderWidth, height, message);
-        this.input = new TextFieldWidget(
+        this.input = new EditBox(
             textRenderer,
             x + sliderWidth + CONTROL_GAP,
             y,
@@ -61,11 +61,11 @@ final class IntSliderInput {
         Widgets.setChangedListener(this.input, this::onInputChanged);
     }
 
-    ClickableWidget slider() {
+    AbstractWidget slider() {
         return slider;
     }
 
-    TextFieldWidget input() {
+    EditBox input() {
         return input;
     }
 
@@ -108,17 +108,17 @@ final class IntSliderInput {
         }
     }
 
-    private final class ValueSlider extends SliderWidget {
-        private final IntFunction<Text> message;
+    private final class ValueSlider extends AbstractSliderButton {
+        private final IntFunction<Component> message;
 
         private ValueSlider(
             final int x,
             final int y,
             final int width,
             final int height,
-            final IntFunction<Text> message
+            final IntFunction<Component> message
         ) {
-            super(x, y, width, height, Text.of(""), IntSliderInput.this.value.position());
+            super(x, y, width, height, Component.nullToEmpty(""), IntSliderInput.this.value.position());
             this.message = message;
             updateMessage();
         }

@@ -13,7 +13,7 @@ import java.util.concurrent.CancellationException;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.Executor;
 import java.util.concurrent.TimeUnit;
-import net.minecraft.client.MinecraftClient;
+import net.minecraft.client.Minecraft;
 
 /** Client subscription lifecycle for the fullscreen server chunk-load-state plane. */
 public final class ChunkLoadStateClient {
@@ -38,7 +38,7 @@ public final class ChunkLoadStateClient {
         this(
             companion,
             networking::sendMessage,
-            runnable -> MinecraftClient.getInstance().execute(runnable)
+            runnable -> Minecraft.getInstance().execute(runnable)
         );
     }
 

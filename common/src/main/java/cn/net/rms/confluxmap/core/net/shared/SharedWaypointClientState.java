@@ -30,7 +30,7 @@ public final class SharedWaypointClientState {
         ENABLED
     }
 
-    /** Side effects the Fabric adapter must perform after a state transition. */
+    /** Side effects the NeoForge adapter must perform after a state transition. */
     public record Action(boolean subscribe, boolean notifyDisabled, boolean protocolRejected) {
         private static final Action NONE = new Action(false, false, false);
         private static final Action SUBSCRIBE = new Action(true, false, false);

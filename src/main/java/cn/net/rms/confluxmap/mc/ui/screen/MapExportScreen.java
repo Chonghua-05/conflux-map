@@ -17,9 +17,9 @@ import java.util.Map;
 import java.util.List;
 import java.util.Locale;
 import java.util.regex.Pattern;
-import net.minecraft.client.MinecraftClient;
-import net.minecraft.client.gui.widget.ButtonWidget;
-import net.minecraft.client.gui.widget.TextFieldWidget;
+import net.minecraft.client.Minecraft;
+import net.minecraft.client.gui.components.Button;
+import net.minecraft.client.gui.components.EditBox;
 
 /** Coordinate/resolution form and non-pausing progress screen for one PNG export. */
 final class MapExportScreen extends ConfluxScreen {
@@ -33,14 +33,14 @@ final class MapExportScreen extends ConfluxScreen {
     private MapExportRequest renderSnapshot;
     private MapExportBounds bounds;
     private MapExportResolution resolution;
-    private TextFieldWidget firstXField;
-    private TextFieldWidget firstZField;
-    private TextFieldWidget secondXField;
-    private TextFieldWidget secondZField;
-    private ButtonWidget exportButton;
-    private final Map<MapExportResolution, ButtonWidget> resolutionButtons =
+    private EditBox firstXField;
+    private EditBox firstZField;
+    private EditBox secondXField;
+    private EditBox secondZField;
+    private Button exportButton;
+    private final Map<MapExportResolution, Button> resolutionButtons =
         new EnumMap<>(MapExportResolution.class);
-    private ButtonWidget drawingsButton;
+    private Button drawingsButton;
     private boolean includeDrawings = true;
     private boolean submitted;
     private MapExportStatus.State renderedState;
@@ -72,7 +72,7 @@ final class MapExportScreen extends ConfluxScreen {
     }
 
     private void rebuild() {
-        clearChildren();
+        clearWidgets();
         clearEnterAction();
         final MapExportStatus status = exports.status();
         renderedState = status.state();
@@ -91,10 +91,10 @@ final class MapExportScreen extends ConfluxScreen {
         firstZField = numericField(right, 58, bounds.minZ());
         secondXField = numericField(left, 94, bounds.maxX());
         secondZField = numericField(right, 94, bounds.maxZ());
-        addDrawableChild(firstXField);
-        addDrawableChild(firstZField);
-        addDrawableChild(secondXField);
-        addDrawableChild(secondZField);
+        addRenderableWidget(firstXField);
+        addRenderableWidget(firstZField);
+        addRenderableWidget(secondXField);
+        addRenderableWidget(secondZField);
 
         final MapExportResolution[] resolutions = MapExportResolution.values();
         final int resolutionGap = 3;
@@ -103,7 +103,7 @@ final class MapExportScreen extends ConfluxScreen {
             / resolutions.length;
         int resolutionX = width / 2 - resolutionRowWidth / 2;
         for (final MapExportResolution candidate : resolutions) {
-            final ButtonWidget button = addDrawableChild(Widgets.button(
+            final Button button = addRenderableWidget(Widgets.button(
                 resolutionX,
                 130,
                 resolutionWidth,
@@ -114,7 +114,7 @@ final class MapExportScreen extends ConfluxScreen {
             resolutionButtons.put(candidate, button);
             resolutionX += resolutionWidth + resolutionGap;
         }
-        drawingsButton = addDrawableChild(Widgets.button(
+        drawingsButton = addRenderableWidget(Widgets.button(
             width / 2 - 98, 156, 95, FIELD_HEIGHT,
             drawingsLabel(),
             ignored -> {
@@ -122,17 +122,17 @@ final class MapExportScreen extends ConfluxScreen {
                 drawingsButton.setMessage(drawingsLabel());
             }
         ));
-        addDrawableChild(Widgets.button(
+        addRenderableWidget(Widgets.button(
             width / 2 + 3, 156, 95, FIELD_HEIGHT,
             Texts.translatable("confluxmap.screen.map_export.select_on_map"),
             ignored -> selectOnMap()
         ));
-        exportButton = addDrawableChild(Widgets.button(
+        exportButton = addRenderableWidget(Widgets.button(
             width / 2 - 104, height - 32, 100, FIELD_HEIGHT,
             Texts.translatable("confluxmap.screen.map_export.export"),
             ignored -> submit()
         ));
-        addDrawableChild(Widgets.button(
+        addRenderableWidget(Widgets.button(
             width / 2 + 4, height - 32, 100, FIELD_HEIGHT,
             Texts.translatable("confluxmap.screen.waypoint.cancel"),
             ignored -> onClose()
@@ -144,14 +144,14 @@ final class MapExportScreen extends ConfluxScreen {
     private void addStatusControls() {
         final MapExportStatus status = exports.status();
         if (status.active()) {
-            addDrawableChild(Widgets.button(
+            addRenderableWidget(Widgets.button(
                 width / 2 - 50, height - 32, 100, FIELD_HEIGHT,
                 Texts.translatable("confluxmap.screen.map_export.cancel"),
                 ignored -> exports.cancel()
             ));
             return;
         }
-        addDrawableChild(Widgets.button(
+        addRenderableWidget(Widgets.button(
             status.state() == MapExportStatus.State.COMPLETED ? width / 2 - 148 : width / 2 - 104,
             height - 32,
             status.state() == MapExportStatus.State.COMPLETED ? 94 : 100,
@@ -163,13 +163,13 @@ final class MapExportScreen extends ConfluxScreen {
             }
         ));
         if (status.state() == MapExportStatus.State.COMPLETED && status.output() != null) {
-            addDrawableChild(Widgets.button(
+            addRenderableWidget(Widgets.button(
                 width / 2 - 47, height - 32, 94, FIELD_HEIGHT,
                 Texts.translatable("confluxmap.screen.map_export.open_folder"),
                 ignored -> desktopActions.openDirectory(status.output())
             ));
         }
-        addDrawableChild(Widgets.button(
+        addRenderableWidget(Widgets.button(
             status.state() == MapExportStatus.State.COMPLETED ? width / 2 + 54 : width / 2 + 4,
             height - 32,
             status.state() == MapExportStatus.State.COMPLETED ? 94 : 100,
@@ -179,24 +179,20 @@ final class MapExportScreen extends ConfluxScreen {
         ));
     }
 
-    private TextFieldWidget numericField(final int x, final int y, final int value) {
-        final TextFieldWidget field = new TextFieldWidget(
-            this.textRenderer, x, y, FIELD_WIDTH, FIELD_HEIGHT, Texts.literal("")
+    private EditBox numericField(final int x, final int y, final int value) {
+        final EditBox field = new EditBox(
+            this.font, x, y, FIELD_WIDTH, FIELD_HEIGHT, Texts.literal("")
         );
         field.setMaxLength(11);
-        //#if MC>=260100
-        //$$ final String[] lastValid = {Integer.toString(value)};
-        //$$ field.setResponder(text -> {
-        //$$     if (INTEGER.matcher(text).matches()) {
-        //$$         lastValid[0] = text;
-        //$$     } else {
-        //$$         field.setValue(lastValid[0]);
-        //$$     }
-        //$$ });
-        //#else
-        field.setTextPredicate(text -> INTEGER.matcher(text).matches());
-        //#endif
-        field.setText(Integer.toString(value));
+        final String[] lastValid = {Integer.toString(value)};
+        field.setResponder(text -> {
+            if (INTEGER.matcher(text).matches()) {
+                lastValid[0] = text;
+            } else {
+                field.setValue(lastValid[0]);
+            }
+        });
+        field.setValue(Integer.toString(value));
         return field;
     }
 
@@ -234,10 +230,10 @@ final class MapExportScreen extends ConfluxScreen {
     private MapExportBounds parsedBounds() {
         try {
             return MapExportBounds.between(
-                Integer.parseInt(firstXField.getText()),
-                Integer.parseInt(firstZField.getText()),
-                Integer.parseInt(secondXField.getText()),
-                Integer.parseInt(secondZField.getText())
+                Integer.parseInt(firstXField.getValue()),
+                Integer.parseInt(firstZField.getValue()),
+                Integer.parseInt(secondXField.getValue()),
+                Integer.parseInt(secondZField.getValue())
             );
         } catch (final NumberFormatException e) {
             return null;
@@ -261,20 +257,20 @@ final class MapExportScreen extends ConfluxScreen {
         }
     }
 
-    private net.minecraft.text.Text resolutionOptionLabel(final MapExportResolution candidate) {
+    private net.minecraft.network.chat.Component resolutionOptionLabel(final MapExportResolution candidate) {
         final String value = MapExportQuality.fraction(candidate);
         return Texts.literal(candidate == resolution ? "[" + value + "]" : value);
     }
 
     private void selectResolution(final MapExportResolution selected) {
         resolution = selected;
-        for (final Map.Entry<MapExportResolution, ButtonWidget> entry : resolutionButtons.entrySet()) {
+        for (final Map.Entry<MapExportResolution, Button> entry : resolutionButtons.entrySet()) {
             entry.getValue().setMessage(resolutionOptionLabel(entry.getKey()));
         }
         refreshExportButton();
     }
 
-    private net.minecraft.text.Text drawingsLabel() {
+    private net.minecraft.network.chat.Component drawingsLabel() {
         return Texts.translatable(
             "confluxmap.screen.map_export.drawings",
             Texts.translatable(
@@ -318,7 +314,7 @@ final class MapExportScreen extends ConfluxScreen {
     }
 
     private void returnToMap() {
-        MinecraftAccess.setScreen(MinecraftClient.getInstance(), parent);
+        MinecraftAccess.setScreen(Minecraft.getInstance(), parent);
     }
 
     @Override
@@ -438,26 +434,18 @@ final class MapExportScreen extends ConfluxScreen {
     }
 
     private String fitToWidth(final String text, final int maxWidth) {
-        //#if MC>=260100
-        //$$ return this.font.plainSubstrByWidth(text, maxWidth);
-        //#else
-        return this.textRenderer.trimToWidth(text, maxWidth);
-        //#endif
+        return this.font.plainSubstrByWidth(text, maxWidth);
     }
 
     private int textWidth(final String text) {
-        //#if MC>=260100
-        //$$ return this.font.width(text);
-        //#else
-        return this.textRenderer.getWidth(text);
-        //#endif
+        return this.font.width(text);
     }
 
     private void drawCentered(final GuiDraw draw, final String text, final int y, final int color) {
         draw.drawTextWithShadow(
-            this.textRenderer,
+            this.font,
             text,
-            width / 2f - this.textRenderer.getWidth(text) / 2f,
+            width / 2f - this.font.width(text) / 2f,
             y,
             color
         );

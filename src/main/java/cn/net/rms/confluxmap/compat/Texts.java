@@ -1,17 +1,9 @@
 package cn.net.rms.confluxmap.compat;
-
-//#if MC>=12105
-//$$ import java.net.URI;
-//#endif
-import net.minecraft.text.ClickEvent;
-import net.minecraft.text.HoverEvent;
-import net.minecraft.text.MutableText;
-import net.minecraft.text.Text;
-
-//#if MC<11900
-import net.minecraft.text.LiteralText;
-import net.minecraft.text.TranslatableText;
-//#endif
+import java.net.URI;
+import net.minecraft.network.chat.ClickEvent;
+import net.minecraft.network.chat.HoverEvent;
+import net.minecraft.network.chat.MutableComponent;
+import net.minecraft.network.chat.Component;
 
 /**
  * The one place that knows how this Minecraft version builds a text component.
@@ -19,69 +11,41 @@ import net.minecraft.text.TranslatableText;
  * <p>1.19 deleted {@code LiteralText}/{@code TranslatableText} in favour of the {@code Text}
  * static factories. That rename reaches ~135 call sites across the UI, chat and command code, so
  * routing every one of them through these two methods keeps the version fork to a single seam
- * instead of scattering preprocessor branches over sixteen files.
+ * instead of scattering version-specific branches over many files.
  */
 public final class Texts {
     private Texts() {
     }
 
     /** A translated component for {@code key}, with optional format arguments. */
-    public static MutableText translatable(final String key, final Object... args) {
-        //#if MC>=11900
-        //$$ return Text.translatable(key, args);
-        //#else
-        return new TranslatableText(key, args);
-        //#endif
+    public static MutableComponent translatable(final String key, final Object... args) {
+        return Component.translatable(key, args);
     }
 
     /** A literal, untranslated component. */
-    public static MutableText literal(final String text) {
-        //#if MC>=11900
-        //$$ return Text.literal(text);
-        //#else
-        return new LiteralText(text);
-        //#endif
+    public static MutableComponent literal(final String text) {
+        return Component.literal(text);
     }
 
     public static ClickEvent copyToClipboard(final String value) {
-        //#if MC>=12105
-        //$$ return new ClickEvent.CopyToClipboard(value);
-        //#else
-        return new ClickEvent(ClickEvent.Action.COPY_TO_CLIPBOARD, value);
-        //#endif
+        return new ClickEvent.CopyToClipboard(value);
     }
 
     public static ClickEvent openUrl(final String value) {
-        //#if MC>=12105
-        //$$ return new ClickEvent.OpenUrl(URI.create(value));
-        //#else
-        return new ClickEvent(ClickEvent.Action.OPEN_URL, value);
-        //#endif
+        return new ClickEvent.OpenUrl(URI.create(value));
     }
 
     public static ClickEvent runCommand(final String command) {
-        //#if MC>=12105
-        //$$ return new ClickEvent.RunCommand(command);
-        //#else
-        return new ClickEvent(ClickEvent.Action.RUN_COMMAND, command);
-        //#endif
+        return new ClickEvent.RunCommand(command);
     }
 
-    public static HoverEvent showText(final Text value) {
-        //#if MC>=12105
-        //$$ return new HoverEvent.ShowText(value);
-        //#else
-        return new HoverEvent(HoverEvent.Action.SHOW_TEXT, value);
-        //#endif
+    public static HoverEvent showText(final Component value) {
+        return new HoverEvent.ShowText(value);
     }
 
     /** String payload carried by a click event, or null for event variants without one. */
     public static String clickValue(final ClickEvent event) {
-        //#if MC>=12105
-        //$$ return event instanceof ClickEvent.CopyToClipboard copy ? copy.value() : null;
-        //#else
-        return event.getValue();
-        //#endif
+        return event instanceof ClickEvent.CopyToClipboard copy ? copy.value() : null;
     }
 
     /** Run-command payload carried by a click event, or null for every other action. */
@@ -89,10 +53,6 @@ public final class Texts {
         if (event == null) {
             return null;
         }
-        //#if MC>=12105
-        //$$ return event instanceof ClickEvent.RunCommand run ? run.command() : null;
-        //#else
-        return event.getAction() == ClickEvent.Action.RUN_COMMAND ? event.getValue() : null;
-        //#endif
+        return event instanceof ClickEvent.RunCommand run ? run.command() : null;
     }
 }

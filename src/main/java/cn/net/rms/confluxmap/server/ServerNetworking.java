@@ -36,12 +36,13 @@ import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentMap;
-import net.fabricmc.fabric.api.networking.v1.ServerPlayConnectionEvents;
+import net.neoforged.neoforge.common.NeoForge;
+import net.neoforged.neoforge.event.entity.player.PlayerEvent;
 import net.minecraft.server.MinecraftServer;
-import net.minecraft.server.network.ServerPlayerEntity;
-import net.minecraft.server.world.ServerWorld;
-import net.minecraft.util.Identifier;
-import net.minecraft.world.World;
+import net.minecraft.server.level.ServerPlayer;
+import net.minecraft.server.level.ServerLevel;
+import net.minecraft.resources.Identifier;
+import net.minecraft.world.level.Level;
 
 /**
  * Server-side channel handler for {@link Proto#CHANNEL_ID}. Owns the receiver registrations and
@@ -71,8 +72,8 @@ public final class ServerNetworking {
         }
         registered = true;
         PlayNetworking.registerServer(CHANNEL, this::onReceive);
-        ServerPlayConnectionEvents.DISCONNECT.register((handler, server) -> {
-            final UUID uuid = handler.getPlayer().getUuid();
+        NeoForge.EVENT_BUS.addListener((PlayerEvent.PlayerLoggedOutEvent event) -> { if (!(event.getEntity() instanceof final ServerPlayer player)) return;
+            final UUID uuid = player.getUUID();
             malformedStrikes.remove(uuid);
             mutedPlayers.remove(uuid);
             peerSessions.remove(uuid);
@@ -89,13 +90,13 @@ public final class ServerNetworking {
 
     private void onReceive(
         final MinecraftServer server,
-        final ServerPlayerEntity player,
+        final ServerPlayer player,
         final byte[] payload
     ) {
         if (!companion.isEnabled()) {
             return;
         }
-        if (mutedPlayers.contains(player.getUuid())) {
+        if (mutedPlayers.contains(player.getUUID())) {
             return;
         }
         try {
@@ -110,7 +111,7 @@ public final class ServerNetworking {
             return;
         }
         try {
-            final NegotiatedMapSync session = peerSessions.get(player.getUuid());
+            final NegotiatedMapSync session = peerSessions.get(player.getUUID());
             final Message msg = session == null
                 ? MapSyncProtocol.decodeServerbound(payload)
                 : session.decodeInbound(payload);
@@ -139,15 +140,15 @@ public final class ServerNetworking {
         }
     }
 
-    private void recordMalformed(final ServerPlayerEntity player) {
-        final int strikes = malformedStrikes.merge(player.getUuid(), 1, Integer::sum);
+    private void recordMalformed(final ServerPlayer player) {
+        final int strikes = malformedStrikes.merge(player.getUUID(), 1, Integer::sum);
         send(player, new ErrorS2C(ErrorS2C.ERR_MALFORMED_REQUEST, "malformed companion payload (strike " + strikes + ")"));
         if (strikes >= 3) {
-            mutedPlayers.add(player.getUuid());
+            mutedPlayers.add(player.getUUID());
         }
     }
 
-    private void handleHello(final MinecraftServer server, final ServerPlayerEntity player, final HelloC2S hello) {
+    private void handleHello(final MinecraftServer server, final ServerPlayer player, final HelloC2S hello) {
         if (!companion.isEnabled()) {
             return;
         }
@@ -155,8 +156,8 @@ public final class ServerNetworking {
             hello, ConfluxMapMod.getVersion(), PredictorVersion.full()
         );
         final NegotiatedMapSync session = handshake.session();
-        companion.summaries().remove(player.getUuid());
-        peerSessions.put(player.getUuid(), session);
+        companion.summaries().remove(player.getUUID());
+        peerSessions.put(player.getUUID(), session);
         if (handshake.selection() != null) {
             send(player, handshake.selection());
         }
@@ -169,7 +170,7 @@ public final class ServerNetworking {
         }
         if (session.supports(MapSyncCapability.SERVER_VIEW_DISTANCE)) {
             sendNegotiated(player, session, ServerViewDistanceS2C.bounded(
-                server.getPlayerManager().getViewDistance()
+                server.getPlayerList().getViewDistance()
             ));
         }
         // Precedes HELLO_POLICY for the same reason FLAT_BASELINE does: the client opens its
@@ -191,7 +192,7 @@ public final class ServerNetworking {
 
     private void handleMapViewReq(
         final MinecraftServer server,
-        final ServerPlayerEntity player,
+        final ServerPlayer player,
         final MapViewReqC2S req,
         final int payloadBytes
     ) {
@@ -208,7 +209,7 @@ public final class ServerNetworking {
 
     private void handleMapRegionViewReq(
         final MinecraftServer server,
-        final ServerPlayerEntity player,
+        final ServerPlayer player,
         final MapRegionViewReqC2S request,
         final int payloadBytes
     ) {
@@ -226,7 +227,7 @@ public final class ServerNetworking {
 
     private void handleLoadStateSubscribe(
         final MinecraftServer server,
-        final ServerPlayerEntity player,
+        final ServerPlayer player,
         final LoadStateSubscribeC2S request
     ) {
         final ChunkLoadStateService service = companion.chunkLoadStates();
@@ -235,7 +236,7 @@ public final class ServerNetworking {
             return;
         }
         if (!service.subscribe(
-            server, player.getUuid(), request,
+            server, player.getUUID(), request,
             delta -> sendNegotiated(player, peerSession(player), delta)
         )) {
             send(player, new ErrorS2C(ErrorS2C.ERR_MALFORMED_REQUEST, "invalid load-state dimension"));
@@ -244,7 +245,7 @@ public final class ServerNetworking {
 
     private void handleMapSyncSubscribe(
         final MinecraftServer server,
-        final ServerPlayerEntity player,
+        final ServerPlayer player,
         final MapSyncSubscribeC2S request
     ) {
         if (!companion.config().shareCorrections || !peerSession(player).correctionsEnabled()) {
@@ -252,7 +253,7 @@ public final class ServerNetworking {
             return;
         }
         if (!companion.summaries().subscribe(
-            server, player.getUuid(), request,
+            server, player.getUUID(), request,
             senderFor(player, peerSession(player))
         )) {
             send(player, new ErrorS2C(ErrorS2C.ERR_MALFORMED_REQUEST, "invalid map-sync viewport"));
@@ -261,7 +262,7 @@ public final class ServerNetworking {
 
     private void handleMapRegionSyncSubscribe(
         final MinecraftServer server,
-        final ServerPlayerEntity player,
+        final ServerPlayer player,
         final MapRegionSyncSubscribeC2S request
     ) {
         if (!companion.config().shareCorrections || !peerSession(player).correctionsEnabled()) {
@@ -269,15 +270,15 @@ public final class ServerNetworking {
             return;
         }
         if (!companion.summaries().subscribeRegions(
-            server, player.getUuid(), request,
+            server, player.getUUID(), request,
             senderFor(player, peerSession(player))
         )) {
             send(player, new ErrorS2C(ErrorS2C.ERR_MALFORMED_REQUEST, "invalid region-sync viewport"));
         }
     }
 
-    private NegotiatedMapSync peerSession(final ServerPlayerEntity player) {
-        return peerSessions.getOrDefault(player.getUuid(), disabledSession());
+    private NegotiatedMapSync peerSession(final ServerPlayer player) {
+        return peerSessions.getOrDefault(player.getUUID(), disabledSession());
     }
 
     void broadcastPlayerPositions(final MinecraftServer server) {
@@ -285,11 +286,11 @@ public final class ServerNetworking {
             return;
         }
         final List<PlayerPositionsS2C.Entry> entries = new ArrayList<>();
-        for (final ServerPlayerEntity player : server.getPlayerManager().getPlayerList()) {
+        for (final ServerPlayer player : server.getPlayerList().getPlayers()) {
             entries.add(new PlayerPositionsS2C.Entry(
-                player.getUuid(),
+                player.getUUID(),
                 MinecraftAccess.playerName(player),
-                player.getServerWorld().getRegistryKey().getValue().toString(),
+                player.level().dimension().identifier().toString(),
                 player.getX(),
                 player.getY(),
                 player.getZ(),
@@ -297,8 +298,8 @@ public final class ServerNetworking {
             ));
         }
         final PlayerPositionsS2C snapshot = new PlayerPositionsS2C(entries);
-        for (final ServerPlayerEntity player : server.getPlayerManager().getPlayerList()) {
-            final NegotiatedMapSync session = peerSessions.get(player.getUuid());
+        for (final ServerPlayer player : server.getPlayerList().getPlayers()) {
+            final NegotiatedMapSync session = peerSessions.get(player.getUUID());
             if (session != null && session.supports(MapSyncCapability.PLAYER_POSITIONS)) {
                 sendNegotiated(player, session, snapshot);
             }
@@ -336,11 +337,11 @@ public final class ServerNetworking {
 
     private static List<HelloPolicyS2C.DimDescriptor> buildDimDescriptors(final MinecraftServer server, final boolean shareSeed) {
         // Vanilla seed is identical across dimensions (see research R6). Read once from the overworld.
-        final long seed = server.getOverworld().getSeed();
+        final long seed = server.overworld().getSeed();
         final List<HelloPolicyS2C.DimDescriptor> dims = new ArrayList<>(2);
-        for (final ServerWorld sw : server.getWorlds()) {
-            final String dimId = sw.getRegistryKey().getValue().toString();
-            final String dimType = sw.getRegistryKey().getValue().getPath();
+        for (final ServerLevel sw : server.getAllLevels()) {
+            final String dimId = sw.dimension().identifier().toString();
+            final String dimType = sw.dimension().identifier().getPath();
             final WorldPreset preset = WorldPresetDetector.detect(sw);
             // predictable=false also withholds the seed on pre-preset clients (their seedFor
             // checks it), so superflat/custom dims degrade correctly across versions.
@@ -358,7 +359,7 @@ public final class ServerNetworking {
     private static List<FlatBaselineS2C.Entry> buildFlatBaselines(final MinecraftServer server) {
         final List<FlatBaselineS2C.Entry> entries = new ArrayList<>(1);
         int dimIndex = 0;
-        for (final ServerWorld sw : server.getWorlds()) {
+        for (final ServerLevel sw : server.getAllLevels()) {
             if (WorldPresetDetector.detect(sw) == WorldPreset.FLAT) {
                 final int index = dimIndex;
                 FlatWorldBaseline.of(sw).ifPresent(
@@ -370,7 +371,7 @@ public final class ServerNetworking {
         return entries;
     }
 
-    private static void send(final ServerPlayerEntity player, final Message msg) {
+    private static void send(final ServerPlayer player, final Message msg) {
         final byte[] payload;
         try {
             payload = MsgCodec.encode(msg);
@@ -381,12 +382,12 @@ public final class ServerNetworking {
         send(player, payload);
     }
 
-    private static void send(final ServerPlayerEntity player, final byte[] payload) {
+    private static void send(final ServerPlayer player, final byte[] payload) {
         PlayNetworking.sendServer(player, CHANNEL, payload);
     }
 
     private static void sendNegotiated(
-        final ServerPlayerEntity player,
+        final ServerPlayer player,
         final NegotiatedMapSync session,
         final Message message
     ) {
@@ -401,7 +402,7 @@ public final class ServerNetworking {
     }
 
     private static RegionSummaryService.MessageSender senderFor(
-        final ServerPlayerEntity player,
+        final ServerPlayer player,
         final NegotiatedMapSync session
     ) {
         return new RegionSummaryService.MessageSender() {

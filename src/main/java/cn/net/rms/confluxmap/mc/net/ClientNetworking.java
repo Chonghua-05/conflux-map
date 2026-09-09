@@ -25,10 +25,10 @@ import cn.net.rms.confluxmap.core.net.ServerInstanceS2C;
 import cn.net.rms.confluxmap.core.net.ServerViewDistanceS2C;
 import cn.net.rms.confluxmap.nativepredict.PredictorVersion;
 import cn.net.rms.confluxmap.core.radar.ServerPlayerRadarState;
-import net.fabricmc.fabric.api.client.networking.v1.ClientPlayConnectionEvents;
-import net.minecraft.client.MinecraftClient;
-import net.minecraft.client.network.ClientPlayNetworkHandler;
-import net.minecraft.util.Identifier;
+import cn.net.rms.confluxmap.neoforge.compat.ClientPlayConnectionEvents;
+import net.minecraft.client.Minecraft;
+import net.minecraft.client.multiplayer.ClientPacketListener;
+import net.minecraft.resources.Identifier;
 
 /**
  * Client-side wiring for the {@code confluxmap:map_sync} companion channel. Owns one global
@@ -36,8 +36,8 @@ import net.minecraft.util.Identifier;
  * (HELLO_POLICY), to the correction sync loop (MAP_PATCH), or logs
  * (POLICY_UPDATE / ERROR). Network callbacks are decoded off-thread, then state changes are
  * marshalled to the client thread. On {@link ClientPlayConnectionEvents#JOIN} it sends a
- * HELLO_C2S immediately (fabric-api's JOIN fires at the RETURN of {@code onGameJoin} with the
- * channel ready - see the research report); on {@link ClientPlayConnectionEvents#DISCONNECT} it
+ * HELLO_C2S immediately (the NeoForge connection callback fires after {@code onGameJoin} with the
+ * channel ready); on {@link ClientPlayConnectionEvents#DISCONNECT} it
  * resets the session on that same client thread.
  */
 public final class ClientNetworking {
@@ -71,8 +71,8 @@ public final class ClientNetworking {
     }
 
     private void onReceive(
-        final MinecraftClient client,
-        final ClientPlayNetworkHandler handler,
+        final Minecraft client,
+        final ClientPacketListener handler,
         final byte[] payload
     ) {
         try {
@@ -142,11 +142,11 @@ public final class ClientNetworking {
     }
 
     private void onDisconnect(
-        final ClientPlayNetworkHandler handler,
-        final MinecraftClient client
+        final ClientPacketListener handler,
+        final Minecraft client
     ) {
         client.execute(() -> {
-            final ClientPlayNetworkHandler current = client.getNetworkHandler();
+            final ClientPacketListener current = client.getConnection();
             if (current != null && current != handler) {
                 return;
             }
@@ -167,12 +167,12 @@ public final class ClientNetworking {
     }
 
     private static void executeForConnection(
-        final MinecraftClient client,
-        final ClientPlayNetworkHandler handler,
+        final Minecraft client,
+        final ClientPacketListener handler,
         final Runnable task
     ) {
         client.execute(() -> {
-            if (client.getNetworkHandler() == handler) {
+            if (client.getConnection() == handler) {
                 task.run();
             }
         });

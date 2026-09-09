@@ -6,8 +6,8 @@ import cn.net.rms.confluxmap.core.net.PackedBits;
 import cn.net.rms.confluxmap.core.predict.CubiomesBiomeIds;
 import java.util.ArrayList;
 import java.util.List;
-import net.minecraft.nbt.NbtCompound;
-import net.minecraft.nbt.NbtList;
+import net.minecraft.nbt.CompoundTag;
+import net.minecraft.nbt.ListTag;
 
 /** Serialized-region implementation of {@link ChunkColumnSource}. */
 final class NbtChunkColumnSource implements ChunkColumnSource {
@@ -19,7 +19,7 @@ final class NbtChunkColumnSource implements ChunkColumnSource {
     private final int[] legacyBiomes;
     private final List<Section> sections;
 
-    NbtChunkColumnSource(final NbtCompound root) {
+    NbtChunkColumnSource(final CompoundTag root) {
         if (root == null) {
             generated = false;
             revision = 0L;
@@ -31,9 +31,9 @@ final class NbtChunkColumnSource implements ChunkColumnSource {
             return;
         }
         final boolean legacy = Nbts.hasCompound(root, "Level");
-        final NbtCompound level = legacy ? Nbts.compound(root, "Level") : root;
+        final CompoundTag level = legacy ? Nbts.compound(root, "Level") : root;
         final String status = Nbts.string(level, "Status");
-        final NbtCompound heightmaps = Nbts.compound(level, "Heightmaps");
+        final CompoundTag heightmaps = Nbts.compound(level, "Heightmaps");
         final long[] motionBlocking = Nbts.longArray(heightmaps, "MOTION_BLOCKING");
         generated = ("full".equals(status) || "minecraft:full".equals(status))
             && motionBlocking.length != 0;
@@ -114,20 +114,20 @@ final class NbtChunkColumnSource implements ChunkColumnSource {
         return section == null ? 0 : nibble(section.blockLight, x, y, z);
     }
 
-    private static List<Section> parseSections(final NbtList list) {
+    private static List<Section> parseSections(final ListTag list) {
         final List<Section> result = new ArrayList<>(list.size());
         for (int i = 0; i < list.size(); i++) {
-            final NbtCompound section = Nbts.compound(list, i);
+            final CompoundTag section = Nbts.compound(list, i);
             final int y = Nbts.byteValue(section, "Y");
             final boolean modern = Nbts.hasCompound(section, "block_states");
-            final NbtCompound blockStates = modern ? Nbts.compound(section, "block_states") : section;
+            final CompoundTag blockStates = modern ? Nbts.compound(section, "block_states") : section;
             final String paletteKey = modern ? "palette" : "Palette";
             final String dataKey = modern ? "data" : "BlockStates";
-            final NbtList palette = Nbts.list(blockStates, paletteKey, 10);
+            final ListTag palette = Nbts.list(blockStates, paletteKey, 10);
             final String[] names = new String[Math.max(1, palette.size())];
             final SurfaceKind[] fluidKinds = new SurfaceKind[names.length];
             for (int p = 0; p < palette.size(); p++) {
-                final NbtCompound entry = Nbts.compound(palette, p);
+                final CompoundTag entry = Nbts.compound(palette, p);
                 names[p] = Nbts.string(entry, "Name");
                 fluidKinds[p] = fluidKind(names[p], Nbts.compound(entry, "Properties"));
             }
@@ -137,8 +137,8 @@ final class NbtChunkColumnSource implements ChunkColumnSource {
             }
             final long[] states = Nbts.longArray(blockStates, dataKey);
             final int bits = Math.max(4, bitsFor(names.length));
-            final NbtCompound biomeContainer = modern ? Nbts.compound(section, "biomes") : new NbtCompound();
-            final NbtList biomePalette = Nbts.list(biomeContainer, "palette", 8);
+            final CompoundTag biomeContainer = modern ? Nbts.compound(section, "biomes") : new CompoundTag();
+            final ListTag biomePalette = Nbts.list(biomeContainer, "palette", 8);
             final int[] biomeIds = new int[Math.max(1, biomePalette.size())];
             for (int p = 0; p < biomePalette.size(); p++) {
                 biomeIds[p] = biomeId(Nbts.string(biomePalette, p));
@@ -180,7 +180,7 @@ final class NbtChunkColumnSource implements ChunkColumnSource {
         return Math.min(decoded, section.names.length - 1);
     }
 
-    private static SurfaceKind fluidKind(final String name, final NbtCompound properties) {
+    private static SurfaceKind fluidKind(final String name, final CompoundTag properties) {
         if ("true".equals(Nbts.string(properties, "waterlogged"))
             || name.contains("water") || "minecraft:kelp".equals(name) || "minecraft:kelp_plant".equals(name)
             || "minecraft:seagrass".equals(name) || "minecraft:tall_seagrass".equals(name)

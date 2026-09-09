@@ -22,14 +22,12 @@ import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.OptionalInt;
-import net.minecraft.client.MinecraftClient;
-//#if MC>=12109
-//$$ import net.minecraft.client.gui.Click;
-//#endif
-import net.minecraft.client.gui.widget.ButtonWidget;
-import net.minecraft.client.gui.widget.TextFieldWidget;
-import net.minecraft.text.Text;
-import net.minecraft.util.Identifier;
+import net.minecraft.client.Minecraft;
+import net.minecraft.client.input.MouseButtonEvent;
+import net.minecraft.client.gui.components.Button;
+import net.minecraft.client.gui.components.EditBox;
+import net.minecraft.network.chat.Component;
+import net.minecraft.resources.Identifier;
 import net.minecraft.util.Util;
 
 /** Shared structure/biome picker with localized filtering and candidate browsing. */
@@ -57,15 +55,15 @@ final class StructureSearchScreen extends ConfluxScreen {
     private final List<StructureIndex.StructureType> available;
     private final List<Identifier> biomes = new ArrayList<>();
     private final SplitMapPane mapPane;
-    private final Map<StructureIndex.StructureType, ButtonWidget> visibilityButtons =
+    private final Map<StructureIndex.StructureType, Button> visibilityButtons =
         new EnumMap<>(StructureIndex.StructureType.class);
-    private final Map<StructureIndex.StructureType, ButtonWidget> locateButtons =
+    private final Map<StructureIndex.StructureType, Button> locateButtons =
         new EnumMap<>(StructureIndex.StructureType.class);
-    private final Map<Identifier, ButtonWidget> biomeLocateButtons = new HashMap<>();
+    private final Map<Identifier, Button> biomeLocateButtons = new HashMap<>();
 
-    private TextFieldWidget searchField;
-    private ButtonWidget modeButton;
-    private ButtonWidget masterButton;
+    private EditBox searchField;
+    private Button modeButton;
+    private Button masterButton;
     private MapSearchMode mode;
     private String observedQuery = "";
     private int scrollOffset;
@@ -93,8 +91,8 @@ final class StructureSearchScreen extends ConfluxScreen {
         this.mapPane = new SplitMapPane(parent);
         this.available = new ArrayList<>(available);
         this.available.sort(Comparator.comparing(StructureSearchScreen::localizedName));
-        if (MinecraftClient.getInstance().world != null) {
-            for (final Identifier id : Regs.biomes(MinecraftClient.getInstance().world).getIds()) {
+        if (Minecraft.getInstance().level != null) {
+            for (final Identifier id : Regs.biomes(Minecraft.getInstance().level).keySet()) {
                 if (isBiomeAvailable(dimension, id)) {
                     biomes.add(id);
                 }
@@ -134,7 +132,7 @@ final class StructureSearchScreen extends ConfluxScreen {
         panelContentWidth = requiredPanelContentWidth();
         final SplitMapLayout layout = splitLayout();
         final int modeWidth = Math.min(160, layout.panelContentWidth());
-        modeButton = addDrawableChild(Widgets.button(
+        modeButton = addRenderableWidget(Widgets.button(
             layout.panelCenterX() - modeWidth / 2,
             MODE_TOP,
             modeWidth,
@@ -143,8 +141,8 @@ final class StructureSearchScreen extends ConfluxScreen {
             ignored -> switchMode()
         ));
         final int fieldWidth = Math.min(FIELD_WIDTH, layout.panelContentWidth());
-        searchField = new TextFieldWidget(
-            this.textRenderer,
+        searchField = new EditBox(
+            this.font,
             layout.panelCenterX() - fieldWidth / 2,
             FIELD_TOP,
             fieldWidth,
@@ -156,8 +154,8 @@ final class StructureSearchScreen extends ConfluxScreen {
             )
         );
         searchField.setMaxLength(64);
-        searchField.setText(observedQuery);
-        addDrawableChild(searchField);
+        searchField.setValue(observedQuery);
+        addRenderableWidget(searchField);
         setInitialFocus(searchField);
 
         final int listWidth = Math.max(
@@ -165,7 +163,7 @@ final class StructureSearchScreen extends ConfluxScreen {
         );
         rowWidth = Math.min(420, listWidth);
         rowX = layout.panelContentLeft() + (listWidth - rowWidth) / 2;
-        masterButton = addDrawableChild(Widgets.button(
+        masterButton = addRenderableWidget(Widgets.button(
             rowX,
             MASTER_TOP,
             CHECKBOX_SIZE,
@@ -175,7 +173,7 @@ final class StructureSearchScreen extends ConfluxScreen {
         ));
         updateActionWidths();
         for (final StructureIndex.StructureType type : available) {
-            final ButtonWidget visibility = addDrawableChild(Widgets.button(
+            final Button visibility = addRenderableWidget(Widgets.button(
                 rowX,
                 LIST_TOP,
                 CHECKBOX_SIZE,
@@ -184,7 +182,7 @@ final class StructureSearchScreen extends ConfluxScreen {
                 ignored -> toggleTypeVisibility(type)
             ));
             visibilityButtons.put(type, visibility);
-            final ButtonWidget locate = addDrawableChild(Widgets.button(
+            final Button locate = addRenderableWidget(Widgets.button(
                 rowX + rowWidth - locateWidth,
                 LIST_TOP,
                 locateWidth,
@@ -195,7 +193,7 @@ final class StructureSearchScreen extends ConfluxScreen {
             locateButtons.put(type, locate);
         }
         for (final Identifier biome : biomes) {
-            final ButtonWidget locate = addDrawableChild(Widgets.button(
+            final Button locate = addRenderableWidget(Widgets.button(
                 rowX + rowWidth - locateWidth,
                 LIST_TOP,
                 locateWidth,
@@ -206,7 +204,7 @@ final class StructureSearchScreen extends ConfluxScreen {
             biomeLocateButtons.put(biome, locate);
         }
         final int backWidth = Math.min(100, layout.panelContentWidth());
-        addDrawableChild(Widgets.button(
+        addRenderableWidget(Widgets.button(
             layout.panelCenterX() - backWidth / 2,
             height - 28,
             backWidth,
@@ -233,18 +231,18 @@ final class StructureSearchScreen extends ConfluxScreen {
         for (final StructureIndex.StructureType type : available) {
             longestNameWidth = Math.max(
                 longestNameWidth,
-                this.textRenderer.getWidth(localizedName(type))
+                this.font.width(localizedName(type))
             );
         }
         for (final Identifier biome : biomes) {
             longestNameWidth = Math.max(
                 longestNameWidth,
-                this.textRenderer.getWidth(localizedBiomeName(biome))
+                this.font.width(localizedBiomeName(biome))
             );
         }
         final int locateLabelWidth = Math.min(
             LOCATE_WIDTH,
-            this.textRenderer.getWidth(
+            this.font.width(
                 Texts.translatable("confluxmap.screen.structure_search.locate")
             ) + 8
         );
@@ -256,12 +254,12 @@ final class StructureSearchScreen extends ConfluxScreen {
         return Math.max(
             rowContentWidth,
             Math.max(
-                this.textRenderer.getWidth(getTitle()) + 16,
+                this.font.width(getTitle()) + 16,
                 Math.max(
-                    this.textRenderer.getWidth(
+                    this.font.width(
                         Texts.translatable("confluxmap.screen.structure_search.prompt")
                     ) + 16,
-                    this.textRenderer.getWidth(
+                    this.font.width(
                         Texts.translatable("confluxmap.screen.structure_search.field")
                     ) + 16
                 )
@@ -277,7 +275,7 @@ final class StructureSearchScreen extends ConfluxScreen {
     public void tick() {
         Widgets.tick(searchField);
         updatePolicyAccess();
-        final String query = searchField == null ? "" : searchField.getText();
+        final String query = searchField == null ? "" : searchField.getValue();
         if (!query.equals(observedQuery)) {
             observedQuery = query;
             scrollOffset = 0;
@@ -289,13 +287,13 @@ final class StructureSearchScreen extends ConfluxScreen {
         mode = mode.toggle();
         observedQuery = "";
         scrollOffset = 0;
-        clearChildren();
+        clearWidgets();
         init();
     }
 
     @Override
     public void onClose() {
-        MinecraftAccess.setScreen(MinecraftClient.getInstance(), parent);
+        MinecraftAccess.setScreen(Minecraft.getInstance(), parent);
     }
 
     private void locate(final StructureIndex.StructureType type) {
@@ -303,14 +301,14 @@ final class StructureSearchScreen extends ConfluxScreen {
             return;
         }
         MinecraftAccess.setScreen(
-            MinecraftClient.getInstance(),
+            Minecraft.getInstance(),
             new StructureCandidateScreen(this, parent, structures, dimension, type)
         );
     }
 
     private void locate(final Identifier biome) {
         MinecraftAccess.setScreen(
-            MinecraftClient.getInstance(),
+            Minecraft.getInstance(),
             new BiomeCandidateScreen(this, parent, dimension, biome)
         );
     }
@@ -367,11 +365,11 @@ final class StructureSearchScreen extends ConfluxScreen {
         return new StructureSelectionState(selected, filtered.size());
     }
 
-    private Text masterCheckboxLabel() {
+    private Component masterCheckboxLabel() {
         return Texts.literal(selectionState().mark());
     }
 
-    private Text checkboxLabel(final StructureIndex.StructureType type) {
+    private Component checkboxLabel(final StructureIndex.StructureType type) {
         return Texts.literal(isVisible(type) ? "✓" : "");
     }
 
@@ -389,15 +387,15 @@ final class StructureSearchScreen extends ConfluxScreen {
             masterButton.active = selectionState().enabled(currentModeAllowed);
             setDisabledTooltip(masterButton, reasonKey);
         }
-        for (final ButtonWidget button : visibilityButtons.values()) {
+        for (final Button button : visibilityButtons.values()) {
             button.active = currentModeAllowed;
             setDisabledTooltip(button, reasonKey);
         }
-        for (final ButtonWidget button : locateButtons.values()) {
+        for (final Button button : locateButtons.values()) {
             button.active = currentModeAllowed;
             setDisabledTooltip(button, reasonKey);
         }
-        for (final ButtonWidget button : biomeLocateButtons.values()) {
+        for (final Button button : biomeLocateButtons.values()) {
             button.active = true;
         }
     }
@@ -416,13 +414,13 @@ final class StructureSearchScreen extends ConfluxScreen {
         scrollOffset = Math.max(
             0, Math.min(scrollOffset, Math.max(0, filteredCount - visibleRows))
         );
-        for (final ButtonWidget button : visibilityButtons.values()) {
+        for (final Button button : visibilityButtons.values()) {
             button.visible = false;
         }
-        for (final ButtonWidget button : locateButtons.values()) {
+        for (final Button button : locateButtons.values()) {
             button.visible = false;
         }
-        for (final ButtonWidget button : biomeLocateButtons.values()) {
+        for (final Button button : biomeLocateButtons.values()) {
             button.visible = false;
         }
         if (mode == MapSearchMode.STRUCTURE) {
@@ -430,8 +428,8 @@ final class StructureSearchScreen extends ConfluxScreen {
             for (int index = scrollOffset; index < end; index++) {
                 final StructureIndex.StructureType type = filtered.get(index);
                 final int y = LIST_TOP + (index - scrollOffset) * ROW_HEIGHT;
-                final ButtonWidget visibility = visibilityButtons.get(type);
-                final ButtonWidget locate = locateButtons.get(type);
+                final Button visibility = visibilityButtons.get(type);
+                final Button locate = locateButtons.get(type);
                 Widgets.setY(visibility, y);
                 Widgets.setY(locate, y);
                 visibility.visible = true;
@@ -440,7 +438,7 @@ final class StructureSearchScreen extends ConfluxScreen {
         } else {
             final int end = Math.min(filteredBiomes.size(), scrollOffset + visibleRows());
             for (int index = scrollOffset; index < end; index++) {
-                final ButtonWidget locate = biomeLocateButtons.get(filteredBiomes.get(index));
+                final Button locate = biomeLocateButtons.get(filteredBiomes.get(index));
                 Widgets.setY(locate, LIST_TOP + (index - scrollOffset) * ROW_HEIGHT);
                 locate.visible = true;
             }
@@ -504,16 +502,12 @@ final class StructureSearchScreen extends ConfluxScreen {
     }
 
     @Override
-    //#if MC>=12002
-    //$$ public boolean mouseScrolled(
-    //$$     final double mouseX,
-    //$$     final double mouseY,
-    //$$     final double horizontalAmount,
-    //$$     final double amount
-    //$$ ) {
-    //#else
-    public boolean mouseScrolled(final double mouseX, final double mouseY, final double amount) {
-    //#endif
+    public boolean mouseScrolled(
+        final double mouseX,
+        final double mouseY,
+        final double horizontalAmount,
+        final double amount
+    ) {
         final SplitMapLayout layout = splitLayout();
         if (amount != 0 && layout.containsPanel(mouseX, mouseY)
             && filteredCount > visibleRows()) {
@@ -524,22 +518,14 @@ final class StructureSearchScreen extends ConfluxScreen {
         if (mapPane.mouseScrolled(mouseX, mouseY, amount, layout)) {
             return true;
         }
-        //#if MC>=12002
-        //$$ return super.mouseScrolled(mouseX, mouseY, horizontalAmount, amount);
-        //#else
-        return super.mouseScrolled(mouseX, mouseY, amount);
-        //#endif
+        return super.mouseScrolled(mouseX, mouseY, horizontalAmount, amount);
     }
 
     @Override
-    //#if MC>=12109
-    //$$ public boolean mouseClicked(final Click click, final boolean doubledClick) {
-    //$$     final double mouseX = click.x();
-    //$$     final double mouseY = click.y();
-    //$$     final int button = click.button();
-    //#else
-    public boolean mouseClicked(final double mouseX, final double mouseY, final int button) {
-    //#endif
+    public boolean mouseClicked(final MouseButtonEvent click, final boolean doubledClick) {
+        final double mouseX = click.x();
+        final double mouseY = click.y();
+        final int button = click.button();
         final ScrollBarModel bar = scrollBar();
         if (button == 0 && bar.visible()
             && mouseX >= scrollBarX() && mouseX < scrollBarX() + SCROLLBAR_WIDTH
@@ -552,30 +538,16 @@ final class StructureSearchScreen extends ConfluxScreen {
             updateScrollFromMouse(mouseY);
             return true;
         }
-        //#if MC>=12109
-        //$$ if (super.mouseClicked(click, doubledClick)) {
-        //#else
-        if (super.mouseClicked(mouseX, mouseY, button)) {
-        //#endif
+        if (super.mouseClicked(click, doubledClick)) {
             return true;
         }
         return mapPane.mouseClicked(mouseX, mouseY, button, splitLayout());
     }
 
     @Override
-    //#if MC>=12109
-    //$$ public boolean mouseDragged(final Click click, final double deltaX, final double deltaY) {
-    //$$     final double mouseY = click.y();
-    //$$     final int button = click.button();
-    //#else
-    public boolean mouseDragged(
-        final double mouseX,
-        final double mouseY,
-        final int button,
-        final double deltaX,
-        final double deltaY
-    ) {
-    //#endif
+    public boolean mouseDragged(final MouseButtonEvent click, final double deltaX, final double deltaY) {
+        final double mouseY = click.y();
+        final int button = click.button();
         if (button == 0 && draggingScrollBar) {
             updateScrollFromMouse(mouseY);
             return true;
@@ -583,20 +555,12 @@ final class StructureSearchScreen extends ConfluxScreen {
         if (mapPane.mouseDragged(button, deltaX, deltaY)) {
             return true;
         }
-        //#if MC>=12109
-        //$$ return super.mouseDragged(click, deltaX, deltaY);
-        //#else
-        return super.mouseDragged(mouseX, mouseY, button, deltaX, deltaY);
-        //#endif
+        return super.mouseDragged(click, deltaX, deltaY);
     }
 
     @Override
-    //#if MC>=12109
-    //$$ public boolean mouseReleased(final Click click) {
-    //$$     final int button = click.button();
-    //#else
-    public boolean mouseReleased(final double mouseX, final double mouseY, final int button) {
-    //#endif
+    public boolean mouseReleased(final MouseButtonEvent click) {
+        final int button = click.button();
         if (button == 0 && draggingScrollBar) {
             draggingScrollBar = false;
             return true;
@@ -604,11 +568,7 @@ final class StructureSearchScreen extends ConfluxScreen {
         if (mapPane.mouseReleased(button)) {
             return true;
         }
-        //#if MC>=12109
-        //$$ return super.mouseReleased(click);
-        //#else
-        return super.mouseReleased(mouseX, mouseY, button);
-        //#endif
+        return super.mouseReleased(click);
     }
 
     private void updateScrollFromMouse(final double mouseY) {
@@ -651,21 +611,21 @@ final class StructureSearchScreen extends ConfluxScreen {
                     8,
                     rowWidth - CHECKBOX_SIZE - ICON_SIZE - locateWidth - BUTTON_GAP * 4
                 );
-                final String name = this.textRenderer.trimToWidth(localizedName(type), labelWidth);
+                final String name = this.font.plainSubstrByWidth(localizedName(type), labelWidth);
                 draw.drawTextWithShadow(
-                    this.textRenderer,
+                    this.font,
                     name,
                     iconX + ICON_SIZE + BUTTON_GAP,
                     rowY + 6,
                     isVisible(type) ? 0xFFFFFFFF : 0xFF888888
                 );
             } else {
-                final String name = this.textRenderer.trimToWidth(
+                final String name = this.font.plainSubstrByWidth(
                     localizedBiomeName(filteredBiomes.get(index)),
                     Math.max(8, rowWidth - locateWidth - BUTTON_GAP * 2)
                 );
                 draw.drawTextWithShadow(
-                    this.textRenderer, name, rowX, rowY + 6, 0xFFFFFFFF
+                    this.font, name, rowX, rowY + 6, 0xFFFFFFFF
                 );
             }
         }
@@ -720,27 +680,23 @@ final class StructureSearchScreen extends ConfluxScreen {
     ) {
         final String visibleText = fitToWidth(text, layout.panelContentWidth());
         draw.drawTextWithShadow(
-            this.textRenderer,
+            this.font,
             visibleText,
-            layout.panelCenterX() - this.textRenderer.getWidth(visibleText) / 2f,
+            layout.panelCenterX() - this.font.width(visibleText) / 2f,
             y,
             color
         );
     }
 
     private String fitToWidth(final String text, final int maxWidth) {
-        //#if MC>=260100
-        //$$ return this.font.plainSubstrByWidth(text, maxWidth);
-        //#else
-        return this.textRenderer.trimToWidth(text, maxWidth);
-        //#endif
+        return this.font.plainSubstrByWidth(text, maxWidth);
     }
 
     private static String localizedName(final StructureIndex.StructureType type) {
         return Texts.translatable(type.translationKey()).getString();
     }
 
-    private Text modeLabel() {
+    private Component modeLabel() {
         return Texts.translatable(
             mode == MapSearchMode.STRUCTURE
                 ? "confluxmap.screen.map_search.mode.structure"
@@ -749,7 +705,7 @@ final class StructureSearchScreen extends ConfluxScreen {
     }
 
     static String localizedBiomeName(final Identifier biome) {
-        final String key = Util.createTranslationKey("biome", biome);
+        final String key = Util.makeDescriptionId("biome", biome);
         final String translated = Texts.translatable(key).getString();
         return translated.equals(key) ? biome.toString() : translated;
     }

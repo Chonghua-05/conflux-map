@@ -1,30 +1,13 @@
 package cn.net.rms.confluxmap.mc.render;
 
 import com.mojang.blaze3d.systems.RenderSystem;
-import net.minecraft.client.MinecraftClient;
-import net.minecraft.client.gl.Framebuffer;
-import net.minecraft.client.gl.SimpleFramebuffer;
-import net.minecraft.client.util.Window;
-
-//#if MC>=12103
-//$$ import com.mojang.blaze3d.systems.ProjectionType;
-//#if MC>=260200
-//$$ import com.mojang.blaze3d.GpuFormat;
-//$$ import org.joml.Vector4f;
-//#endif
-//#if MC>=260100
-//$$ import net.minecraft.client.renderer.ProjectionMatrixBuffer;
-//#elseif MC>=12108
-//$$ import net.minecraft.client.render.RawProjectionMatrix;
-//#endif
-//#elseif MC>=12000
-//$$ import com.mojang.blaze3d.systems.VertexSorter;
-//#endif
-//#if MC>=11904
-//$$ import org.joml.Matrix4f;
-//#else
-import net.minecraft.util.math.Matrix4f;
-//#endif
+import net.minecraft.client.Minecraft;
+import com.mojang.blaze3d.pipeline.RenderTarget;
+import com.mojang.blaze3d.pipeline.TextureTarget;
+import com.mojang.blaze3d.platform.Window;
+import com.mojang.blaze3d.ProjectionType;
+import net.minecraft.client.renderer.ProjectionMatrixBuffer;
+import org.joml.Matrix4f;
 
 /**
  * Off-screen RGBA render target for HUD elements that need real geometric
@@ -38,13 +21,9 @@ import net.minecraft.util.math.Matrix4f;
  * projection and vertex sorter that were active on entry.
  */
 public final class OffscreenCanvas {
-    private Framebuffer framebuffer;
+    private RenderTarget framebuffer;
     private int sizePx;
-    //#if MC>=260100
-    //$$ private ProjectionMatrixBuffer projectionMatrix;
-    //#elseif MC>=12108
-    //$$ private RawProjectionMatrix projectionMatrix;
-    //#endif
+    private ProjectionMatrixBuffer projectionMatrix;
 
     /** Bind + clear to transparent; sets an ortho projection in canvas pixel units. */
     public void begin(final int sizePx) {
@@ -57,90 +36,37 @@ public final class OffscreenCanvas {
     }
 
     private void beginInternal(final int sizePx, final boolean clear) {
-        final boolean created = framebuffer == null || framebuffer.textureWidth != sizePx;
-        if (framebuffer == null || framebuffer.textureWidth != sizePx) {
+        final boolean created = framebuffer == null || framebuffer.width != sizePx;
+        if (framebuffer == null || framebuffer.width != sizePx) {
             close();
-            //#if MC>=260200
-            //$$ framebuffer = new TextureTarget(
-            //$$     "Conflux Map minimap", sizePx, sizePx, false, GpuFormat.RGBA8_UNORM
-            //$$ );
-            //#elseif MC>=12105
-            //$$ framebuffer = new SimpleFramebuffer("Conflux Map minimap", sizePx, sizePx, false);
-            //#elseif MC>=12103
-            //$$ framebuffer = new SimpleFramebuffer(sizePx, sizePx, false);
-            //#else
-            framebuffer = new SimpleFramebuffer(sizePx, sizePx, false, MinecraftClient.IS_SYSTEM_MAC);
-            //#endif
+            framebuffer = new TextureTarget("Conflux Map minimap", sizePx, sizePx, false);
             this.sizePx = sizePx;
         }
-        //#if MC>=260100
-        //$$ if (projectionMatrix == null) {
-        //$$     projectionMatrix = new ProjectionMatrixBuffer("Conflux Map minimap projection");
-        //$$ }
-        //#elseif MC>=12108
-        //$$ if (projectionMatrix == null) {
-        //$$     projectionMatrix = new RawProjectionMatrix("Conflux Map minimap projection");
-        //$$ }
-        //#endif
-        //#if MC>=260200
-        //$$ if (created || clear) {
-        //$$     RenderSystem.getDevice().createCommandEncoder().clearColorTexture(
-        //$$         framebuffer.getColorTexture(), new Vector4f(0f, 0f, 0f, 0f)
-        //$$     );
-        //$$ }
-        //$$ RenderUtil.setDrawTarget(framebuffer);
-        //#elseif MC>=12105
-        //$$ if (created || clear) {
-        //$$     RenderSystem.getDevice().createCommandEncoder().clearColorTexture(
-        //$$         framebuffer.getColorAttachment(), 0
-        //$$     );
-        //$$ }
-        //$$ RenderUtil.setDrawTarget(framebuffer);
-        //#elseif MC>=12103
-        //$$ if (created || clear) {
-        //$$     framebuffer.setClearColor(0f, 0f, 0f, 0f);
-        //$$     framebuffer.clear();
-        //$$ }
-        //#else
-        if (created || clear) {
-            framebuffer.setClearColor(0f, 0f, 0f, 0f);
-            framebuffer.clear(MinecraftClient.IS_SYSTEM_MAC);
+        if (projectionMatrix == null) {
+            projectionMatrix = new ProjectionMatrixBuffer("Conflux Map minimap projection");
         }
-        //#endif
-        //#if MC<12105
-        framebuffer.beginWrite(true);
-        //#endif
-        //#if MC>=12000
-        //$$ RenderSystem.backupProjectionMatrix();
-        //#endif
-        //#if MC>=12100
-        //$$ // Persistent atlases are filled from the client tick, outside any GUI pass, so the
-        //$$ // global model-view still holds whatever the world pass left in it. Canvas geometry is
-        //$$ // already in canvas pixels and needs none of it.
-        //$$ RenderSystem.getModelViewStack().pushMatrix().identity();
-        //#if MC<12103
-        //$$ RenderSystem.applyModelViewMatrix();
-        //#endif
-        //#endif
+        if (created || clear) {
+            RenderSystem.getDevice().createCommandEncoder().clearColorTexture(
+                framebuffer.getColorTexture(), 0
+            );
+        }
+        RenderUtil.setDrawTarget(framebuffer);
+        RenderSystem.backupProjectionMatrix();
+        // Persistent atlases are filled from the client tick, outside any GUI pass, so the
+        // global model-view still holds whatever the world pass left in it. Canvas geometry is
+        // already in canvas pixels and needs none of it.
+        RenderSystem.getModelViewStack().pushMatrix().identity();
         setProjection(canvasProjection(sizePx));
     }
 
     /** Modern GUI rendering culls map quads unless the canvas uses the same downward Y axis. */
     private static Matrix4f canvasProjection(final int sizePx) {
-        //#if MC>=12000
-        //$$ return ortho(0f, sizePx, sizePx, 0f);
-        //#else
-        return ortho(0f, sizePx, 0f, sizePx);
-        //#endif
+        return ortho(0f, sizePx, sizePx, 0f);
     }
 
     /** Local depth used while the persistent radar atlas is filled from a client tick. */
     public static float atlasDrawPlaneZ() {
-        //#if MC<12100
-        return -2000f;
-        //#else
-        //$$ return 0f;
-        //#endif
+        return 0f;
     }
 
     /**
@@ -150,80 +76,38 @@ public final class OffscreenCanvas {
      * z=-11000, so the far plane has to reach past it or every canvas quad is depth-clipped.
      */
     private static Matrix4f ortho(final float left, final float right, final float bottom, final float top) {
-        //#if MC>=12100
-        //$$ // The canvas installs its own identity model-view, so the depth range only has to cover
-        //$$ // the z=0 plane every canvas quad sits on.
-        //$$ return new Matrix4f().setOrtho(left, right, bottom, top, -1000f, 1000f);
-        //#elseif MC>=11904
-        //$$ return new Matrix4f().setOrtho(left, right, bottom, top, 1000f, 21000f);
-        //#else
-        return Matrix4f.projectionMatrix(left, right, bottom, top, 1000f, 3000f);
-        //#endif
+        // The canvas installs its own identity model-view, so the depth range only has to cover
+        // the z=0 plane every canvas quad sits on.
+        return new Matrix4f().setOrtho(left, right, bottom, top, -1000f, 1000f);
     }
 
     /** 1.20 made the projection carry an explicit vertex sort order; flat GUI geometry sorts by Z. */
     private void setProjection(final Matrix4f projection) {
-        //#if MC>=260100
-        //$$ RenderSystem.setProjectionMatrix(projectionMatrix.getBuffer(projection), ProjectionType.ORTHOGRAPHIC);
-        //#elseif MC>=12108
-        //$$ RenderSystem.setProjectionMatrix(projectionMatrix.set(projection), ProjectionType.ORTHOGRAPHIC);
-        //#elseif MC>=12103
-        //$$ RenderSystem.setProjectionMatrix(projection, ProjectionType.ORTHOGRAPHIC);
-        //#elseif MC>=12000
-        //$$ RenderSystem.setProjectionMatrix(projection, VertexSorter.BY_Z);
-        //#else
-        RenderSystem.setProjectionMatrix(projection);
-        //#endif
+        RenderSystem.setProjectionMatrix(projectionMatrix.getBuffer(projection), ProjectionType.ORTHOGRAPHIC);
     }
 
     /** Unbind; restores the main framebuffer and vanilla's GUI projection. */
-    public void end(final MinecraftClient client) {
-        //#if MC>=12105
-        //$$ RenderUtil.setDrawTarget(null);
-        //#else
-        framebuffer.endWrite();
-        client.getFramebuffer().beginWrite(true);
-        //#endif
-        //#if MC>=12100
-        //$$ RenderSystem.getModelViewStack().popMatrix();
-        //#if MC<12103
-        //$$ RenderSystem.applyModelViewMatrix();
-        //#endif
-        //#endif
-        //#if MC>=12000
-        //$$ RenderSystem.restoreProjectionMatrix();
-        //#else
-        final Window window = client.getWindow();
-        setProjection(ortho(
-            0f, (float) (window.getFramebufferWidth() / window.getScaleFactor()),
-            0f, (float) (window.getFramebufferHeight() / window.getScaleFactor())
-        ));
-        //#endif
+    public void end(final Minecraft client) {
+        RenderUtil.setDrawTarget(null);
+        RenderSystem.getModelViewStack().popMatrix();
+        RenderSystem.restoreProjectionMatrix();
     }
 
     /** Binds the canvas contents for sampling; row 0 is the BOTTOM (flip V when sampling). */
     public void bindTexture() {
-        //#if MC>=12108
-        //$$ RenderUtil.bindTexture(framebuffer.getColorAttachmentView());
-        //#elseif MC>=12105
-        //$$ RenderUtil.bindTexture(framebuffer.getColorAttachment());
-        //#else
-        RenderUtil.bindTexture(framebuffer.getColorAttachment());
-        //#endif
+        RenderUtil.bindTexture(framebuffer.getColorTextureView());
     }
 
     public void close() {
         if (framebuffer != null) {
-            framebuffer.delete();
+            framebuffer.destroyBuffers();
             framebuffer = null;
             sizePx = 0;
         }
-        //#if MC>=12108
-        //$$ if (projectionMatrix != null) {
-        //$$     projectionMatrix.close();
-        //$$     projectionMatrix = null;
-        //$$ }
-        //#endif
+        if (projectionMatrix != null) {
+            projectionMatrix.close();
+            projectionMatrix = null;
+        }
     }
 
     public int size() {

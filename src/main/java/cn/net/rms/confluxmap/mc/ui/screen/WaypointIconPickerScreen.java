@@ -11,13 +11,13 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.function.Consumer;
-import net.minecraft.client.MinecraftClient;
-import net.minecraft.client.gui.screen.Screen;
-import net.minecraft.client.gui.widget.ButtonWidget;
-import net.minecraft.client.gui.widget.TextFieldWidget;
-import net.minecraft.item.Item;
-import net.minecraft.item.ItemStack;
-import net.minecraft.text.Text;
+import net.minecraft.client.Minecraft;
+import net.minecraft.client.gui.screens.Screen;
+import net.minecraft.client.gui.components.Button;
+import net.minecraft.client.gui.components.EditBox;
+import net.minecraft.world.item.Item;
+import net.minecraft.world.item.ItemStack;
+import net.minecraft.network.chat.Component;
 
 /** Searchable grid of vanilla item icons for one waypoint marker. */
 final class WaypointIconPickerScreen extends ConfluxScreen {
@@ -34,9 +34,9 @@ final class WaypointIconPickerScreen extends ConfluxScreen {
     private final Screen parent;
     private final Consumer<String> onSelect;
     private final List<Choice> choices;
-    private final Map<ButtonWidget, Choice> buttons = new LinkedHashMap<>();
+    private final Map<Button, Choice> buttons = new LinkedHashMap<>();
 
-    private TextFieldWidget searchField;
+    private EditBox searchField;
     private List<Choice> filtered = List.of();
     private String query = "";
     private int scrollRow;
@@ -60,8 +60,8 @@ final class WaypointIconPickerScreen extends ConfluxScreen {
         buttons.clear();
         columns = Math.max(1, Math.min(MAX_GRID_WIDTH, width - 24) / CELL_SIZE);
         gridLeft = (width - columns * CELL_SIZE) / 2;
-        searchField = new TextFieldWidget(
-            this.textRenderer,
+        searchField = new EditBox(
+            this.font,
             width / 2 - Math.min(240, width - 24) / 2,
             38,
             Math.min(240, width - 24),
@@ -69,12 +69,12 @@ final class WaypointIconPickerScreen extends ConfluxScreen {
             Texts.translatable("confluxmap.screen.waypoint.icon_picker.search")
         );
         searchField.setMaxLength(64);
-        searchField.setText(query);
-        addDrawableChild(searchField);
+        searchField.setValue(query);
+        addRenderableWidget(searchField);
         setInitialFocus(searchField);
 
         for (final Choice choice : choices) {
-            final ButtonWidget button = addDrawableChild(Widgets.button(
+            final Button button = addRenderableWidget(Widgets.button(
                 gridLeft,
                 GRID_TOP,
                 BUTTON_SIZE,
@@ -85,7 +85,7 @@ final class WaypointIconPickerScreen extends ConfluxScreen {
             button.visible = false;
             buttons.put(button, choice);
         }
-        addDrawableChild(Widgets.button(
+        addRenderableWidget(Widgets.button(
             width / 2 - 50,
             height - 28,
             100,
@@ -100,7 +100,7 @@ final class WaypointIconPickerScreen extends ConfluxScreen {
     public void tick() {
         super.tick();
         Widgets.tick(searchField);
-        final String current = searchField == null ? "" : searchField.getText();
+        final String current = searchField == null ? "" : searchField.getValue();
         if (!current.equals(query)) {
             query = current;
             scrollRow = 0;
@@ -110,7 +110,7 @@ final class WaypointIconPickerScreen extends ConfluxScreen {
 
     @Override
     public void onClose() {
-        MinecraftAccess.setScreen(MinecraftClient.getInstance(), parent);
+        MinecraftAccess.setScreen(Minecraft.getInstance(), parent);
     }
 
     private void select(final Choice choice) {
@@ -130,22 +130,22 @@ final class WaypointIconPickerScreen extends ConfluxScreen {
             .toList();
         final int visibleRows = visibleRows();
         scrollRow = Math.max(0, Math.min(scrollRow, Math.max(0, totalRows() - visibleRows)));
-        for (final ButtonWidget button : buttons.keySet()) {
+        for (final Button button : buttons.keySet()) {
             button.visible = false;
         }
         final int start = scrollRow * columns;
         final int end = Math.min(filtered.size(), start + visibleRows * columns);
         for (int index = start; index < end; index++) {
             final int visibleIndex = index - start;
-            final ButtonWidget button = buttonFor(filtered.get(index));
+            final Button button = buttonFor(filtered.get(index));
             Widgets.setX(button, gridLeft + visibleIndex % columns * CELL_SIZE);
             Widgets.setY(button, GRID_TOP + visibleIndex / columns * CELL_SIZE);
             button.visible = true;
         }
     }
 
-    private ButtonWidget buttonFor(final Choice choice) {
-        for (final Map.Entry<ButtonWidget, Choice> entry : buttons.entrySet()) {
+    private Button buttonFor(final Choice choice) {
+        for (final Map.Entry<Button, Choice> entry : buttons.entrySet()) {
             if (entry.getValue() == choice) {
                 return entry.getKey();
             }
@@ -162,27 +162,19 @@ final class WaypointIconPickerScreen extends ConfluxScreen {
     }
 
     @Override
-    //#if MC>=12002
-    //$$ public boolean mouseScrolled(
-    //$$     final double mouseX,
-    //$$     final double mouseY,
-    //$$     final double horizontalAmount,
-    //$$     final double amount
-    //$$ ) {
-    //#else
-    public boolean mouseScrolled(final double mouseX, final double mouseY, final double amount) {
-    //#endif
+    public boolean mouseScrolled(
+        final double mouseX,
+        final double mouseY,
+        final double horizontalAmount,
+        final double amount
+    ) {
         if (amount != 0 && mouseY >= GRID_TOP && mouseY < height - 32) {
             final int maxRow = Math.max(0, totalRows() - visibleRows());
             scrollRow = Math.max(0, Math.min(maxRow, scrollRow + (amount < 0 ? 1 : -1)));
             updateButtons();
             return true;
         }
-        //#if MC>=12002
-        //$$ return super.mouseScrolled(mouseX, mouseY, horizontalAmount, amount);
-        //#else
-        return super.mouseScrolled(mouseX, mouseY, amount);
-        //#endif
+        return super.mouseScrolled(mouseX, mouseY, horizontalAmount, amount);
     }
 
     @Override
@@ -218,8 +210,8 @@ final class WaypointIconPickerScreen extends ConfluxScreen {
         final int mouseY,
         final float tickDelta
     ) {
-        for (final Map.Entry<ButtonWidget, Choice> entry : buttons.entrySet()) {
-            final ButtonWidget button = entry.getKey();
+        for (final Map.Entry<Button, Choice> entry : buttons.entrySet()) {
+            final Button button = entry.getKey();
             if (!button.visible) {
                 continue;
             }
@@ -227,16 +219,16 @@ final class WaypointIconPickerScreen extends ConfluxScreen {
             final int y = Widgets.y(button);
             draw.fill(x + 2, y + 2, x + BUTTON_SIZE - 2, y + BUTTON_SIZE - 2, 0xFF181818);
             draw.drawItemIcon(
-                MinecraftClient.getInstance(),
+                Minecraft.getInstance(),
                 entry.getValue().stack(),
                 x + BUTTON_SIZE / 2f,
                 y + BUTTON_SIZE / 2f,
                 ICON_SIZE
             );
-            if (button.isHovered()) {
+            if (button.isHoveredOrFocused()) {
                 draw.drawTooltip(
                     this,
-                    this.textRenderer,
+                    this.font,
                     Texts.literal(entry.getValue().entry().displayName()),
                     mouseX,
                     mouseY
@@ -247,9 +239,9 @@ final class WaypointIconPickerScreen extends ConfluxScreen {
 
     private void drawCentered(final GuiDraw draw, final String text, final int y, final int color) {
         draw.drawTextWithShadow(
-            this.textRenderer,
+            this.font,
             text,
-            (width - this.textRenderer.getWidth(text)) / 2f,
+            (width - this.font.width(text)) / 2f,
             y,
             color
         );
@@ -267,7 +259,7 @@ final class WaypointIconPickerScreen extends ConfluxScreen {
                 continue;
             }
             result.add(new Choice(
-                new WaypointIconSearch.Entry(id, stack.getName().getString()),
+                new WaypointIconSearch.Entry(id, stack.getHoverName().getString()),
                 stack
             ));
         }
@@ -278,11 +270,7 @@ final class WaypointIconPickerScreen extends ConfluxScreen {
         return List.copyOf(result);
     }
 
-    static Text itemChoiceButtonMessage(final String displayName) {
-        //#if MC>=260200
-        //$$ return Texts.literal(displayName);
-        //#else
+    static Component itemChoiceButtonMessage(final String displayName) {
         return Texts.literal("");
-        //#endif
     }
 }

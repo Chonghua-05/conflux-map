@@ -12,13 +12,13 @@ import cn.net.rms.confluxmap.compat.Widgets;
 import cn.net.rms.confluxmap.compat.Texts;
 import cn.net.rms.confluxmap.compat.MinecraftAccess;
 import java.math.BigDecimal;
-import net.minecraft.client.MinecraftClient;
-import net.minecraft.client.gui.screen.Screen;
-import net.minecraft.client.gui.widget.ButtonWidget;
-import net.minecraft.client.util.math.MatrixStack;
-import net.minecraft.text.Text;
-import net.minecraft.text.OrderedText;
-import net.minecraft.text.StringVisitable;
+import net.minecraft.client.Minecraft;
+import net.minecraft.client.gui.screens.Screen;
+import net.minecraft.client.gui.components.Button;
+import com.mojang.blaze3d.vertex.PoseStack;
+import net.minecraft.network.chat.Component;
+import net.minecraft.util.FormattedCharSequence;
+import net.minecraft.network.chat.FormattedText;
 
 /** Explicit preview and confirmation boundary for every outward waypoint share. */
 public final class WaypointShareConfirmScreen extends ConfluxScreen {
@@ -35,7 +35,7 @@ public final class WaypointShareConfirmScreen extends ConfluxScreen {
     private final SharedWaypointClient sharedWaypoints;
     private final String confluxPreview;
     private final String xaeroPreview;
-    private ButtonWidget confirmButton;
+    private Button confirmButton;
     private String errorKey;
 
     public WaypointShareConfirmScreen(final Screen parent, final Waypoint waypoint, final Target target) {
@@ -105,7 +105,7 @@ public final class WaypointShareConfirmScreen extends ConfluxScreen {
 
         final int centerX = width / 2;
         if (showPublicTarget) {
-            final ButtonWidget publicTarget = addDrawableChild(Widgets.button(
+            final Button publicTarget = addRenderableWidget(Widgets.button(
                 centerX - 104,
                 38,
                 100,
@@ -117,7 +117,7 @@ public final class WaypointShareConfirmScreen extends ConfluxScreen {
             publicTarget.active = createDisabledReasonKey == null;
             setDisabledTooltip(publicTarget, createDisabledReasonKey);
         }
-        addDrawableChild(Widgets.button(
+        addRenderableWidget(Widgets.button(
             showPublicTarget ? centerX + 4 : centerX - 50,
             38,
             100,
@@ -125,7 +125,7 @@ public final class WaypointShareConfirmScreen extends ConfluxScreen {
             targetLabel(Target.CHAT),
             ignored -> selectTarget(Target.CHAT)
         ));
-        confirmButton = addDrawableChild(Widgets.button(
+        confirmButton = addRenderableWidget(Widgets.button(
             centerX - 104,
             height - 32,
             100,
@@ -142,7 +142,7 @@ public final class WaypointShareConfirmScreen extends ConfluxScreen {
         } else {
             confirmButton.active = confluxPreview != null && xaeroPreview != null;
         }
-        addDrawableChild(Widgets.button(
+        addRenderableWidget(Widgets.button(
             centerX + 4,
             height - 32,
             100,
@@ -153,7 +153,7 @@ public final class WaypointShareConfirmScreen extends ConfluxScreen {
         setEnterAction(() -> confirmButton != null && confirmButton.active, this::confirm);
     }
 
-    private Text targetLabel(final Target candidate) {
+    private Component targetLabel(final Target candidate) {
         final String value = Texts.translatable(
             candidate == Target.PUBLIC
                 ? "confluxmap.screen.waypoint.publish"
@@ -168,13 +168,13 @@ public final class WaypointShareConfirmScreen extends ConfluxScreen {
         }
         target = selected;
         errorKey = null;
-        clearChildren();
+        clearWidgets();
         init();
     }
 
     @Override
     public void onClose() {
-        MinecraftAccess.setScreen(MinecraftClient.getInstance(), parent);
+        MinecraftAccess.setScreen(Minecraft.getInstance(), parent);
     }
 
     @Override
@@ -191,7 +191,7 @@ public final class WaypointShareConfirmScreen extends ConfluxScreen {
         final SharedWaypointAvailability availability = sharedWaypoints.availability();
         if (!availability.visible()) {
             target = Target.CHAT;
-            clearChildren();
+            clearWidgets();
             init();
             return;
         }
@@ -237,7 +237,7 @@ public final class WaypointShareConfirmScreen extends ConfluxScreen {
             return;
         }
 
-        final MinecraftClient client = MinecraftClient.getInstance();
+        final Minecraft client = Minecraft.getInstance();
         if (client.player == null) {
             errorKey = "confluxmap.screen.waypoint.chat_unavailable";
             return;
@@ -297,18 +297,18 @@ public final class WaypointShareConfirmScreen extends ConfluxScreen {
     }
 
     private void drawCentered(final GuiDraw draw, final String value, final int y, final int color) {
-        final String text = this.textRenderer.trimToWidth(value, Math.max(40, width - 32));
-        draw.drawTextWithShadow(this.textRenderer, text, width / 2f - this.textRenderer.getWidth(text) / 2f, y, color);
+        final String text = this.font.plainSubstrByWidth(value, Math.max(40, width - 32));
+        draw.drawTextWithShadow(this.font, text, width / 2f - this.font.width(text) / 2f, y, color);
     }
 
     /** Draws every wrapped line of {@code value} and returns the y below the last line. */
     private int drawWrapped(final GuiDraw draw, final String value, final int y, final int color) {
         int lineY = y;
-        for (final OrderedText line : this.textRenderer.wrapLines(StringVisitable.plain(value), Math.max(40, width - 32))) {
+        for (final FormattedCharSequence line : this.font.split(FormattedText.of(value), Math.max(40, width - 32))) {
             draw.drawTextWithShadow(
-                this.textRenderer, line, width / 2f - this.textRenderer.getWidth(line) / 2f, lineY, color
+                this.font, line, width / 2f - this.font.width(line) / 2f, lineY, color
             );
-            lineY += this.textRenderer.fontHeight + 1;
+            lineY += this.font.lineHeight + 1;
         }
         return lineY;
     }

@@ -6,11 +6,11 @@ import cn.net.rms.confluxmap.core.config.ConfluxConfig;
 import cn.net.rms.confluxmap.core.survey.SurveyReminderClickPayload;
 import cn.net.rms.confluxmap.core.survey.SurveyReminderSchedule;
 import java.util.concurrent.TimeUnit;
-import net.fabricmc.fabric.api.client.event.lifecycle.v1.ClientTickEvents;
-import net.minecraft.client.MinecraftClient;
-import net.minecraft.text.MutableText;
-import net.minecraft.text.Text;
-import net.minecraft.util.Formatting;
+import cn.net.rms.confluxmap.neoforge.compat.ClientTickEvents;
+import net.minecraft.client.Minecraft;
+import net.minecraft.network.chat.MutableComponent;
+import net.minecraft.network.chat.Component;
+import net.minecraft.ChatFormatting;
 
 /** Posts the optional survey reminder after enough cumulative client-open time. */
 public final class SurveyReminderNotifier {
@@ -18,7 +18,7 @@ public final class SurveyReminderNotifier {
 
     private static final long CHECKPOINT_MILLIS = TimeUnit.MINUTES.toMillis(5L);
 
-    private final MinecraftClient client;
+    private final Minecraft client;
     private final ConfluxConfig config;
     private final ConfigIo configIo;
     private final SurveyReminderSchedule schedule;
@@ -28,7 +28,7 @@ public final class SurveyReminderNotifier {
     private long unsavedMillis;
 
     public SurveyReminderNotifier(
-        final MinecraftClient client,
+        final Minecraft client,
         final ConfluxConfig config,
         final ConfigIo configIo
     ) {
@@ -68,11 +68,7 @@ public final class SurveyReminderNotifier {
         if (schedule.isDue() && client.player != null) {
             schedule.markShown();
             persist();
-            //#if MC>=260100
-            //$$ client.player.sendSystemMessage(buildMessage());
-            //#else
-            client.player.sendMessage(buildMessage(), false);
-            //#endif
+            client.player.sendSystemMessage(buildMessage());
         } else if (unsavedMillis >= CHECKPOINT_MILLIS) {
             persist();
         }
@@ -106,23 +102,23 @@ public final class SurveyReminderNotifier {
         config.surveyReminderDismissed = snapshot.dismissed();
     }
 
-    private static Text buildMessage() {
-        final MutableText open = Texts.translatable("confluxmap.survey.chat.open")
-            .formatted(Formatting.AQUA, Formatting.UNDERLINE)
-            .styled(style -> style
+    private static Component buildMessage() {
+        final MutableComponent open = Texts.translatable("confluxmap.survey.chat.open")
+            .withStyle(ChatFormatting.AQUA, ChatFormatting.UNDERLINE)
+            .withStyle(style -> style
                 .withClickEvent(Texts.openUrl(SURVEY_URL))
                 .withHoverEvent(Texts.showText(Texts.literal(SURVEY_URL))));
-        final MutableText dismiss = Texts.translatable("confluxmap.survey.chat.dismiss")
-            .formatted(Formatting.GRAY, Formatting.UNDERLINE)
-            .styled(style -> style
+        final MutableComponent dismiss = Texts.translatable("confluxmap.survey.chat.dismiss")
+            .withStyle(ChatFormatting.GRAY, ChatFormatting.UNDERLINE)
+            .withStyle(style -> style
                 .withClickEvent(Texts.copyToClipboard(SurveyReminderClickPayload.dismiss()))
                 .withHoverEvent(Texts.showText(
                     Texts.translatable("confluxmap.survey.chat.dismiss.hover")
                 )));
         return Texts.translatable("confluxmap.survey.chat.intro")
-            .formatted(Formatting.YELLOW)
+            .withStyle(ChatFormatting.YELLOW)
             .append(open)
-            .append(Texts.translatable("confluxmap.survey.chat.body").formatted(Formatting.YELLOW))
+            .append(Texts.translatable("confluxmap.survey.chat.body").withStyle(ChatFormatting.YELLOW))
             .append(dismiss);
     }
 }

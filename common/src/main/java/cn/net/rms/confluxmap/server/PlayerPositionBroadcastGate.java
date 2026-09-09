@@ -1,6 +1,6 @@
 package cn.net.rms.confluxmap.server;
 
-/** Shared five-tick cadence for Fabric and Paper player-position broadcasts. */
+/** Shared five-tick cadence for player-position broadcasts. */
 public final class PlayerPositionBroadcastGate {
     private static final int INTERVAL_TICKS = 5;
 

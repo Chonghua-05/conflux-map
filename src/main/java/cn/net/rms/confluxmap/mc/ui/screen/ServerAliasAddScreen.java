@@ -5,17 +5,17 @@ import cn.net.rms.confluxmap.compat.Texts;
 import cn.net.rms.confluxmap.compat.Widgets;
 import cn.net.rms.confluxmap.mc.ui.GuiDraw;
 import java.util.function.Consumer;
-import net.minecraft.client.MinecraftClient;
-import net.minecraft.client.gui.screen.Screen;
-import net.minecraft.client.gui.widget.ButtonWidget;
-import net.minecraft.client.gui.widget.TextFieldWidget;
+import net.minecraft.client.Minecraft;
+import net.minecraft.client.gui.screens.Screen;
+import net.minecraft.client.gui.components.Button;
+import net.minecraft.client.gui.components.EditBox;
 
 /** Address entry form for {@link ServerAliasScreen}; the caller validates what is typed. */
 final class ServerAliasAddScreen extends ConfluxScreen {
     private final Screen parent;
     private final Consumer<String> onSubmit;
-    private TextFieldWidget addressField;
-    private ButtonWidget doneButton;
+    private EditBox addressField;
+    private Button doneButton;
 
     ServerAliasAddScreen(final Screen parent, final Consumer<String> onSubmit) {
         super(Texts.translatable("confluxmap.screen.server_alias.add_title"));
@@ -31,19 +31,19 @@ final class ServerAliasAddScreen extends ConfluxScreen {
     @Override
     protected void init() {
         final int fieldWidth = Math.min(240, width - 24);
-        addressField = new TextFieldWidget(
-            this.textRenderer, width / 2 - fieldWidth / 2, 62, fieldWidth, 20,
+        addressField = new EditBox(
+            this.font, width / 2 - fieldWidth / 2, 62, fieldWidth, 20,
             Texts.translatable("confluxmap.screen.server_alias.address")
         );
         addressField.setMaxLength(128);
-        addDrawableChild(addressField);
+        addRenderableWidget(addressField);
         setInitialFocus(addressField);
-        doneButton = addDrawableChild(Widgets.button(
+        doneButton = addRenderableWidget(Widgets.button(
             width / 2 - 104, 94, 100, 20,
             Texts.translatable("confluxmap.screen.waypoint.done"),
             ignored -> submit()
         ));
-        addDrawableChild(Widgets.button(
+        addRenderableWidget(Widgets.button(
             width / 2 + 4, 94, 100, 20,
             Texts.translatable("confluxmap.screen.waypoint.cancel"),
             ignored -> onClose()
@@ -59,11 +59,11 @@ final class ServerAliasAddScreen extends ConfluxScreen {
     }
 
     private void refreshDone() {
-        doneButton.active = addressField != null && !addressField.getText().trim().isEmpty();
+        doneButton.active = addressField != null && !addressField.getValue().trim().isEmpty();
     }
 
     private void submit() {
-        final String address = addressField.getText().trim();
+        final String address = addressField.getValue().trim();
         if (address.isEmpty()) {
             return;
         }
@@ -73,7 +73,7 @@ final class ServerAliasAddScreen extends ConfluxScreen {
 
     @Override
     public void onClose() {
-        MinecraftAccess.setScreen(MinecraftClient.getInstance(), parent);
+        MinecraftAccess.setScreen(Minecraft.getInstance(), parent);
     }
 
     @Override
@@ -86,12 +86,12 @@ final class ServerAliasAddScreen extends ConfluxScreen {
         draw.renderBackground(this, mouseX, mouseY, tickDelta);
         final String title = getTitle().getString();
         draw.drawTextWithShadow(
-            this.textRenderer, title, width / 2f - this.textRenderer.getWidth(title) / 2f, 24,
+            this.font, title, width / 2f - this.font.width(title) / 2f, 24,
             0xFFFFFFFF
         );
         final String hint = Texts.translatable("confluxmap.screen.server_alias.add_hint").getString();
         draw.drawTextWithShadow(
-            this.textRenderer, hint, width / 2f - this.textRenderer.getWidth(hint) / 2f, 44,
+            this.font, hint, width / 2f - this.font.width(hint) / 2f, 44,
             0xFFBBBBBB
         );
     }

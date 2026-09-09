@@ -14,10 +14,10 @@ import cn.net.rms.confluxmap.mc.world.ClientMultiworldService;
 import java.util.List;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionException;
-import net.minecraft.client.MinecraftClient;
-import net.minecraft.client.gui.screen.Screen;
-import net.minecraft.client.gui.widget.ButtonWidget;
-import net.minecraft.client.option.KeyBinding;
+import net.minecraft.client.Minecraft;
+import net.minecraft.client.gui.screens.Screen;
+import net.minecraft.client.gui.components.Button;
+import net.minecraft.client.KeyMapping;
 
 /** Manual fallback and profile manager for client-only proxy world recognition. */
 public final class ClientWorldSelectScreen extends ConfluxScreen {
@@ -28,7 +28,7 @@ public final class ClientWorldSelectScreen extends ConfluxScreen {
     private static final int FORGET_WIDTH = 78;
 
     private final Screen parent;
-    private final KeyBinding openMapKey;
+    private final KeyMapping openMapKey;
     private final boolean openMapAfterSelection;
     private final ClientMultiworldService worlds;
     private final ManualSeedService manualSeedService;
@@ -46,7 +46,7 @@ public final class ClientWorldSelectScreen extends ConfluxScreen {
 
     public ClientWorldSelectScreen(
         final Screen parent,
-        final KeyBinding openMapKey,
+        final KeyMapping openMapKey,
         final boolean openMapAfterSelection
     ) {
         super(Texts.translatable("confluxmap.screen.client_world.title"));
@@ -70,7 +70,7 @@ public final class ClientWorldSelectScreen extends ConfluxScreen {
     }
 
     private void rebuild() {
-        clearChildren();
+        clearWidgets();
         final List<ClientWorldProfile> profiles = worlds.profiles();
         final boolean authoritative = worlds.companionWorldIdentityAuthoritative();
         final int authorityRows = authoritative ? 1 : 0;
@@ -88,13 +88,13 @@ public final class ClientWorldSelectScreen extends ConfluxScreen {
         for (int index = scrollOffset; index < end; index++) {
             final int y = LIST_TOP + (index - scrollOffset) * ROW_HEIGHT;
             if (authoritative && index == 0) {
-                final ButtonWidget serverWorld = addDrawableChild(Widgets.button(
+                final Button serverWorld = addRenderableWidget(Widgets.button(
                     rowX, y, rowWidth - RENAME_WIDTH - GAP, 20,
                     Texts.literal("✓ " + companionWorldLabel()),
                     ignored -> { }
                 ));
                 serverWorld.active = false;
-                final ButtonWidget renameServerWorld = addDrawableChild(Widgets.button(
+                final Button renameServerWorld = addRenderableWidget(Widgets.button(
                     rowX + rowWidth - RENAME_WIDTH, y, RENAME_WIDTH, 20,
                     Texts.translatable("confluxmap.screen.client_world.rename"),
                     ignored -> openCompanionWorldNameEditor()
@@ -105,7 +105,7 @@ public final class ClientWorldSelectScreen extends ConfluxScreen {
             final ClientWorldProfile profile = profiles.get(index - authorityRows);
             if (assigningLegacyWaypoints) {
                 final WorldIdentity target = worlds.worldIdentity(profile);
-                final ButtonWidget assign = addDrawableChild(Widgets.button(
+                final Button assign = addRenderableWidget(Widgets.button(
                     rowX, y, rowWidth, 20,
                     Texts.translatable(
                         "confluxmap.screen.client_world.migrate_target", profile.displayName()
@@ -116,7 +116,7 @@ public final class ClientWorldSelectScreen extends ConfluxScreen {
                 continue;
             }
             final String prefix = profile.id().equals(currentId) ? "✓ " : "";
-            final ButtonWidget select = addDrawableChild(Widgets.button(
+            final Button select = addRenderableWidget(Widgets.button(
                 rowX, y, selectWidth, 20,
                 Texts.literal(
                     (profile.id().equals(selectedMigrationId) ? "-> " : "")
@@ -133,13 +133,13 @@ public final class ClientWorldSelectScreen extends ConfluxScreen {
             // The companion UUID controls active map storage. Keep old profiles visible for
             // review and waypoint migration, but do not silently fork the active map session.
             select.active = !migrationBusy;
-            final ButtonWidget rename = addDrawableChild(Widgets.button(
+            final Button rename = addRenderableWidget(Widgets.button(
                 rowX + selectWidth + GAP, y, RENAME_WIDTH, 20,
                 Texts.translatable("confluxmap.screen.client_world.rename"),
                 ignored -> openNameEditor(profile)
             ));
             rename.active = !migrationBusy;
-            final ButtonWidget forget = addDrawableChild(Widgets.button(
+            final Button forget = addRenderableWidget(Widgets.button(
                 rowX + selectWidth + GAP + RENAME_WIDTH + GAP, y, FORGET_WIDTH, 20,
                 Texts.translatable(
                     profile.id().equals(pendingForgetId)
@@ -154,7 +154,7 @@ public final class ClientWorldSelectScreen extends ConfluxScreen {
         final int footerWidth = Math.min(440, rowWidth);
         final int footerX = width / 2 - footerWidth / 2;
         if (assigningLegacyWaypoints) {
-            addDrawableChild(Widgets.button(
+            addRenderableWidget(Widgets.button(
                 footerX + footerWidth / 2 - 70,
                 height - 28,
                 140,
@@ -176,7 +176,7 @@ public final class ClientWorldSelectScreen extends ConfluxScreen {
         final int footerButtonWidth = (footerWidth - GAP * (footerButtonCount - 1))
             / footerButtonCount;
         int footerIndex = 0;
-        final ButtonWidget create = addDrawableChild(Widgets.button(
+        final Button create = addRenderableWidget(Widgets.button(
             footerX + footerIndex++ * (footerButtonWidth + GAP),
             height - 28,
             footerButtonWidth,
@@ -186,7 +186,7 @@ public final class ClientWorldSelectScreen extends ConfluxScreen {
         ));
         create.active = !authoritative && !migrationBusy;
         if (canMerge) {
-            final ButtonWidget merge = addDrawableChild(Widgets.button(
+            final Button merge = addRenderableWidget(Widgets.button(
                 footerX + footerIndex++ * (footerButtonWidth + GAP),
                 height - 28,
                 footerButtonWidth,
@@ -200,7 +200,7 @@ public final class ClientWorldSelectScreen extends ConfluxScreen {
             ));
             merge.active = !migrationBusy;
         } else if (canMigrate) {
-            addDrawableChild(Widgets.button(
+            addRenderableWidget(Widgets.button(
                 footerX + footerIndex++ * (footerButtonWidth + GAP),
                 height - 28,
                 footerButtonWidth,
@@ -214,31 +214,31 @@ public final class ClientWorldSelectScreen extends ConfluxScreen {
                 }
             ));
         }
-        final ButtonWidget aliases = addDrawableChild(Widgets.button(
+        final Button aliases = addRenderableWidget(Widgets.button(
             footerX + footerIndex++ * (footerButtonWidth + GAP),
             height - 28,
             footerButtonWidth,
             20,
             Texts.translatable("confluxmap.screen.client_world.aliases"),
             ignored -> MinecraftAccess.setScreen(
-                MinecraftClient.getInstance(), new ServerAliasScreen(this)
+                Minecraft.getInstance(), new ServerAliasScreen(this)
             )
         ));
         aliases.active = !migrationBusy && worlds.currentServerId().isPresent();
-        final ButtonWidget seedPreview = addDrawableChild(Widgets.button(
+        final Button seedPreview = addRenderableWidget(Widgets.button(
             footerX + footerIndex++ * (footerButtonWidth + GAP),
             height - 28,
             footerButtonWidth,
             20,
             Texts.translatable("confluxmap.screen.client_world.seed_preview"),
             ignored -> MinecraftAccess.setScreen(
-                MinecraftClient.getInstance(), new ManualSeedScreen(this)
+                Minecraft.getInstance(), new ManualSeedScreen(this)
             )
         ));
         // This is also the recovery path when the server has just gained the companion plugin;
         // it must not depend on a pre-existing client profile selection.
         seedPreview.active = manualSeedService.available();
-        addDrawableChild(Widgets.button(
+        addRenderableWidget(Widgets.button(
             footerX + footerIndex * (footerButtonWidth + GAP),
             height - 28,
             footerWidth - footerButtonWidth * footerIndex - GAP * footerIndex,
@@ -322,7 +322,7 @@ public final class ClientWorldSelectScreen extends ConfluxScreen {
         }
         if (waitingToOpenMap && ConfluxMapClient.get().sessionGuard().current().active()) {
             waitingToOpenMap = false;
-            MinecraftAccess.setScreen(MinecraftClient.getInstance(), new FullscreenMapScreen(openMapKey));
+            MinecraftAccess.setScreen(Minecraft.getInstance(), new FullscreenMapScreen(openMapKey));
         }
     }
 
@@ -450,7 +450,7 @@ public final class ClientWorldSelectScreen extends ConfluxScreen {
         pendingForgetId = null;
         migrationMessage = null;
         migrationError = false;
-        MinecraftAccess.setScreen(MinecraftClient.getInstance(), new ClientWorldNameScreen(
+        MinecraftAccess.setScreen(Minecraft.getInstance(), new ClientWorldNameScreen(
             this,
             worlds.companionWorldName().orElse(null),
             name -> {
@@ -466,7 +466,7 @@ public final class ClientWorldSelectScreen extends ConfluxScreen {
         pendingForgetId = null;
         migrationMessage = null;
         migrationError = false;
-        MinecraftAccess.setScreen(MinecraftClient.getInstance(), new ClientWorldNameScreen(
+        MinecraftAccess.setScreen(Minecraft.getInstance(), new ClientWorldNameScreen(
             this,
             profile == null ? null : profile.displayName(),
             name -> {
@@ -483,12 +483,12 @@ public final class ClientWorldSelectScreen extends ConfluxScreen {
 
     private void finishSelection() {
         if (parent != null) {
-            MinecraftAccess.setScreen(MinecraftClient.getInstance(), parent);
+            MinecraftAccess.setScreen(Minecraft.getInstance(), parent);
         } else if (openMapAfterSelection) {
             waitingToOpenMap = true;
             rebuild();
         } else {
-            MinecraftAccess.setScreen(MinecraftClient.getInstance(), null);
+            MinecraftAccess.setScreen(Minecraft.getInstance(), null);
         }
     }
 
@@ -497,16 +497,12 @@ public final class ClientWorldSelectScreen extends ConfluxScreen {
     }
 
     @Override
-    //#if MC>=12002
-    //$$ public boolean mouseScrolled(
-    //$$     final double mouseX,
-    //$$     final double mouseY,
-    //$$     final double horizontalAmount,
-    //$$     final double amount
-    //$$ ) {
-    //#else
-    public boolean mouseScrolled(final double mouseX, final double mouseY, final double amount) {
-    //#endif
+    public boolean mouseScrolled(
+        final double mouseX,
+        final double mouseY,
+        final double horizontalAmount,
+        final double amount
+    ) {
         final int rowWidth = Math.min(440, Math.max(250, width - 24));
         final boolean overList = mouseX >= width / 2 - rowWidth / 2
             && mouseX <= width / 2 + rowWidth / 2 + 6
@@ -516,16 +512,12 @@ public final class ClientWorldSelectScreen extends ConfluxScreen {
             rebuild();
             return true;
         }
-        //#if MC>=12002
-        //$$ return super.mouseScrolled(mouseX, mouseY, horizontalAmount, amount);
-        //#else
-        return super.mouseScrolled(mouseX, mouseY, amount);
-        //#endif
+        return super.mouseScrolled(mouseX, mouseY, horizontalAmount, amount);
     }
 
     @Override
     public void onClose() {
-        MinecraftAccess.setScreen(MinecraftClient.getInstance(), parent);
+        MinecraftAccess.setScreen(Minecraft.getInstance(), parent);
     }
 
     @Override
@@ -567,7 +559,7 @@ public final class ClientWorldSelectScreen extends ConfluxScreen {
 
     private void drawCentered(final GuiDraw draw, final String text, final float y, final int color) {
         draw.drawTextWithShadow(
-            this.textRenderer, text, width / 2f - this.textRenderer.getWidth(text) / 2f, y, color
+            this.font, text, width / 2f - this.font.width(text) / 2f, y, color
         );
     }
 }

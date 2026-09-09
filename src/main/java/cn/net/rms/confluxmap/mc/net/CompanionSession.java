@@ -37,7 +37,7 @@ import org.jetbrains.annotations.Nullable;
  * snapshot so render/worker threads can observe the latest state without locks. Three call sites:
  * <ul>
  *   <li>{@code ClientNetworking} calls {@link #onHelloSent()} / {@link #onPolicy(HelloPolicyS2C)}
- *       / {@link #reset()} after marshalling Fabric network callbacks to the client thread.</li>
+ *       / {@link #reset()} after marshalling NeoForge network callbacks to the client thread.</li>
  *   <li>{@code WorldSessionTracker} calls {@link #tick()} every client tick.</li>
  *   <li>{@code PredictionBootstrap} / {@code WorldSessionTracker} read the getters.</li>
  * </ul>

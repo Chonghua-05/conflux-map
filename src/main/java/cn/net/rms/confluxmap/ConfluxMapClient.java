@@ -71,13 +71,13 @@ import cn.net.rms.confluxmap.mc.world.FullscreenMapBrowseService;
 import cn.net.rms.confluxmap.mc.world.McDaylightTracker;
 import cn.net.rms.confluxmap.mc.world.WorldSessionTracker;
 import cn.net.rms.confluxmap.nativepredict.NativeLib;
-import net.fabricmc.api.ClientModInitializer;
-import net.fabricmc.fabric.api.client.event.lifecycle.v1.ClientLifecycleEvents;
-import net.fabricmc.fabric.api.client.event.lifecycle.v1.ClientTickEvents;
-import net.fabricmc.fabric.api.resource.ResourceManagerHelper;
-import net.fabricmc.loader.api.FabricLoader;
-import net.minecraft.client.MinecraftClient;
-import net.minecraft.resource.ResourceType;
+import cn.net.rms.confluxmap.neoforge.compat.ClientModInitializer;
+import cn.net.rms.confluxmap.neoforge.compat.ClientLifecycleEvents;
+import cn.net.rms.confluxmap.neoforge.compat.ClientTickEvents;
+import cn.net.rms.confluxmap.neoforge.compat.ResourceManagerHelper;
+import net.neoforged.fml.loading.FMLPaths;
+import net.minecraft.client.Minecraft;
+import net.minecraft.server.packs.PackType;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.List;
@@ -150,10 +150,10 @@ public final class ConfluxMapClient implements ClientModInitializer {
     @Override
     public void onInitializeClient() {
         instance = this;
-        final MinecraftClient client = MinecraftClient.getInstance();
+        final Minecraft client = Minecraft.getInstance();
 
         configIo = new ConfigIo(
-            FabricLoader.getInstance().getConfigDir().resolve(ConfluxMapMod.ID).resolve("config.json"),
+            FMLPaths.CONFIGDIR.get().resolve(ConfluxMapMod.ID).resolve("config.json"),
             ConfluxMapMod.LOGGER
         );
         config = configIo.load();
@@ -162,14 +162,14 @@ public final class ConfluxMapClient implements ClientModInitializer {
             client, config, configIo
         );
         unsupportedPlatformWarningNotifier.register();
-        final Path confluxRoot = FabricLoader.getInstance().getGameDir().resolve(ConfluxMapMod.ID);
+        final Path confluxRoot = FMLPaths.GAMEDIR.get().resolve(ConfluxMapMod.ID);
         final Path cacheRoot = confluxRoot.resolve("cache");
         executors = new MapExecutors();
         sessionGuard = new SessionGuard();
         gameBridge = new McGameBridge(client, sessionGuard);
         companionSession = new CompanionSession();
         final ClientWorldProfileIo clientWorldProfileIo = new ClientWorldProfileIo(
-            FabricLoader.getInstance().getConfigDir().resolve(ConfluxMapMod.ID).resolve("client_worlds.json"),
+            FMLPaths.CONFIGDIR.get().resolve(ConfluxMapMod.ID).resolve("client_worlds.json"),
             ConfluxMapMod.LOGGER
         );
         final ClientWorldProfileRegistry clientWorldProfiles = clientWorldProfileIo.load();
@@ -179,7 +179,7 @@ public final class ConfluxMapClient implements ClientModInitializer {
         final Path waypointRoot = confluxRoot.resolve("waypoints");
         final Path annotationRoot = confluxRoot.resolve("annotations");
         final ServerAliasIo serverAliasIo = new ServerAliasIo(
-            FabricLoader.getInstance().getConfigDir().resolve(ConfluxMapMod.ID).resolve("server_aliases.json"),
+            FMLPaths.CONFIGDIR.get().resolve(ConfluxMapMod.ID).resolve("server_aliases.json"),
             ConfluxMapMod.LOGGER
         );
         final ServerAliasRegistry serverAliases = serverAliasIo.load();
@@ -285,7 +285,7 @@ public final class ConfluxMapClient implements ClientModInitializer {
             config,
             configIo,
             sessionGuard,
-            client::isInSingleplayer,
+            client::isLocalServer,
             companionSession::isActive,
             () -> companionSession.seedFor(PredictionDimensions.OVERWORLD).isPresent(),
             this::refreshPredictionSource
@@ -371,17 +371,17 @@ public final class ConfluxMapClient implements ClientModInitializer {
         deathWatcher.register();
         daylightTracker.register();
         groundTeleportService.register();
-        ResourceManagerHelper.get(ResourceType.CLIENT_RESOURCES).registerReloadListener(
+        ResourceManagerHelper.get(PackType.CLIENT_RESOURCES).registerReloadListener(
             new ColorReloadListener(client, spriteColorSampler, () -> {
                 predictionPaletteBuilder.refreshCurrentWorld();
                 syncedMaterialResolver.refresh();
                 reloadPredictionTiles();
             })
         );
-        ResourceManagerHelper.get(ResourceType.CLIENT_RESOURCES).registerReloadListener(
+        ResourceManagerHelper.get(PackType.CLIENT_RESOURCES).registerReloadListener(
             new EntityIconReloadListener(entityIconManager)
         );
-        ResourceManagerHelper.get(ResourceType.CLIENT_RESOURCES).registerReloadListener(
+        ResourceManagerHelper.get(PackType.CLIENT_RESOURCES).registerReloadListener(
             new UiResourceReloadListener(uiResourceTheme)
         );
 
@@ -412,9 +412,6 @@ public final class ConfluxMapClient implements ClientModInitializer {
         configIo.save(config);
         entityIconManager.close();
         chunkCapture.close();
-        //#if MC>=260200
-        //$$ Mesh.close();
-        //#endif
         executors.shutdown(5000L);
     }
 

@@ -9,22 +9,20 @@ import cn.net.rms.confluxmap.core.task.SessionGuard;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.function.BooleanSupplier;
-import net.fabricmc.fabric.api.client.event.lifecycle.v1.ClientTickEvents;
-import net.minecraft.client.MinecraftClient;
-import net.minecraft.entity.Entity;
-import net.minecraft.entity.SpawnGroup;
-import net.minecraft.entity.decoration.AbstractDecorationEntity;
-//#if MC>=12000
-//$$ import net.minecraft.entity.decoration.DisplayEntity;
-//$$ import net.minecraft.entity.decoration.InteractionEntity;
-//#endif
-import net.minecraft.entity.mob.MobEntity;
-import net.minecraft.entity.mob.PhantomEntity;
-import net.minecraft.entity.player.PlayerEntity;
+import cn.net.rms.confluxmap.neoforge.compat.ClientTickEvents;
+import net.minecraft.client.Minecraft;
+import net.minecraft.world.entity.Entity;
+import net.minecraft.world.entity.MobCategory;
+import net.minecraft.world.entity.decoration.HangingEntity;
+import net.minecraft.world.entity.Display;
+import net.minecraft.world.entity.Interaction;
+import net.minecraft.world.entity.Mob;
+import net.minecraft.world.entity.monster.Phantom;
+import net.minecraft.world.entity.player.Player;
 
 /**
  * Periodically classifies the client's already-loaded entities into a {@link RadarEntry}
- * snapshot for {@code MinimapHudRenderer} to draw. Reads only {@link MinecraftClient#world}'s
+ * snapshot for {@code MinimapHudRenderer} to draw. Reads only {@link Minecraft#world}'s
  * standard renderable-entity collection ({@code ClientWorld#getEntities()}) — the exact same
  * pool the game itself iterates to draw entities in the 3D world, matching the anti-cheat
  * boundary from the implementation plan (no packets, no server queries).
@@ -37,10 +35,10 @@ import net.minecraft.entity.player.PlayerEntity;
  * describes a live per-instance classifier (a "Monster" marker-interface check, a
  * killer-rabbit-variant special case, and an "Angerable" trait checked against the local
  * player's UUID) used for the actual radar, plus a separate coarser
- * {@link net.minecraft.entity.SpawnGroup}-based classifier used only for VoxelMap's
+ * {@link net.minecraft.world.entity.MobCategory}-based classifier used only for VoxelMap's
  * per-species management dialog. Conflux Map has no per-species dialog, so this scanner uses a
- * coarser classifier: players stay separate, {@link MobEntity mobs} in
- * {@link SpawnGroup#MONSTER} become {@link RadarCategory#HOSTILE}, all remaining mobs become
+ * coarser classifier: players stay separate, {@link Mob mobs} in
+ * {@link MobCategory#MONSTER} become {@link RadarCategory#HOSTILE}, all remaining mobs become
  * {@link RadarCategory#PASSIVE}, and non-mob entities become {@link RadarCategory#OTHER}. This is
  * simpler and
  * cheaper than reproducing the live classifier, at the cost of not flagging a neutral mob that
@@ -69,7 +67,7 @@ public final class EntityRadarScanner {
      */
     private static final double RESCAN_GROWTH_THRESHOLD = 1.25;
 
-    private final MinecraftClient client;
+    private final Minecraft client;
     private final ConfluxConfig config;
     private final RadarViewRange viewRange;
     private final BooleanSupplier serverPolicyAllowsRadar;
@@ -79,12 +77,12 @@ public final class EntityRadarScanner {
     /** The view radius used by the most recently completed scan; 0 means "no scan yet". */
     private double lastScannedRadius;
 
-    public EntityRadarScanner(final MinecraftClient client, final ConfluxConfig config, final RadarViewRange viewRange) {
+    public EntityRadarScanner(final Minecraft client, final ConfluxConfig config, final RadarViewRange viewRange) {
         this(client, config, viewRange, () -> true);
     }
 
     public EntityRadarScanner(
-        final MinecraftClient client,
+        final Minecraft client,
         final ConfluxConfig config,
         final RadarViewRange viewRange,
         final BooleanSupplier serverPolicyAllowsRadar
@@ -144,21 +142,19 @@ public final class EntityRadarScanner {
     }
 
     static boolean isRadarCandidate(final Class<? extends Entity> entityClass) {
-        if (AbstractDecorationEntity.class.isAssignableFrom(entityClass)) {
+        if (HangingEntity.class.isAssignableFrom(entityClass)) {
             return false;
         }
-        //#if MC>=12000
-        //$$ if (DisplayEntity.class.isAssignableFrom(entityClass)
-        //$$     || InteractionEntity.class.isAssignableFrom(entityClass)) {
-        //$$     return false;
-        //$$ }
-        //#endif
+        if (Display.class.isAssignableFrom(entityClass)
+            || Interaction.class.isAssignableFrom(entityClass)) {
+            return false;
+        }
         return true;
     }
 
     private List<RadarEntry> scan(final double radius) {
-        final PlayerEntity self = client.player;
-        if (self == null || client.world == null) {
+        final Player self = client.player;
+        if (self == null || client.level == null) {
             return List.of();
         }
         final Entity cameraEntity = client.getCameraEntity();
@@ -170,7 +166,7 @@ public final class EntityRadarScanner {
         final double horizontalRangeSq = bufferedRadius * bufferedRadius;
 
         final List<RadarEntry> raw = new ArrayList<>();
-        for (final Entity entity : client.world.getEntities()) {
+        for (final Entity entity : client.level.entitiesForRendering()) {
             if (entity == self
                 || entity == observer
                 || !isRadarCandidate(entity.getClass())) {
@@ -183,7 +179,7 @@ public final class EntityRadarScanner {
             if (!spectator && entity.isInvisibleTo(self)) {
                 continue;
             }
-            if (!spectator && entity instanceof PlayerEntity && entity.isSneaking()) {
+            if (!spectator && entity instanceof Player && entity.isShiftKeyDown()) {
                 continue;
             }
 
@@ -193,7 +189,7 @@ public final class EntityRadarScanner {
                 continue;
             }
             final int yDelta = (int) Math.round(entity.getY() - oy);
-            final int verticalRange = (entity instanceof PhantomEntity ? PHANTOM_VERTICAL_RANGE : VERTICAL_RANGE) + SCAN_RANGE_BUFFER;
+            final int verticalRange = (entity instanceof Phantom ? PHANTOM_VERTICAL_RANGE : VERTICAL_RANGE) + SCAN_RANGE_BUFFER;
             if (Math.abs(yDelta) > verticalRange) {
                 continue;
             }
@@ -202,7 +198,7 @@ public final class EntityRadarScanner {
             final String name = category == RadarCategory.PLAYER ? entity.getName().getString() : null;
             raw.add(new RadarEntry(
                 entity.getX(), entity.getZ(), yDelta, category, name, entity.getId(), spectator,
-                category == RadarCategory.PLAYER ? entity.getUuid() : null
+                category == RadarCategory.PLAYER ? entity.getUUID() : null
             ));
         }
 
@@ -213,14 +209,14 @@ public final class EntityRadarScanner {
     }
 
     private static RadarCategory classify(final Entity entity) {
-        if (entity instanceof PlayerEntity) {
+        if (entity instanceof Player) {
             return RadarCategory.PLAYER;
         }
-        if (!(entity instanceof MobEntity)) {
+        if (!(entity instanceof Mob)) {
             return RadarCategory.OTHER;
         }
-        final SpawnGroup group = entity.getType().getSpawnGroup();
-        if (group == SpawnGroup.MONSTER) {
+        final MobCategory group = entity.getType().getCategory();
+        if (group == MobCategory.MONSTER) {
             return RadarCategory.HOSTILE;
         }
         return RadarCategory.PASSIVE;

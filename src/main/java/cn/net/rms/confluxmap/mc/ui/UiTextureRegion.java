@@ -1,6 +1,6 @@
 package cn.net.rms.confluxmap.mc.ui;
 
-import net.minecraft.util.Identifier;
+import net.minecraft.resources.Identifier;
 
 /** A complete texture or one normalized region inside a resource-pack-provided atlas. */
 public record UiTextureRegion(

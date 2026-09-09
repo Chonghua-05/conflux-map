@@ -1,35 +1,30 @@
 package cn.net.rms.confluxmap.compat;
 
+import java.io.IOException;
+import java.io.InputStream;
+import java.util.Properties;
+
 /** Compile-time Minecraft release identity for the active version subproject. */
 public final class MinecraftVersion {
+    private static final String RESOURCE = "/confluxmap.version";
+
     private MinecraftVersion() {
     }
 
     public static String current() {
-        //#if MC>=260200
-        //$$ return "26.2";
-        //#elseif MC>=260100
-        //$$ return "26.1.2";
-        //#elseif MC>=12111
-        //$$ return "1.21.11";
-        //#elseif MC>=12109
-        //$$ return "1.21.9";
-        //#elseif MC>=12108
-        //$$ return "1.21.8";
-        //#elseif MC>=12105
-        //$$ return "1.21.5";
-        //#elseif MC>=12104
-        //$$ return "1.21.4";
-        //#elseif MC>=12103
-        //$$ return "1.21.3";
-        //#elseif MC>=12101
-        //$$ return "1.21.1";
-        //#elseif MC>=12001
-        //$$ return "1.20.1";
-        //#elseif MC>=11802
-        //$$ return "1.18.2";
-        //#else
-        return "1.17.1";
-        //#endif
+        final Properties properties = new Properties();
+        try (InputStream stream = MinecraftVersion.class.getResourceAsStream(RESOURCE)) {
+            if (stream == null) {
+                throw new IllegalStateException("Missing " + RESOURCE);
+            }
+            properties.load(stream);
+        } catch (IOException e) {
+            throw new IllegalStateException("Unable to read " + RESOURCE, e);
+        }
+        final String version = properties.getProperty("minecraft_version");
+        if (version == null || version.isBlank()) {
+            throw new IllegalStateException("Missing minecraft_version in " + RESOURCE);
+        }
+        return version;
     }
 }

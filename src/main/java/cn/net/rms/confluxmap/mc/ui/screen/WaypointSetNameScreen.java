@@ -8,12 +8,12 @@ import cn.net.rms.confluxmap.compat.Widgets;
 import cn.net.rms.confluxmap.compat.Texts;
 import java.util.Objects;
 import java.util.function.Consumer;
-import net.minecraft.client.MinecraftClient;
-import net.minecraft.client.gui.screen.Screen;
-import net.minecraft.client.gui.widget.ButtonWidget;
-import net.minecraft.client.gui.widget.TextFieldWidget;
-import net.minecraft.client.util.math.MatrixStack;
-import net.minecraft.text.Text;
+import net.minecraft.client.Minecraft;
+import net.minecraft.client.gui.screens.Screen;
+import net.minecraft.client.gui.components.Button;
+import net.minecraft.client.gui.components.EditBox;
+import com.mojang.blaze3d.vertex.PoseStack;
+import net.minecraft.network.chat.Component;
 
 /** Small create/rename form for one player-owned local waypoint set. */
 final class WaypointSetNameScreen extends ConfluxScreen {
@@ -24,8 +24,8 @@ final class WaypointSetNameScreen extends ConfluxScreen {
     private final WaypointStore boundStore;
     private final String existingName;
     private final Consumer<String> onSuccess;
-    private TextFieldWidget nameField;
-    private ButtonWidget doneButton;
+    private EditBox nameField;
+    private Button doneButton;
     private String errorKey;
 
     WaypointSetNameScreen(
@@ -53,21 +53,21 @@ final class WaypointSetNameScreen extends ConfluxScreen {
     @Override
     protected void init() {
         final int centerX = width / 2;
-        nameField = new TextFieldWidget(
-            this.textRenderer,
+        nameField = new EditBox(
+            this.font,
             centerX - FIELD_WIDTH / 2,
             Math.max(58, height / 2 - 28),
             FIELD_WIDTH,
             FIELD_HEIGHT,
-            Text.of("")
+            Component.nullToEmpty("")
         );
         nameField.setMaxLength(32);
-        nameField.setText(existingName == null ? "" : existingName);
-        addDrawableChild(nameField);
+        nameField.setValue(existingName == null ? "" : existingName);
+        addRenderableWidget(nameField);
         setInitialFocus(nameField);
 
         final int buttonY = Widgets.y(nameField) + 30;
-        doneButton = addDrawableChild(Widgets.button(
+        doneButton = addRenderableWidget(Widgets.button(
             centerX - 104,
             buttonY,
             100,
@@ -75,7 +75,7 @@ final class WaypointSetNameScreen extends ConfluxScreen {
             Texts.translatable("confluxmap.screen.waypoint.done"),
             button -> submit()
         ));
-        addDrawableChild(Widgets.button(
+        addRenderableWidget(Widgets.button(
             centerX + 4,
             buttonY,
             100,
@@ -95,12 +95,12 @@ final class WaypointSetNameScreen extends ConfluxScreen {
 
     @Override
     public void onClose() {
-        MinecraftAccess.setScreen(MinecraftClient.getInstance(), parent);
+        MinecraftAccess.setScreen(Minecraft.getInstance(), parent);
     }
 
     private void refreshDoneButton() {
         if (doneButton != null && nameField != null) {
-            doneButton.active = !nameField.getText().trim().isEmpty();
+            doneButton.active = !nameField.getValue().trim().isEmpty();
         }
     }
 
@@ -111,7 +111,7 @@ final class WaypointSetNameScreen extends ConfluxScreen {
             errorKey = "confluxmap.screen.waypoint_set.error.unavailable";
             return;
         }
-        final String requestedName = nameField.getText();
+        final String requestedName = nameField.getValue();
         final WaypointStore.MutationResult result = existingName == null
             ? store.createSet(requestedName)
             : store.renameSet(existingName, requestedName);
@@ -154,7 +154,7 @@ final class WaypointSetNameScreen extends ConfluxScreen {
     }
 
     private void drawCentered(final GuiDraw draw, final String value, final int y, final int color) {
-        final String text = this.textRenderer.trimToWidth(value, Math.max(40, width - 32));
-        draw.drawTextWithShadow(this.textRenderer, text, width / 2f - this.textRenderer.getWidth(text) / 2f, y, color);
+        final String text = this.font.plainSubstrByWidth(value, Math.max(40, width - 32));
+        draw.drawTextWithShadow(this.font, text, width / 2f - this.font.width(text) / 2f, y, color);
     }
 }

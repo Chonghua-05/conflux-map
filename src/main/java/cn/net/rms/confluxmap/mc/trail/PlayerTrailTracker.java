@@ -4,21 +4,21 @@ import cn.net.rms.confluxmap.core.config.ConfluxConfig;
 import cn.net.rms.confluxmap.core.task.SessionGuard;
 import cn.net.rms.confluxmap.core.trail.PlayerTrail;
 import java.util.concurrent.TimeUnit;
-import net.fabricmc.fabric.api.client.event.lifecycle.v1.ClientTickEvents;
-import net.minecraft.client.MinecraftClient;
+import cn.net.rms.confluxmap.neoforge.compat.ClientTickEvents;
+import net.minecraft.client.Minecraft;
 
 /** Samples the local player's recent movement without retaining positions across map sessions. */
 public final class PlayerTrailTracker {
     private static final int SAMPLE_INTERVAL_TICKS = 10;
 
-    private final MinecraftClient client;
+    private final Minecraft client;
     private final ConfluxConfig config;
     private final SessionGuard sessionGuard;
     private final PlayerTrail trail;
     private int ticksUntilSample;
 
     public PlayerTrailTracker(
-        final MinecraftClient client,
+        final Minecraft client,
         final ConfluxConfig config,
         final SessionGuard sessionGuard,
         final PlayerTrail trail
@@ -44,7 +44,7 @@ public final class PlayerTrailTracker {
             ticksUntilSample = 0;
             return;
         }
-        if (!sessionGuard.current().active() || client.world == null || client.player == null) {
+        if (!sessionGuard.current().active() || client.level == null || client.player == null) {
             ticksUntilSample = 0;
             return;
         }

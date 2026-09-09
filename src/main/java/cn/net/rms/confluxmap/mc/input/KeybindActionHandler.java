@@ -12,22 +12,22 @@ import cn.net.rms.confluxmap.mc.ui.screen.WaypointEditScreen;
 import cn.net.rms.confluxmap.mc.ui.screen.WaypointListScreen;
 import cn.net.rms.confluxmap.mc.world.LayerSelector;
 import java.util.Optional;
-import net.minecraft.client.MinecraftClient;
-import net.minecraft.client.gui.screen.Screen;
-import net.minecraft.client.option.KeyBinding;
+import net.minecraft.client.Minecraft;
+import net.minecraft.client.gui.screens.Screen;
+import net.minecraft.client.KeyMapping;
 
 /** Executes every keybind action, independent of which input backend triggered it. */
 final class KeybindActionHandler {
     private final ConfluxConfig config;
     private final ConfigIo configIo;
     private final LayerSelector layerSelector;
-    private final KeyBinding vanillaOpenMapKey;
+    private final KeyMapping vanillaOpenMapKey;
 
     KeybindActionHandler(
         final ConfluxConfig config,
         final ConfigIo configIo,
         final LayerSelector layerSelector,
-        final KeyBinding vanillaOpenMapKey
+        final KeyMapping vanillaOpenMapKey
     ) {
         this.config = config;
         this.configIo = configIo;
@@ -91,7 +91,7 @@ final class KeybindActionHandler {
     }
 
     private boolean toggleMapScreen() {
-        final MinecraftClient client = MinecraftClient.getInstance();
+        final Minecraft client = Minecraft.getInstance();
         if (MinecraftAccess.screen(client) instanceof FullscreenMapScreen) {
             MinecraftAccess.screen(client).onClose();
             return true;
@@ -111,7 +111,7 @@ final class KeybindActionHandler {
     }
 
     private static boolean openScreen(final Screen screen) {
-        final MinecraftClient client = MinecraftClient.getInstance();
+        final Minecraft client = Minecraft.getInstance();
         if (client.player == null || MinecraftAccess.screen(client) != null) {
             return false;
         }
@@ -120,7 +120,7 @@ final class KeybindActionHandler {
     }
 
     private static boolean openNewWaypointAtViewpoint() {
-        final MinecraftClient client = MinecraftClient.getInstance();
+        final Minecraft client = Minecraft.getInstance();
         if (client.player == null || MinecraftAccess.screen(client) != null) {
             return false;
         }

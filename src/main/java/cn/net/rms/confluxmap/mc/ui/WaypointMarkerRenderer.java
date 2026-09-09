@@ -6,11 +6,11 @@ import cn.net.rms.confluxmap.core.util.Argb;
 import cn.net.rms.confluxmap.core.waypoint.WaypointRenderEntry;
 import cn.net.rms.confluxmap.core.waypoint.WaypointVerticalRelation;
 import cn.net.rms.confluxmap.mc.render.RenderUtil;
-import net.minecraft.client.MinecraftClient;
-import net.minecraft.client.font.TextRenderer;
-import net.minecraft.client.util.math.MatrixStack;
-import net.minecraft.item.ItemStack;
-import net.minecraft.util.math.MathHelper;
+import net.minecraft.client.Minecraft;
+import net.minecraft.client.gui.Font;
+import com.mojang.blaze3d.vertex.PoseStack;
+import net.minecraft.world.item.ItemStack;
+import net.minecraft.util.Mth;
 
 /**
  * VoxelMap-style waypoint marker drawing shared by {@code MinimapHudRenderer} and
@@ -42,7 +42,7 @@ public final class WaypointMarkerRenderer {
      */
     public static void draw(
         final GuiDraw draw,
-        final TextRenderer textRenderer,
+        final Font textRenderer,
         final WaypointRenderEntry waypoint,
         final float x,
         final float y,
@@ -51,7 +51,7 @@ public final class WaypointMarkerRenderer {
         final boolean hovered,
         final WaypointVerticalRelation verticalRelation
     ) {
-        final MatrixStack matrices = draw.matrices();
+        final PoseStack matrices = draw.matrices();
         final int fill = fillColor(waypoint.colorArgb(), alpha, hovered);
         final int outer = withAlpha(outlineColor(waypoint), alpha);
         final float plateSize = halfSize * 2f;
@@ -61,7 +61,7 @@ public final class WaypointMarkerRenderer {
         final ItemStack itemIcon = itemIcon(waypoint.iconItemId());
         if (!itemIcon.isEmpty()) {
             draw.drawItemIcon(
-                MinecraftClient.getInstance(),
+                Minecraft.getInstance(),
                 itemIcon,
                 x,
                 y,
@@ -72,20 +72,20 @@ public final class WaypointMarkerRenderer {
         }
 
         final String markerText = markerText(waypoint.name(), waypoint.markerLabel());
-        final int textWidth = textRenderer.getWidth(markerText);
+        final int textWidth = textRenderer.width(markerText);
         final float available = Math.max(1f, plateSize - 2f);
-        final float textScale = Math.min(1f, available / Math.max(textWidth, textRenderer.fontHeight));
-        matrices.push();
+        final float textScale = Math.min(1f, available / Math.max(textWidth, textRenderer.lineHeight));
+        matrices.pushPose();
         matrices.translate(x, y, 0);
         matrices.scale(textScale, textScale, 1f);
         draw.drawTextWithShadow(
             textRenderer,
             markerText,
             -textWidth / 2f,
-            -textRenderer.fontHeight / 2f,
+            -textRenderer.lineHeight / 2f,
             withAlpha(textColorFor(fill), alpha)
         );
-        matrices.pop();
+        matrices.popPose();
         drawHeightBadge(matrices, verticalRelation, x, y, halfSize, alpha);
     }
 
@@ -151,7 +151,7 @@ public final class WaypointMarkerRenderer {
 
     /** Two-tone geometry stays readable over every user-selected waypoint color. */
     private static void drawHeightBadge(
-        final MatrixStack matrices,
+        final PoseStack matrices,
         final WaypointVerticalRelation relation,
         final float x,
         final float y,
@@ -179,7 +179,7 @@ public final class WaypointMarkerRenderer {
     }
 
     private static int withAlpha(final int argb, final float alpha) {
-        final int a = Math.round(Argb.alpha(argb) * MathHelper.clamp(alpha, 0f, 1f));
+        final int a = Math.round(Argb.alpha(argb) * Mth.clamp(alpha, 0f, 1f));
         return (a << 24) | (argb & 0x00FFFFFF);
     }
 }

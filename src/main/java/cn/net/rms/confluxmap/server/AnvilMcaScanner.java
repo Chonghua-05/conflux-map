@@ -15,10 +15,8 @@ import java.nio.file.StandardOpenOption;
 import java.util.Arrays;
 import java.util.zip.GZIPInputStream;
 import java.util.zip.InflaterInputStream;
-//#if MC>=12005
-//$$ import net.jpountz.lz4.LZ4BlockInputStream;
-//#endif
-import net.minecraft.nbt.NbtCompound;
+import net.jpountz.lz4.LZ4BlockInputStream;
+import net.minecraft.nbt.CompoundTag;
 import net.minecraft.nbt.NbtIo;
 
 /** Reads one Anvil file once and produces all four 16x16-chunk summary regions it contains. */
@@ -239,7 +237,7 @@ final class AnvilMcaScanner {
                 if (nativeChunk != null) {
                     return summarizer.summarizeNative(nativeChunk);
                 }
-                final NbtCompound nbt = NbtIo.read(
+                final CompoundTag nbt = NbtIo.read(
                     new DataInputStream(new ByteArrayInputStream(
                         rawNbt.buffer(), 0, rawNbt.length()
                     ))
@@ -262,11 +260,9 @@ final class AnvilMcaScanner {
             if (version == 3) {
                 return input;
             }
-            //#if MC>=12005
-            //$$ if (version == 4) {
-            //$$     return new LZ4BlockInputStream(input);
-            //$$ }
-            //#endif
+            if (version == 4) {
+                return new LZ4BlockInputStream(input);
+            }
             throw new IOException("unsupported Anvil compression version " + version);
         } catch (final IOException | RuntimeException e) {
             try {

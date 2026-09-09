@@ -13,7 +13,7 @@ body:
     id: minecraft-version
     attributes:
       label: Minecraft version
-      placeholder: "For example: 1.21.4"
+      placeholder: "For example: 26.1"
     validations:
       required: true
 
@@ -31,9 +31,9 @@ body:
     attributes:
       label: Platform
       options:
-        - Fabric client
-        - Fabric server companion
-        - Paper server companion
+        - NeoForge client
+        - NeoForge dedicated server
+        - NeoForge integrated server
         - Other
     validations:
       required: true
@@ -42,8 +42,8 @@ body:
     id: loader-version
     attributes:
       label: Loader or server version
-      description: Include the Fabric Loader, Fabric API, or Paper version, as applicable.
-      placeholder: "For example: Fabric Loader 0.16.10, Fabric API 0.119.2"
+      description: Include the NeoForge version and Java runtime version.
+      placeholder: "For example: NeoForge 26.1.0.19-beta, Java 25"
     validations:
       required: true
 

@@ -34,23 +34,23 @@ jobs:
           path: |
             ~/.gradle/caches
             ~/.gradle/wrapper
-          key: ${{ runner.os }}-gradle-neoforge-26.1-${{ hashFiles('**/*.gradle*', '**/gradle-wrapper.properties') }}
+          key: ${{ runner.os }}-gradle-neoforge-${{ hashFiles('**/*.gradle*', '**/gradle-wrapper.properties') }}
           restore-keys: |
-            ${{ runner.os }}-gradle-neoforge-26.1-
+            ${{ runner.os }}-gradle-neoforge-
             ${{ runner.os }}-gradle-
 
       - name: Make Gradle wrapper executable
         run: chmod +x ./gradlew
 
       - name: Build and test NeoForge 26.1
-        run: ./gradlew :neoforge-26.1:build --no-daemon --console=plain
+        run: ./gradlew :26.1:build --no-daemon --console=plain
 
       - name: Resolve release tag
         id: release
         shell: bash
         run: |
           set -euo pipefail
-          version=$(sed -n 's/^mod_version=//p' versions/neoforge-26.1/gradle.properties)
+          version=$(sed -n 's/^mod_version=//p' versions/26.1/gradle.properties)
           if [[ -z "$version" ]]; then
             echo 'NeoForge mod_version is empty' >&2
             exit 1
@@ -68,7 +68,7 @@ jobs:
           RELEASE_TAG: ${{ steps.release.outputs.tag }}
         run: |
           set -euo pipefail
-          jar=$(find versions/neoforge-26.1/build/libs -maxdepth 1 -type f -name '*.jar' | head -n 1)
+          jar=$(find versions/26.1/build/libs -maxdepth 1 -type f -name '*.jar' | head -n 1)
           if [[ -z "$jar" ]]; then
             echo 'NeoForge JAR was not produced' >&2
             exit 1
@@ -77,7 +77,7 @@ jobs:
           cat > "$notes" <<'EOF'
           Conflux Map v0.1.4 for NeoForge 26.1.
 
-          Install the JAR in the client or server `mods/` directory. Fabric API and MaliLib are not required for this build.
+          Install the JAR in the client or server `mods/` directory. No additional loader API is required.
           EOF
           if gh release view "$RELEASE_TAG" >/dev/null 2>&1; then
             gh release upload "$RELEASE_TAG" "$jar" --clobber

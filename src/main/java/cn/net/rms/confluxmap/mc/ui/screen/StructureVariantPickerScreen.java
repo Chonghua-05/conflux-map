@@ -9,8 +9,8 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.OptionalInt;
 import java.util.function.Consumer;
-import net.minecraft.client.MinecraftClient;
-import net.minecraft.client.gui.screen.Screen;
+import net.minecraft.client.Minecraft;
+import net.minecraft.client.gui.screens.Screen;
 
 /** Selects one structure variant or leaves a candidate search unfiltered. */
 final class StructureVariantPickerScreen extends ConfluxScreen {
@@ -77,7 +77,7 @@ final class StructureVariantPickerScreen extends ConfluxScreen {
             final String prefix = option.equals(selected) ? "\u2713 " : "";
             final int column = index / rows;
             final int row = index % rows;
-            addDrawableChild(Widgets.button(
+            addRenderableWidget(Widgets.button(
                 gridLeft + column * (buttonWidth + GAP),
                 40 + row * (BUTTON_HEIGHT + GAP),
                 buttonWidth,
@@ -86,7 +86,7 @@ final class StructureVariantPickerScreen extends ConfluxScreen {
                 ignored -> select(option)
             ));
         }
-        addDrawableChild(Widgets.button(
+        addRenderableWidget(Widgets.button(
             width / 2 - 50,
             height - 28,
             100,
@@ -103,7 +103,7 @@ final class StructureVariantPickerScreen extends ConfluxScreen {
 
     @Override
     public void onClose() {
-        MinecraftAccess.setScreen(MinecraftClient.getInstance(), parent);
+        MinecraftAccess.setScreen(Minecraft.getInstance(), parent);
     }
 
     @Override
@@ -116,9 +116,9 @@ final class StructureVariantPickerScreen extends ConfluxScreen {
         draw.renderBackground(this, mouseX, mouseY, tickDelta);
         final String title = getTitle().getString();
         draw.drawTextWithShadow(
-            this.textRenderer,
+            this.font,
             title,
-            width / 2f - this.textRenderer.getWidth(title) / 2f,
+            width / 2f - this.font.width(title) / 2f,
             16,
             0xFFFFFFFF
         );

@@ -1,6 +1,6 @@
 package cn.net.rms.confluxmap.mc.world;
 
-import net.minecraft.text.Text;
+import net.minecraft.network.chat.Component;
 
 /** Static packet-mixin bridge into the client world identity service. */
 public final class ClientWorldIdentityHandler {
@@ -28,7 +28,7 @@ public final class ClientWorldIdentityHandler {
     }
 
     /** Returns whether a pending world-detection query consumed this rendered chat message. */
-    public static boolean chatMessage(final Text message) {
+    public static boolean chatMessage(final Component message) {
         final ClientMultiworldService current = service;
         return current != null && current.onVelocityServerMessage(
             VelocityServerTextParser.parse(message),

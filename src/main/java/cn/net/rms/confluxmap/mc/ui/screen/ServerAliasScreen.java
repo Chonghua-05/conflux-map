@@ -9,9 +9,9 @@ import cn.net.rms.confluxmap.mc.ui.GuiDraw;
 import cn.net.rms.confluxmap.mc.world.ClientMultiworldService;
 import java.util.ArrayList;
 import java.util.List;
-import net.minecraft.client.MinecraftClient;
-import net.minecraft.client.gui.screen.Screen;
-import net.minecraft.client.gui.widget.ButtonWidget;
+import net.minecraft.client.Minecraft;
+import net.minecraft.client.gui.screens.Screen;
+import net.minecraft.client.gui.components.Button;
 
 /**
  * Lists every address that reaches the server whose map data this connection uses, and lets the
@@ -57,7 +57,7 @@ public final class ServerAliasScreen extends ConfluxScreen {
     }
 
     private void rebuild() {
-        clearChildren();
+        clearWidgets();
         canonicalId = worlds.currentServerId().orElse(null);
         rows.clear();
         if (canonicalId != null) {
@@ -79,11 +79,11 @@ public final class ServerAliasScreen extends ConfluxScreen {
             final int y = LIST_TOP + (index - scrollOffset) * ROW_HEIGHT;
             final Row row = rows.get(index);
             final boolean isCanonical = row.addressId().equals(canonicalId);
-            final ButtonWidget label = addDrawableChild(Widgets.button(
+            final Button label = addRenderableWidget(Widgets.button(
                 rowX, y, labelWidth, 20, Texts.literal(rowLabel(row, isCanonical)), ignored -> { }
             ));
             label.active = false;
-            final ButtonWidget action = addDrawableChild(Widgets.button(
+            final Button action = addRenderableWidget(Widgets.button(
                 rowX + labelWidth + GAP, y, ACTION_WIDTH, 20,
                 Texts.translatable(actionKey(row)),
                 ignored -> {
@@ -101,13 +101,13 @@ public final class ServerAliasScreen extends ConfluxScreen {
         final int footerWidth = Math.min(440, rowWidth);
         final int footerX = width / 2 - footerWidth / 2;
         final int footerButtonWidth = (footerWidth - GAP) / 2;
-        final ButtonWidget add = addDrawableChild(Widgets.button(
+        final Button add = addRenderableWidget(Widgets.button(
             footerX, height - 28, footerButtonWidth, 20,
             Texts.translatable("confluxmap.screen.server_alias.add"),
             ignored -> openAddressEditor()
         ));
         add.active = canonicalId != null;
-        addDrawableChild(Widgets.button(
+        addRenderableWidget(Widgets.button(
             footerX + footerButtonWidth + GAP, height - 28,
             footerWidth - footerButtonWidth - GAP, 20,
             Texts.translatable("confluxmap.screen.server_alias.back"),
@@ -138,7 +138,7 @@ public final class ServerAliasScreen extends ConfluxScreen {
 
     private void openAddressEditor() {
         clearMessage();
-        MinecraftAccess.setScreen(MinecraftClient.getInstance(), new ServerAliasAddScreen(
+        MinecraftAccess.setScreen(Minecraft.getInstance(), new ServerAliasAddScreen(
             this, this::addAddress
         ));
     }
@@ -221,16 +221,12 @@ public final class ServerAliasScreen extends ConfluxScreen {
     }
 
     @Override
-    //#if MC>=12002
-    //$$ public boolean mouseScrolled(
-    //$$     final double mouseX,
-    //$$     final double mouseY,
-    //$$     final double horizontalAmount,
-    //$$     final double amount
-    //$$ ) {
-    //#else
-    public boolean mouseScrolled(final double mouseX, final double mouseY, final double amount) {
-    //#endif
+    public boolean mouseScrolled(
+        final double mouseX,
+        final double mouseY,
+        final double horizontalAmount,
+        final double amount
+    ) {
         final int rowWidth = Math.min(440, Math.max(250, width - 24));
         final boolean overList = mouseX >= width / 2 - rowWidth / 2
             && mouseX <= width / 2 + rowWidth / 2 + 6
@@ -240,16 +236,12 @@ public final class ServerAliasScreen extends ConfluxScreen {
             rebuild();
             return true;
         }
-        //#if MC>=12002
-        //$$ return super.mouseScrolled(mouseX, mouseY, horizontalAmount, amount);
-        //#else
-        return super.mouseScrolled(mouseX, mouseY, amount);
-        //#endif
+        return super.mouseScrolled(mouseX, mouseY, horizontalAmount, amount);
     }
 
     @Override
     public void onClose() {
-        MinecraftAccess.setScreen(MinecraftClient.getInstance(), parent);
+        MinecraftAccess.setScreen(Minecraft.getInstance(), parent);
     }
 
     @Override
@@ -301,7 +293,7 @@ public final class ServerAliasScreen extends ConfluxScreen {
         final int color
     ) {
         draw.drawTextWithShadow(
-            this.textRenderer, text, width / 2f - this.textRenderer.getWidth(text) / 2f, y, color
+            this.font, text, width / 2f - this.font.width(text) / 2f, y, color
         );
     }
 }

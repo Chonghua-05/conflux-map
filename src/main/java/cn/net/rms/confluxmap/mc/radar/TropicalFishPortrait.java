@@ -2,7 +2,7 @@ package cn.net.rms.confluxmap.mc.radar;
 
 import cn.net.rms.confluxmap.compat.Ids;
 import cn.net.rms.confluxmap.core.util.Argb;
-import net.minecraft.util.Identifier;
+import net.minecraft.resources.Identifier;
 
 /** The two independently tinted texture layers used by vanilla tropical fish. */
 final class TropicalFishPortrait {

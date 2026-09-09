@@ -1,8 +1,4 @@
 package cn.net.rms.confluxmap.mixin;
-
-//#if MC<12000
-import com.mojang.blaze3d.systems.RenderSystem;
-//#endif
 import cn.net.rms.confluxmap.ConfluxMapClient;
 import cn.net.rms.confluxmap.compat.GuiTransforms;
 import cn.net.rms.confluxmap.compat.MinecraftAccess;
@@ -15,18 +11,9 @@ import cn.net.rms.confluxmap.core.config.MinimapInformationLayout;
 import cn.net.rms.confluxmap.core.config.MinimapPlacement;
 import cn.net.rms.confluxmap.mc.ui.hud.ToastHudBounds;
 import cn.net.rms.confluxmap.mc.ui.screen.FullscreenMapScreen;
-import net.minecraft.client.MinecraftClient;
-//#if MC>=260100
-//$$ import net.minecraft.client.gui.GuiGraphicsExtractor;
-//$$ import net.minecraft.client.gui.components.toasts.ToastManager;
-//#else
-import net.minecraft.client.toast.ToastManager;
-//#endif
-//#if MC>=12000 && MC<260100
-//$$ import net.minecraft.client.gui.DrawContext;
-//#elseif MC<12000
-import net.minecraft.client.util.math.MatrixStack;
-//#endif
+import net.minecraft.client.Minecraft;
+import net.minecraft.client.gui.GuiGraphicsExtractor;
+import net.minecraft.client.gui.components.toasts.ToastManager;
 import org.spongepowered.asm.mixin.Mixin;
 import org.spongepowered.asm.mixin.Unique;
 import org.spongepowered.asm.mixin.injection.At;
@@ -45,95 +32,39 @@ public abstract class ToastHudMixin {
     private boolean confluxmap$toastsShifted;
 
     @Inject(
-        //#if MC>=260100
-        //$$ method = "extractRenderState",
-        //#else
-        method = "draw",
-        //#endif
+        method = "extractRenderState",
         at = @At("HEAD")
     )
-    //#if MC>=260100
-    //$$ private void confluxmap$beforeToasts(
-    //$$     final GuiGraphicsExtractor context,
-    //$$     final CallbackInfo ci
-    //$$ ) {
-    //#elseif MC>=12000
-    //$$ private void confluxmap$beforeToasts(final DrawContext context, final CallbackInfo ci) {
-    //#else
-    private void confluxmap$beforeToasts(final MatrixStack matrices, final CallbackInfo ci) {
-    //#endif
+    private void confluxmap$beforeToasts(
+        final GuiGraphicsExtractor context,
+        final CallbackInfo ci
+    ) {
         confluxmap$toastsShifted = false;
-        //#if MC>=260100
-        //$$ final int screenWidth = context.guiWidth();
-        //$$ final int screenHeight = context.guiHeight();
-        //$$ final HudAmbient ambient = GuiTransforms.ambient(context);
-        //#elseif MC>=12000
-        //$$ final int screenWidth = context.getScaledWindowWidth();
-        //$$ final int screenHeight = context.getScaledWindowHeight();
-        //$$ final HudAmbient ambient = GuiTransforms.ambient(context);
-        //#else
-        final MinecraftClient client = MinecraftClient.getInstance();
-        final int screenWidth = client.getWindow().getScaledWidth();
-        final int screenHeight = client.getWindow().getScaledHeight();
-        // The shift is pushed onto the model-view stack below, so that is the transform it has to
-        // be rebased against.
-        final HudAmbient ambient = GuiTransforms.modelViewAmbient();
-        //#endif
+        final int screenWidth = context.guiWidth();
+        final int screenHeight = context.guiHeight();
+        final HudAmbient ambient = GuiTransforms.ambient(context);
         ToastHudBounds.beginFrame(screenWidth, screenHeight);
         final float shift = confluxmap$verticalPush(ambient, screenWidth, screenHeight);
         if (shift == 0f) {
             return;
         }
-        //#if MC>=260100
-        //$$ context.pose().pushMatrix();
-        //$$ context.pose().translate(0, shift);
-        //#elseif MC>=12108
-        //$$ context.getMatrices().pushMatrix();
-        //$$ context.getMatrices().translate(0, shift);
-        //#elseif MC>=12000
-        //$$ context.getMatrices().push();
-        //$$ context.getMatrices().translate(0, shift, 0);
-        //#else
-        final MatrixStack modelView = RenderSystem.getModelViewStack();
-        modelView.push();
-        modelView.translate(0, shift, 0);
-        RenderSystem.applyModelViewMatrix();
-        //#endif
+        context.pose().pushMatrix();
+        context.pose().translate(0, shift);
         confluxmap$toastsShifted = true;
     }
 
     @Inject(
-        //#if MC>=260100
-        //$$ method = "extractRenderState",
-        //#else
-        method = "draw",
-        //#endif
+        method = "extractRenderState",
         at = @At("RETURN")
     )
-    //#if MC>=260100
-    //$$ private void confluxmap$afterToasts(
-    //$$     final GuiGraphicsExtractor context,
-    //$$     final CallbackInfo ci
-    //$$ ) {
-    //#elseif MC>=12000
-    //$$ private void confluxmap$afterToasts(final DrawContext context, final CallbackInfo ci) {
-    //#else
-    private void confluxmap$afterToasts(final MatrixStack matrices, final CallbackInfo ci) {
-    //#endif
+    private void confluxmap$afterToasts(
+        final GuiGraphicsExtractor context,
+        final CallbackInfo ci
+    ) {
         if (!confluxmap$toastsShifted) {
             return;
         }
-        //#if MC>=260100
-        //$$ context.pose().popMatrix();
-        //#elseif MC>=12108
-        //$$ context.getMatrices().popMatrix();
-        //#elseif MC>=12000
-        //$$ context.getMatrices().pop();
-        //#else
-        final MatrixStack modelView = RenderSystem.getModelViewStack();
-        modelView.pop();
-        RenderSystem.applyModelViewMatrix();
-        //#endif
+        context.pose().popMatrix();
         confluxmap$toastsShifted = false;
     }
 
@@ -145,7 +76,7 @@ public abstract class ToastHudMixin {
         final int screenHeight
     ) {
         final ConfluxMapClient app = ConfluxMapClient.get();
-        final MinecraftClient client = MinecraftClient.getInstance();
+        final Minecraft client = Minecraft.getInstance();
         if (app == null || client.player == null) {
             return 0f;
         }

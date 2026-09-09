@@ -34,10 +34,10 @@ import java.util.Optional;
 import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.CopyOnWriteArrayList;
-import net.fabricmc.fabric.api.client.event.lifecycle.v1.ClientTickEvents;
-import net.fabricmc.fabric.api.client.networking.v1.ClientPlayConnectionEvents;
-import net.minecraft.client.MinecraftClient;
-import net.minecraft.util.Identifier;
+import cn.net.rms.confluxmap.neoforge.compat.ClientTickEvents;
+import cn.net.rms.confluxmap.neoforge.compat.ClientPlayConnectionEvents;
+import net.minecraft.client.Minecraft;
+import net.minecraft.resources.Identifier;
 
 /**
  * Client adapter for the independent {@code confluxmap:waypoints_v1} channel.
@@ -45,7 +45,7 @@ import net.minecraft.util.Identifier;
  * <p>The adapter never puts public points in the local waypoint store. It publishes immutable
  * server snapshots to consumers and owns the handshake timeout, revision recovery, operation
  * correlation, and disconnect cleanup. Like {@link cn.net.rms.confluxmap.mc.net.ClientNetworking},
- * it sends HELLO unconditionally on JOIN: fabric-api fires JOIN at the RETURN of
+ * it sends HELLO unconditionally on JOIN: NeoForge fires the connection callback after
  * {@code onGameJoin}, before the server's {@code minecraft:register} payload is applied on the
  * client thread, so {@code ClientPlayNetworking.canSend} is deterministically false there. A
  * server without the companion simply never answers and the handshake times out into
@@ -95,7 +95,7 @@ public final class SharedWaypointClient {
         }
     }
 
-    private final MinecraftClient client;
+    private final Minecraft client;
     private final ConfluxConfig config;
     private final ConfigIo configIo;
     private final SharedWaypointClientState stateMachine = new SharedWaypointClientState();
@@ -110,7 +110,7 @@ public final class SharedWaypointClient {
     };
 
     public SharedWaypointClient(
-        final MinecraftClient client,
+        final Minecraft client,
         final ConfluxConfig config,
         final ConfigIo configIo
     ) {
@@ -329,7 +329,7 @@ public final class SharedWaypointClient {
 
     private String managementDisabledReasonKey(final SharedWaypoint waypoint) {
         final SharedWaypointClientState.View view = stateMachine.view();
-        final UUID localPlayerId = client.player == null ? null : client.player.getUuid();
+        final UUID localPlayerId = client.player == null ? null : client.player.getUUID();
         return managementDisabledReasonKey(
             view.state(), view.synchronizedSnapshot(), view.operator(),
             stateMachine.ownerManagementAllowed(), waypoint, localPlayerId
@@ -389,11 +389,11 @@ public final class SharedWaypointClient {
         );
     }
 
-    private void onDisconnect(final net.minecraft.client.network.ClientPlayNetworkHandler handler) {
+    private void onDisconnect(final net.minecraft.client.multiplayer.ClientPacketListener handler) {
         // DISCONNECT fires on the Netty event loop; pendingOperations and the listener contract
         // are client-thread-confined, so marshal the cleanup like onReceive does.
         client.execute(() -> {
-            final net.minecraft.client.network.ClientPlayNetworkHandler current = client.getNetworkHandler();
+            final net.minecraft.client.multiplayer.ClientPacketListener current = client.getConnection();
             if (current != null && current != handler) {
                 return;
             }
@@ -420,8 +420,8 @@ public final class SharedWaypointClient {
     }
 
     private void onReceive(
-        final MinecraftClient currentClient,
-        final net.minecraft.client.network.ClientPlayNetworkHandler handler,
+        final Minecraft currentClient,
+        final net.minecraft.client.multiplayer.ClientPacketListener handler,
         final byte[] payload
     ) {
         try {
@@ -662,11 +662,7 @@ public final class SharedWaypointClient {
 
     private void showMessage(final String translationKey) {
         if (client.player != null) {
-            //#if MC>=260100
-            //$$ client.player.sendSystemMessage(Texts.translatable(translationKey));
-            //#else
-            client.player.sendMessage(Texts.translatable(translationKey), false);
-            //#endif
+            client.player.sendSystemMessage(Texts.translatable(translationKey));
         }
     }
 
@@ -718,12 +714,12 @@ public final class SharedWaypointClient {
     }
 
     private static void executeForConnection(
-        final MinecraftClient client,
-        final net.minecraft.client.network.ClientPlayNetworkHandler handler,
+        final Minecraft client,
+        final net.minecraft.client.multiplayer.ClientPacketListener handler,
         final Runnable task
     ) {
         client.execute(() -> {
-            if (client.getNetworkHandler() == handler) {
+            if (client.getConnection() == handler) {
                 task.run();
             }
         });

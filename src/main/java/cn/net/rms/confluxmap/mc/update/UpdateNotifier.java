@@ -3,13 +3,13 @@ package cn.net.rms.confluxmap.mc.update;
 import cn.net.rms.confluxmap.core.update.UpdateCheckService;
 import cn.net.rms.confluxmap.compat.Texts;
 import java.util.Optional;
-import net.fabricmc.fabric.api.client.event.lifecycle.v1.ClientTickEvents;
-import net.minecraft.client.MinecraftClient;
-import net.minecraft.text.ClickEvent;
-import net.minecraft.text.HoverEvent;
-import net.minecraft.text.MutableText;
-import net.minecraft.text.Text;
-import net.minecraft.util.Formatting;
+import cn.net.rms.confluxmap.neoforge.compat.ClientTickEvents;
+import net.minecraft.client.Minecraft;
+import net.minecraft.network.chat.ClickEvent;
+import net.minecraft.network.chat.HoverEvent;
+import net.minecraft.network.chat.MutableComponent;
+import net.minecraft.network.chat.Component;
+import net.minecraft.ChatFormatting;
 
 /**
  * Chat-side surface of the update check: once per game launch, as soon as a
@@ -18,11 +18,11 @@ import net.minecraft.util.Formatting;
  * same {@link UpdateCheckService} state, so the two surfaces never disagree.
  */
 public final class UpdateNotifier {
-    private final MinecraftClient client;
+    private final Minecraft client;
     private final UpdateCheckService updates;
     private boolean chatShown;
 
-    public UpdateNotifier(final MinecraftClient client, final UpdateCheckService updates) {
+    public UpdateNotifier(final Minecraft client, final UpdateCheckService updates) {
         this.client = client;
         this.updates = updates;
     }
@@ -40,21 +40,17 @@ public final class UpdateNotifier {
             return;
         }
         chatShown = true;
-        //#if MC>=260100
-        //$$ client.player.sendSystemMessage(buildMessage(info.get()));
-        //#else
-        client.player.sendMessage(buildMessage(info.get()), false);
-        //#endif
+        client.player.sendSystemMessage(buildMessage(info.get()));
     }
 
-    private static Text buildMessage(final UpdateCheckService.UpdateInfo info) {
-        final MutableText link = Texts.translatable("confluxmap.update.chat.link")
-            .formatted(Formatting.AQUA, Formatting.UNDERLINE)
-            .styled(style -> style
+    private static Component buildMessage(final UpdateCheckService.UpdateInfo info) {
+        final MutableComponent link = Texts.translatable("confluxmap.update.chat.link")
+            .withStyle(ChatFormatting.AQUA, ChatFormatting.UNDERLINE)
+            .withStyle(style -> style
                 .withClickEvent(Texts.openUrl(info.releaseUrl()))
                 .withHoverEvent(Texts.showText(Texts.literal(info.releaseUrl()))));
         return Texts.translatable("confluxmap.update.chat", info.latestVersion(), info.currentVersion())
-            .formatted(Formatting.YELLOW)
+            .withStyle(ChatFormatting.YELLOW)
             .append(Texts.literal(" "))
             .append(link);
     }

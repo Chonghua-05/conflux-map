@@ -1,9 +1,4 @@
 package cn.net.rms.confluxmap.mixin;
-
-//#if MC<11900
-import com.mojang.blaze3d.systems.RenderSystem;
-import net.minecraft.client.gui.DrawableHelper;
-//#endif
 import cn.net.rms.confluxmap.ConfluxMapClient;
 import cn.net.rms.confluxmap.compat.GuiTransforms;
 import cn.net.rms.confluxmap.compat.MinecraftAccess;
@@ -16,32 +11,10 @@ import cn.net.rms.confluxmap.core.config.MinimapInformationLayout;
 import cn.net.rms.confluxmap.core.config.MinimapPlacement;
 import cn.net.rms.confluxmap.mc.ui.hud.ScoreboardHudBounds;
 import cn.net.rms.confluxmap.mc.ui.screen.FullscreenMapScreen;
-//#if MC>=260100
-//$$ import net.minecraft.client.Minecraft;
-//#else
-import net.minecraft.client.MinecraftClient;
-//#endif
-//#if MC>=260100
-//$$ import net.minecraft.client.gui.GuiGraphicsExtractor;
-//#if MC>=260200
-//$$ import net.minecraft.client.gui.Hud;
-//#else
-//$$ import net.minecraft.client.gui.Gui;
-//#endif
-//#else
-import net.minecraft.client.gui.hud.InGameHud;
-//#if MC>=12000
-//$$ import net.minecraft.client.gui.DrawContext;
-//#else
-import net.minecraft.client.gui.DrawableHelper;
-import net.minecraft.client.util.math.MatrixStack;
-//#endif
-//#endif
-//#if MC>=260100
-//$$ import net.minecraft.world.scores.Objective;
-//#else
-import net.minecraft.scoreboard.ScoreboardObjective;
-//#endif
+import net.minecraft.client.Minecraft;
+import net.minecraft.client.gui.GuiGraphicsExtractor;
+import net.minecraft.client.gui.Gui;
+import net.minecraft.world.scores.Objective;
 import org.spongepowered.asm.mixin.Mixin;
 import org.spongepowered.asm.mixin.Unique;
 import org.spongepowered.asm.mixin.injection.At;
@@ -57,197 +30,59 @@ import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
  * directly, so a mod that rescales the sidebar (TweakerMore's scoreboard scale, for example) is
  * measured at its rendered size instead of vanilla's.
  */
-//#if MC>=260200
-//$$ @Mixin(Hud.class)
-//#elseif MC>=260100
-//$$ @Mixin(Gui.class)
-//#else
-@Mixin(InGameHud.class)
-//#endif
+@Mixin(Gui.class)
 public abstract class InGameHudMixin {
     @Unique
     private boolean confluxmap$scoreboardTransformed;
-
-    //#if MC<12104
-    @Inject(method = "renderCrosshair", at = @At("HEAD"))
-    //#if MC>=12100
-    //$$ private void confluxmap$renderWaypointItemsBeforeCrosshair(
-    //$$     final DrawContext context,
-    //$$     final net.minecraft.client.render.RenderTickCounter tickCounter,
-    //$$     final CallbackInfo ci
-    //$$ ) {
-    //#elseif MC>=12000
-    //$$ private void confluxmap$renderWaypointItemsBeforeCrosshair(
-    //$$     final DrawContext context,
-    //$$     final CallbackInfo ci
-    //$$ ) {
-    //#else
-    private void confluxmap$renderWaypointItemsBeforeCrosshair(
-        final MatrixStack matrices,
-        final CallbackInfo ci
-    ) {
-    //#endif
-        final ConfluxMapClient app = ConfluxMapClient.get();
-        if (app == null) {
-            return;
-        }
-        //#if MC>=12100
-        //$$ app.waypointItemHudRenderer().renderBeforeCrosshair(context, tickCounter);
-        //#elseif MC>=12000
-        //$$ app.waypointItemHudRenderer().renderBeforeCrosshair(context);
-        //#else
-        app.waypointItemHudRenderer().renderBeforeCrosshair(matrices);
-        //#endif
-        //#if MC<11900
-        // 1.17-1.18 bind the GUI icons before entering renderCrosshair. Rendering an item here
-        // replaces that binding with the item atlas, so restore the texture vanilla expects.
-        RenderSystem.setShaderTexture(0, DrawableHelper.GUI_ICONS_TEXTURE);
-        //#endif
-    }
-    //#endif
-
-    //#if MC>=260100
-    //$$ @Inject(method = "extractRenderState", at = @At("HEAD"))
-    //$$ private void confluxmap$beginHudFrame(final CallbackInfo ci) {
-    //$$     final Minecraft client = Minecraft.getInstance();
-    //$$     ScoreboardHudBounds.beginFrame(
-    //$$         client.getWindow().getGuiScaledWidth(), client.getWindow().getGuiScaledHeight()
-    //$$     );
-    //$$ }
-    //#elseif MC<260100
-    @Inject(method = "render", at = @At("HEAD"))
+    @Inject(method = "extractRenderState", at = @At("HEAD"))
     private void confluxmap$beginHudFrame(final CallbackInfo ci) {
-        final MinecraftClient client = MinecraftClient.getInstance();
+        final Minecraft client = Minecraft.getInstance();
         ScoreboardHudBounds.beginFrame(
-            client.getWindow().getScaledWidth(), client.getWindow().getScaledHeight()
+            client.getWindow().getGuiScaledWidth(), client.getWindow().getGuiScaledHeight()
         );
     }
-    //#endif
 
     @Inject(
-        //#if MC>=260100
-        //$$ method = "displayScoreboardSidebar(Lnet/minecraft/client/gui/GuiGraphicsExtractor;"
-        //$$     + "Lnet/minecraft/world/scores/Objective;)V",
-        //#elseif MC>=12000
-        //$$ method = "renderScoreboardSidebar(Lnet/minecraft/client/gui/DrawContext;"
-        //$$     + "Lnet/minecraft/scoreboard/ScoreboardObjective;)V",
-        //#else
-        method = "renderScoreboardSidebar(Lnet/minecraft/client/util/math/MatrixStack;"
-            + "Lnet/minecraft/scoreboard/ScoreboardObjective;)V",
-        //#endif
+        method = "displayScoreboardSidebar(Lnet/minecraft/client/gui/GuiGraphicsExtractor;"
+            + "Lnet/minecraft/world/scores/Objective;)V",
         at = @At("HEAD")
     )
-    //#if MC>=260100
-    //$$ private void confluxmap$beforeScoreboard(
-    //$$     final GuiGraphicsExtractor context,
-    //$$     final Objective objective,
-    //$$     final CallbackInfo ci
-    //$$ ) {
-    //#elseif MC>=12000
-    //$$ private void confluxmap$beforeScoreboard(
-    //$$     final DrawContext context,
-    //$$     final ScoreboardObjective objective,
-    //$$     final CallbackInfo ci
-    //$$ ) {
-    //#else
     private void confluxmap$beforeScoreboard(
-        final MatrixStack matrices,
-        final ScoreboardObjective objective,
+        final GuiGraphicsExtractor context,
+        final Objective objective,
         final CallbackInfo ci
     ) {
-    //#endif
         confluxmap$scoreboardTransformed = false;
-        //#if MC>=260100
-        //$$ final HudTransform transform =
-        //$$     confluxmap$scoreboardTransform(context.guiWidth(), context.guiHeight());
-        //#elseif MC>=12000
-        //$$ final HudTransform transform = confluxmap$scoreboardTransform(
-        //$$     context.getScaledWindowWidth(), context.getScaledWindowHeight()
-        //$$ );
-        //#else
-        final MinecraftClient client = MinecraftClient.getInstance();
-        final HudTransform transform = confluxmap$scoreboardTransform(
-            client.getWindow().getScaledWidth(), client.getWindow().getScaledHeight()
-        );
-        //#endif
+        final HudTransform transform =
+            confluxmap$scoreboardTransform(context.guiWidth(), context.guiHeight());
         ScoreboardHudBounds.recordAppliedTransform(transform);
         if (transform.isIdentity()) {
             return;
         }
         // Another mod may already have scaled the sidebar around this injection, which would
         // scale this transform's translation with it; rebasing cancels that out.
-        //#if MC>=260100
-        //$$ final HudTransform pushed =
-        //$$     transform.rebased(GuiTransforms.ambient(context));
-        //$$ context.pose().pushMatrix();
-        //$$ context.pose().translate(pushed.translateX(), pushed.translateY());
-        //$$ context.pose().scale(pushed.scale(), pushed.scale());
-        //#elseif MC>=12108
-        //$$ final HudTransform pushed =
-        //$$     transform.rebased(GuiTransforms.ambient(context));
-        //$$ context.getMatrices().pushMatrix();
-        //$$ context.getMatrices().translate(pushed.translateX(), pushed.translateY());
-        //$$ context.getMatrices().scale(pushed.scale(), pushed.scale());
-        //#elseif MC>=12000
-        //$$ final HudTransform pushed =
-        //$$     transform.rebased(GuiTransforms.ambient(context));
-        //$$ context.getMatrices().push();
-        //$$ context.getMatrices().translate(pushed.translateX(), pushed.translateY(), 0);
-        //$$ context.getMatrices().scale(pushed.scale(), pushed.scale(), 1f);
-        //#else
         final HudTransform pushed =
-            transform.rebased(GuiTransforms.ambient(matrices));
-        matrices.push();
-        matrices.translate(pushed.translateX(), pushed.translateY(), 0);
-        matrices.scale(pushed.scale(), pushed.scale(), 1f);
-        //#endif
+            transform.rebased(GuiTransforms.ambient(context));
+        context.pose().pushMatrix();
+        context.pose().translate(pushed.translateX(), pushed.translateY());
+        context.pose().scale(pushed.scale(), pushed.scale());
         confluxmap$scoreboardTransformed = true;
     }
 
     @Inject(
-        //#if MC>=260100
-        //$$ method = "displayScoreboardSidebar(Lnet/minecraft/client/gui/GuiGraphicsExtractor;"
-        //$$     + "Lnet/minecraft/world/scores/Objective;)V",
-        //#elseif MC>=12000
-        //$$ method = "renderScoreboardSidebar(Lnet/minecraft/client/gui/DrawContext;"
-        //$$     + "Lnet/minecraft/scoreboard/ScoreboardObjective;)V",
-        //#else
-        method = "renderScoreboardSidebar(Lnet/minecraft/client/util/math/MatrixStack;"
-            + "Lnet/minecraft/scoreboard/ScoreboardObjective;)V",
-        //#endif
+        method = "displayScoreboardSidebar(Lnet/minecraft/client/gui/GuiGraphicsExtractor;"
+            + "Lnet/minecraft/world/scores/Objective;)V",
         at = @At("RETURN")
     )
-    //#if MC>=260100
-    //$$ private void confluxmap$afterScoreboard(
-    //$$     final GuiGraphicsExtractor context,
-    //$$     final Objective objective,
-    //$$     final CallbackInfo ci
-    //$$ ) {
-    //#elseif MC>=12000
-    //$$ private void confluxmap$afterScoreboard(
-    //$$     final DrawContext context,
-    //$$     final ScoreboardObjective objective,
-    //$$     final CallbackInfo ci
-    //$$ ) {
-    //#else
     private void confluxmap$afterScoreboard(
-        final MatrixStack matrices,
-        final ScoreboardObjective objective,
+        final GuiGraphicsExtractor context,
+        final Objective objective,
         final CallbackInfo ci
     ) {
-    //#endif
         if (!confluxmap$scoreboardTransformed) {
             return;
         }
-        //#if MC>=260100
-        //$$ context.pose().popMatrix();
-        //#elseif MC>=12108
-        //$$ context.getMatrices().popMatrix();
-        //#elseif MC>=12000
-        //$$ context.getMatrices().pop();
-        //#else
-        matrices.pop();
-        //#endif
+        context.pose().popMatrix();
         confluxmap$scoreboardTransformed = false;
     }
 
@@ -257,7 +92,7 @@ public abstract class InGameHudMixin {
         final int screenHeight
     ) {
         final ConfluxMapClient app = ConfluxMapClient.get();
-        final MinecraftClient client = MinecraftClient.getInstance();
+        final Minecraft client = Minecraft.getInstance();
         if (app == null || client.player == null) {
             return HudTransform.IDENTITY;
         }
@@ -292,81 +127,26 @@ public abstract class InGameHudMixin {
             ScoreboardHudBounds.previousFrame(screenWidth, screenHeight)
         );
     }
-
-    //#if MC>=260100
-    //$$ @Redirect(
-    //$$     method = "displayScoreboardSidebar(Lnet/minecraft/client/gui/GuiGraphicsExtractor;"
-    //$$         + "Lnet/minecraft/world/scores/Objective;)V",
-    //$$     at = @At(
-    //$$         value = "INVOKE",
-    //$$         target = "Lnet/minecraft/client/gui/GuiGraphicsExtractor;fill(IIIII)V"
-    //$$     )
-    //$$ )
-    //$$ private void confluxmap$captureScoreboardFill(
-    //$$     final GuiGraphicsExtractor context,
-    //$$     final int x1,
-    //$$     final int y1,
-    //$$     final int x2,
-    //$$     final int y2,
-    //$$     final int color
-    //$$ ) {
-    //$$     final HudAmbient pose = GuiTransforms.ambient(context);
-    //$$     ScoreboardHudBounds.include(
-    //$$         pose.applyX(x1), pose.applyY(y1), pose.applyX(x2), pose.applyY(y2)
-    //$$     );
-    //$$     context.fill(x1, y1, x2, y2, color);
-    //$$ }
-    //#elseif MC>=12000
-    //$$ @Redirect(
-        //#if MC>=12101 && MC<12103
-        //$$ method = "method_55440([Lnet/minecraft/client/gui/hud/InGameHud$SidebarEntry;"
-        //$$     + "Lnet/minecraft/client/gui/DrawContext;ILnet/minecraft/text/Text;I)V",
-        //#else
-        //$$ method = "renderScoreboardSidebar(Lnet/minecraft/client/gui/DrawContext;"
-        //$$     + "Lnet/minecraft/scoreboard/ScoreboardObjective;)V",
-        //#endif
-    //$$     at = @At(
-    //$$         value = "INVOKE",
-    //$$         target = "Lnet/minecraft/client/gui/DrawContext;fill(IIIII)V"
-    //$$     )
-    //$$ )
-    //$$ private void confluxmap$captureScoreboardFill(
-    //$$     final DrawContext context,
-    //$$     final int x1,
-    //$$     final int y1,
-    //$$     final int x2,
-    //$$     final int y2,
-    //$$     final int color
-    //$$ ) {
-    //$$     final HudAmbient pose = GuiTransforms.ambient(context);
-    //$$     ScoreboardHudBounds.include(
-    //$$         pose.applyX(x1), pose.applyY(y1), pose.applyX(x2), pose.applyY(y2)
-    //$$     );
-    //$$     context.fill(x1, y1, x2, y2, color);
-    //$$ }
-    //#else
     @Redirect(
-        method = "renderScoreboardSidebar(Lnet/minecraft/client/util/math/MatrixStack;"
-            + "Lnet/minecraft/scoreboard/ScoreboardObjective;)V",
+        method = "displayScoreboardSidebar(Lnet/minecraft/client/gui/GuiGraphicsExtractor;"
+            + "Lnet/minecraft/world/scores/Objective;)V",
         at = @At(
             value = "INVOKE",
-            target = "Lnet/minecraft/client/gui/hud/InGameHud;"
-                + "fill(Lnet/minecraft/client/util/math/MatrixStack;IIIII)V"
+            target = "Lnet/minecraft/client/gui/GuiGraphicsExtractor;fill(IIIII)V"
         )
     )
     private void confluxmap$captureScoreboardFill(
-        final MatrixStack matrices,
+        final GuiGraphicsExtractor context,
         final int x1,
         final int y1,
         final int x2,
         final int y2,
         final int color
     ) {
-        final HudAmbient pose = GuiTransforms.ambient(matrices);
+        final HudAmbient pose = GuiTransforms.ambient(context);
         ScoreboardHudBounds.include(
             pose.applyX(x1), pose.applyY(y1), pose.applyX(x2), pose.applyY(y2)
         );
-        DrawableHelper.fill(matrices, x1, y1, x2, y2, color);
+        context.fill(x1, y1, x2, y2, color);
     }
-    //#endif
 }

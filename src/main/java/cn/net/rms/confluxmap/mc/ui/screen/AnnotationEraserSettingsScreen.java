@@ -6,9 +6,9 @@ import cn.net.rms.confluxmap.compat.Texts;
 import cn.net.rms.confluxmap.compat.Widgets;
 import cn.net.rms.confluxmap.core.config.ConfluxConfig;
 import cn.net.rms.confluxmap.mc.ui.GuiDraw;
-import net.minecraft.client.MinecraftClient;
-import net.minecraft.client.gui.screen.Screen;
-import net.minecraft.text.Text;
+import net.minecraft.client.Minecraft;
+import net.minecraft.client.gui.screens.Screen;
+import net.minecraft.network.chat.Component;
 
 /** Non-pausing editor for the fullscreen annotation eraser diameter. */
 public final class AnnotationEraserSettingsScreen extends ConfluxScreen {
@@ -34,7 +34,7 @@ public final class AnnotationEraserSettingsScreen extends ConfluxScreen {
         final int controlWidth = Math.min(CONTROL_WIDTH, width - 24);
         final int left = width / 2 - controlWidth / 2;
         eraserSizeInput = new IntSliderInput(
-            this.textRenderer,
+            this.font,
             left,
             70,
             controlWidth,
@@ -48,9 +48,9 @@ public final class AnnotationEraserSettingsScreen extends ConfluxScreen {
             },
             value -> Texts.translatable("confluxmap.screen.annotation.eraser.size", value)
         );
-        addDrawableChild(eraserSizeInput.slider());
-        addDrawableChild(eraserSizeInput.input());
-        addDrawableChild(Widgets.button(
+        addRenderableWidget(eraserSizeInput.slider());
+        addRenderableWidget(eraserSizeInput.input());
+        addRenderableWidget(Widgets.button(
             width / 2 - 50,
             104,
             100,
@@ -63,7 +63,7 @@ public final class AnnotationEraserSettingsScreen extends ConfluxScreen {
 
     private void saveAndReturn() {
         ConfluxMapClient.get().configIo().save(config);
-        MinecraftAccess.setScreen(MinecraftClient.getInstance(), parent);
+        MinecraftAccess.setScreen(Minecraft.getInstance(), parent);
     }
 
     @Override
@@ -87,18 +87,18 @@ public final class AnnotationEraserSettingsScreen extends ConfluxScreen {
         final float tickDelta
     ) {
         draw.renderBackground(this, mouseX, mouseY, tickDelta);
-        final Text prompt = Texts.translatable("confluxmap.screen.annotation.eraser.prompt");
+        final Component prompt = Texts.translatable("confluxmap.screen.annotation.eraser.prompt");
         draw.drawTextWithShadow(
-            this.textRenderer,
+            this.font,
             getTitle(),
-            width / 2f - this.textRenderer.getWidth(getTitle()) / 2f,
+            width / 2f - this.font.width(getTitle()) / 2f,
             24,
             0xFFFFFFFF
         );
         draw.drawTextWithShadow(
-            this.textRenderer,
+            this.font,
             prompt,
-            width / 2f - this.textRenderer.getWidth(prompt) / 2f,
+            width / 2f - this.font.width(prompt) / 2f,
             50,
             0xFFB8B8B8
         );

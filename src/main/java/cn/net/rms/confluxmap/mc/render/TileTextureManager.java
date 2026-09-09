@@ -12,22 +12,19 @@ import cn.net.rms.confluxmap.core.predict.PredictionTileService;
 import cn.net.rms.confluxmap.core.tile.TileService;
 import cn.net.rms.confluxmap.core.tile.TileUpdate;
 import cn.net.rms.confluxmap.core.util.Argb;
-//#if MC<12105
-import com.mojang.blaze3d.platform.GlStateManager;
-//#endif
 import com.mojang.blaze3d.systems.RenderSystem;
 import java.util.Iterator;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
-import net.minecraft.client.texture.NativeImage;
-import net.minecraft.client.texture.NativeImageBackedTexture;
+import com.mojang.blaze3d.platform.NativeImage;
+import net.minecraft.client.renderer.texture.DynamicTexture;
 
 /**
  * Render-thread-only cache of {@link TileKey} to GPU texture, an LRU capped at
  * {@link ConfluxConfig#gpuTileCacheLimit}. Pulls finished compositions off
  * {@link TileService}'s upload queue and writes their pixels into a
- * {@link NativeImageBackedTexture}; {@link NativeImages} normalizes the version-specific
+ * {@link DynamicTexture}; {@link NativeImages} normalizes the version-specific
  * native pixel representation to the core's ARGB colors.
  *
  * <p>Each texture also remembers its {@link TileUpdate.Relight} inputs. Tiles whose backing
@@ -58,13 +55,13 @@ public final class TileTextureManager {
      * is the per-pixel 0-15 block-light plane. Both stay null/NaN for tiles daylight never touches.
      */
     private static final class TileTexture {
-        final NativeImageBackedTexture texture;
+        final DynamicTexture texture;
         float appliedDaylight = Float.NaN;
         float appliedGamma = Float.NaN;
         byte[] lightLevels;
         MapColorStyle lightStyle = MapColorStyle.CONFLUX;
 
-        TileTexture(final NativeImageBackedTexture texture) {
+        TileTexture(final DynamicTexture texture) {
             this.texture = texture;
         }
     }
@@ -96,17 +93,13 @@ public final class TileTextureManager {
         TileTexture entry = textures.get(update.key());
         final boolean fresh = entry == null;
         if (fresh) {
-            //#if MC>=12105
-            //$$ entry = new TileTexture(new NativeImageBackedTexture("Conflux Map tile", TILE_SIZE, TILE_SIZE, false));
-            //#else
-            entry = new TileTexture(new NativeImageBackedTexture(TILE_SIZE, TILE_SIZE, false));
-            //#endif
+            entry = new TileTexture(new DynamicTexture("Conflux Map tile", TILE_SIZE, TILE_SIZE, false));
             textures.put(update.key(), entry);
             if (!PredictedTileKeys.isPredicted(update.key())) {
                 tiles.retainTile(update.key());
             }
         }
-        final NativeImage image = entry.texture.getImage();
+        final NativeImage image = entry.texture.getPixels();
         if (image == null) {
             return;
         }
@@ -190,7 +183,7 @@ public final class TileTextureManager {
             )) {
                 continue;
             }
-            final NativeImage image = entry.texture.getImage();
+            final NativeImage image = entry.texture.getPixels();
             if (image == null) {
                 continue;
             }
@@ -236,19 +229,8 @@ public final class TileTextureManager {
     }
 
     /** Keep tile edges independent: repeat/linear state can leak from another texture or shader. */
-    private static void configureSampling(final NativeImageBackedTexture texture) {
-        //#if MC>=12111
-        //$$ // Sampling is selected explicitly when the render pass binds the texture.
-        //#else
-        texture.setFilter(false, false);
-        //#if MC>=12105
-        //$$ texture.setClamp(true);
-        //#else
-        GlStateManager._bindTexture(texture.getGlId());
-        GlStateManager._texParameter(3553, 10242, 33071);
-        GlStateManager._texParameter(3553, 10243, 33071);
-        //#endif
-        //#endif
+    private static void configureSampling(final DynamicTexture texture) {
+        // Sampling is selected explicitly when the render pass binds the texture.
     }
 
     private void evictOverLimit() {
@@ -280,13 +262,7 @@ public final class TileTextureManager {
             }
             return false;
         }
-        //#if MC>=12108
-        //$$ RenderUtil.bindTexture(entry.texture.getGlTextureView());
-        //#elseif MC>=12105
-        //$$ RenderUtil.bindTexture(entry.texture.getGlTexture());
-        //#else
-        RenderUtil.bindTexture(entry.texture.getGlId());
-        //#endif
+        RenderUtil.bindTexture(entry.texture.getTextureView());
         return true;
     }
 

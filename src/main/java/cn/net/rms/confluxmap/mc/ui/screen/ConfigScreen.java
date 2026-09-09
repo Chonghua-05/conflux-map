@@ -29,19 +29,19 @@ import java.util.function.IntConsumer;
 import java.util.function.IntFunction;
 import java.util.function.IntSupplier;
 import java.util.function.Supplier;
-import net.minecraft.client.MinecraftClient;
-import net.minecraft.client.gui.screen.Screen;
-import net.minecraft.client.gui.widget.ButtonWidget;
-import net.minecraft.client.util.math.MatrixStack;
-import net.minecraft.text.OrderedText;
-import net.minecraft.text.StringVisitable;
-import net.minecraft.text.Text;
+import net.minecraft.client.Minecraft;
+import net.minecraft.client.gui.screens.Screen;
+import net.minecraft.client.gui.components.Button;
+import com.mojang.blaze3d.vertex.PoseStack;
+import net.minecraft.util.FormattedCharSequence;
+import net.minecraft.network.chat.FormattedText;
+import net.minecraft.network.chat.Component;
 
 /**
  * Settings screen exposing every {@link ConfluxConfig} field, grouped into category
  * tabs (Minimap/Layers/Radar/Waypoints/Performance). Built entirely from vanilla
  * widgets, no external config-lib dependency, matching {@link WaypointListScreen}/
- * {@link WaypointEditScreen}'s style: plain {@link ButtonWidget}s that cycle through
+ * {@link WaypointEditScreen}'s style: plain {@link Button}s that cycle through
  * boolean/enum values on click, and paired sliders/numeric fields for int ranges.
  *
  * <p>Every change mutates and saves the shared {@link ConfluxConfig} immediately, so
@@ -305,23 +305,19 @@ public final class ConfigScreen extends ConfluxScreen {
 
     private int radarNoticeHeight() {
         final String notice = Texts.translatable(radarAccess.noticeKey()).getString();
-        final int lines = this.textRenderer.wrapLines(
-            StringVisitable.plain(notice), Math.max(40, rowWidth)
+        final int lines = this.font.split(
+            FormattedText.of(notice), Math.max(40, rowWidth)
         ).size();
-        return lines * (this.textRenderer.fontHeight + 1) + RADAR_NOTICE_PADDING;
+        return lines * (this.font.lineHeight + 1) + RADAR_NOTICE_PADDING;
     }
 
     @Override
-    //#if MC>=12002
-    //$$ public boolean mouseScrolled(
-    //$$     final double mouseX,
-    //$$     final double mouseY,
-    //$$     final double horizontalAmount,
-    //$$     final double amount
-    //$$ ) {
-    //#else
-    public boolean mouseScrolled(final double mouseX, final double mouseY, final double amount) {
-    //#endif
+    public boolean mouseScrolled(
+        final double mouseX,
+        final double mouseY,
+        final double horizontalAmount,
+        final double amount
+    ) {
         final boolean overRows = mouseX >= rowX() && mouseX <= rowX() + rowWidth + 8
             && mouseY >= rowsTop() && mouseY <= height - BOTTOM_MARGIN;
         if (amount != 0 && overRows) {
@@ -336,11 +332,7 @@ public final class ConfigScreen extends ConfluxScreen {
             }
             return true;
         }
-        //#if MC>=12002
-        //$$ return super.mouseScrolled(mouseX, mouseY, horizontalAmount, amount);
-        //#else
-        return super.mouseScrolled(mouseX, mouseY, amount);
-        //#endif
+        return super.mouseScrolled(mouseX, mouseY, horizontalAmount, amount);
     }
 
     /** Funnel point for every close path (ESC via the default {@code keyPressed}, or the Done button below). */
@@ -350,7 +342,7 @@ public final class ConfigScreen extends ConfluxScreen {
         if (parent == null) {
             super.onClose();
         } else {
-            MinecraftAccess.setScreen(MinecraftClient.getInstance(), parent);
+            MinecraftAccess.setScreen(Minecraft.getInstance(), parent);
         }
     }
 
@@ -362,18 +354,18 @@ public final class ConfigScreen extends ConfluxScreen {
         manualSeedAvailable = manualSeedService.available();
         sliderInputs.clear();
         decimalSliderInputs.clear();
-        clearChildren();
+        clearWidgets();
         addTabs();
         addRows();
         final int bottomButtonWidth = Math.min(140, Math.max(80, (width - MARGIN * 2 - TAB_GAP) / 2));
         final int bottomButtonsWidth = bottomButtonWidth * 2 + TAB_GAP;
         final int bottomButtonsX = width / 2 - bottomButtonsWidth / 2;
-        addDrawableChild(Widgets.button(
+        addRenderableWidget(Widgets.button(
             bottomButtonsX, height - BOTTOM_MARGIN + 4, bottomButtonWidth, 20,
             Texts.translatable("confluxmap.screen.config.hotkeys"),
             b -> ConfluxMapClient.get().keybinds().openHotkeySettings(this)
         ));
-        addDrawableChild(Widgets.button(
+        addRenderableWidget(Widgets.button(
             bottomButtonsX + bottomButtonWidth + TAB_GAP,
             height - BOTTOM_MARGIN + 4,
             bottomButtonWidth,
@@ -388,10 +380,10 @@ public final class ConfigScreen extends ConfluxScreen {
         final int startX = width / 2 - layout.totalWidth() / 2;
         for (int index = 0; index < categories.length; index++) {
             final Category c = categories[index];
-            final Text label = c == category
+            final Component label = c == category
                 ? Texts.literal("[" + Texts.translatable(c.labelKey).getString() + "]")
                 : Texts.translatable(c.labelKey);
-            final ButtonWidget tab = Widgets.button(
+            final Button tab = Widgets.button(
                 startX + index % layout.columns() * (layout.tabWidth() + TAB_GAP),
                 TAB_Y + index / layout.columns() * (TAB_HEIGHT + TAB_GAP),
                 layout.tabWidth(),
@@ -399,7 +391,7 @@ public final class ConfigScreen extends ConfluxScreen {
                 label,
                 b -> selectCategory(c)
             );
-            addDrawableChild(tab);
+            addRenderableWidget(tab);
         }
     }
 
@@ -424,7 +416,7 @@ public final class ConfigScreen extends ConfluxScreen {
                 y = addActionRow(
                     y,
                     "confluxmap.config.minimap.position",
-                    () -> MinecraftAccess.setScreen(MinecraftClient.getInstance(), new MinimapPositionScreen(this, config, configIo))
+                    () -> MinecraftAccess.setScreen(Minecraft.getInstance(), new MinimapPositionScreen(this, config, configIo))
                 );
                 y = addToggleRow(
                     y,
@@ -588,7 +580,7 @@ public final class ConfigScreen extends ConfluxScreen {
                     y,
                     "confluxmap.config.waypoints.teleport_command",
                     () -> MinecraftAccess.setScreen(
-                        MinecraftClient.getInstance(),
+                        Minecraft.getInstance(),
                         new TeleportCommandScreen(this, config, configIo)
                     )
                 );
@@ -677,7 +669,7 @@ public final class ConfigScreen extends ConfluxScreen {
                     y,
                     "confluxmap.config.prediction.manual_seed",
                     () -> MinecraftAccess.setScreen(
-                        MinecraftClient.getInstance(), new ManualSeedScreen(this)
+                        Minecraft.getInstance(), new ManualSeedScreen(this)
                     ),
                     manualSeedAvailable,
                     manualSeedAvailable ? null : "confluxmap.screen.config.prediction.seed_disabled_by_server"
@@ -755,7 +747,7 @@ public final class ConfigScreen extends ConfluxScreen {
         final String disabledTooltipKey
     ) {
         if (rowVisible(y)) {
-            final ButtonWidget button = addDrawableChild(Widgets.button(
+            final Button button = addRenderableWidget(Widgets.button(
                 rowX(), y, rowWidth, ROW_HEIGHT - 2, boolLabel(labelKey, getter.getAsBoolean()),
                 b -> {
                     final boolean next = !getter.getAsBoolean();
@@ -792,7 +784,7 @@ public final class ConfigScreen extends ConfluxScreen {
         final String disabledTooltipKey
     ) {
         if (rowVisible(y)) {
-            final ButtonWidget button = addDrawableChild(Widgets.button(
+            final Button button = addRenderableWidget(Widgets.button(
                 rowX(), y, rowWidth, ROW_HEIGHT - 2, enumLabel(labelKey, getter.get(), valueKeyFn),
                 b -> {
                     final T next = nextValue(values, getter.get());
@@ -809,7 +801,7 @@ public final class ConfigScreen extends ConfluxScreen {
 
     private int addZoomRow(final int y) {
         if (rowVisible(y)) {
-            addDrawableChild(Widgets.button(
+            addRenderableWidget(Widgets.button(
                 rowX(), y, rowWidth, ROW_HEIGHT - 2, zoomLabel(config.minimapZoomIndex),
                 b -> {
                     config.cycleMinimapZoom();
@@ -833,7 +825,7 @@ public final class ConfigScreen extends ConfluxScreen {
         final String disabledTooltipKey
     ) {
         if (rowVisible(y)) {
-            final ButtonWidget button = addDrawableChild(Widgets.button(
+            final Button button = addRenderableWidget(Widgets.button(
                 rowX(), y, rowWidth, ROW_HEIGHT - 2, Texts.translatable(labelKey), ignored -> action.run()
             ));
             button.active = active;
@@ -880,7 +872,7 @@ public final class ConfigScreen extends ConfluxScreen {
     ) {
         if (rowVisible(y)) {
             final IntSliderInput sliderInput = new IntSliderInput(
-                this.textRenderer,
+                this.font,
                 rowX(),
                 y,
                 rowWidth,
@@ -896,8 +888,8 @@ public final class ConfigScreen extends ConfluxScreen {
             );
             sliderInput.setActive(active);
             sliderInputs.add(sliderInput);
-            addDrawableChild(sliderInput.slider());
-            addDrawableChild(sliderInput.input());
+            addRenderableWidget(sliderInput.slider());
+            addRenderableWidget(sliderInput.input());
             setDisabledTooltip(sliderInput.slider(), disabledTooltipKey);
             setDisabledTooltip(sliderInput.input(), disabledTooltipKey);
         }
@@ -918,7 +910,7 @@ public final class ConfigScreen extends ConfluxScreen {
     ) {
         if (rowVisible(y)) {
             final DecimalSliderInput sliderInput = new DecimalSliderInput(
-                this.textRenderer,
+                this.font,
                 rowX(),
                 y,
                 rowWidth,
@@ -935,8 +927,8 @@ public final class ConfigScreen extends ConfluxScreen {
             );
             sliderInput.setActive(active);
             decimalSliderInputs.add(sliderInput);
-            addDrawableChild(sliderInput.slider());
-            addDrawableChild(sliderInput.input());
+            addRenderableWidget(sliderInput.slider());
+            addRenderableWidget(sliderInput.input());
             setDisabledTooltip(sliderInput.slider(), disabledTooltipKey);
             setDisabledTooltip(sliderInput.input(), disabledTooltipKey);
         }
@@ -948,15 +940,15 @@ public final class ConfigScreen extends ConfluxScreen {
         return values[(index + 1) % values.length];
     }
 
-    private static Text boolLabel(final String labelKey, final boolean value) {
+    private static Component boolLabel(final String labelKey, final boolean value) {
         return Texts.translatable(labelKey, resolvedText(value ? "confluxmap.value.on" : "confluxmap.value.off"));
     }
 
-    private static <T> Text enumLabel(final String labelKey, final T value, final Function<T, String> valueKeyFn) {
+    private static <T> Component enumLabel(final String labelKey, final T value, final Function<T, String> valueKeyFn) {
         return Texts.translatable(labelKey, resolvedText(valueKeyFn.apply(value)));
     }
 
-    private static Text zoomLabel(final int zoomIndex) {
+    private static Component zoomLabel(final int zoomIndex) {
         return Texts.translatable("confluxmap.config.minimap.zoom", resolvedText(ZOOM_VALUE_KEYS[zoomIndex]));
     }
 
@@ -995,7 +987,7 @@ public final class ConfigScreen extends ConfluxScreen {
     }
 
     private PredictionSettingsAccess predictionSettingsAccess() {
-        final boolean singleplayer = MinecraftClient.getInstance().isInSingleplayer();
+        final boolean singleplayer = Minecraft.getInstance().isLocalServer();
         final boolean seedIndependentUnderlay = predictionState.flatBaseline(
             gameBridge.session().dimension()
         ) != null;
@@ -1063,7 +1055,7 @@ public final class ConfigScreen extends ConfluxScreen {
     protected void renderContents(final GuiDraw draw, final int mouseX, final int mouseY, final float tickDelta) {
         draw.renderBackground(this, mouseX, mouseY, tickDelta);
         final String title = getTitle().getString();
-        draw.drawTextWithShadow(this.textRenderer, title, width / 2f - this.textRenderer.getWidth(title) / 2f, 8, 0xFFFFFFFF);
+        draw.drawTextWithShadow(this.font, title, width / 2f - this.font.width(title) / 2f, 8, 0xFFFFFFFF);
         if (category == Category.RADAR && radarAccess.noticeKey() != null) {
             drawRadarPolicyNotice(draw);
         }
@@ -1089,14 +1081,14 @@ public final class ConfigScreen extends ConfluxScreen {
     private void drawRadarPolicyNotice(final GuiDraw draw) {
         final String notice = Texts.translatable(radarAccess.noticeKey()).getString();
         int y = tabLayout().contentTop() + 2;
-        for (final OrderedText line : this.textRenderer.wrapLines(
-            StringVisitable.plain(notice), Math.max(40, rowWidth)
+        for (final FormattedCharSequence line : this.font.split(
+            FormattedText.of(notice), Math.max(40, rowWidth)
         )) {
             draw.drawTextWithShadow(
-                this.textRenderer, line, width / 2f - this.textRenderer.getWidth(line) / 2f,
+                this.font, line, width / 2f - this.font.width(line) / 2f,
                 y, NOTICE_TEXT_COLOR
             );
-            y += this.textRenderer.fontHeight + 1;
+            y += this.font.lineHeight + 1;
         }
     }
 

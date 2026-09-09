@@ -7,38 +7,29 @@ import cn.net.rms.confluxmap.core.util.Argb;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
-//#if MC<11900
-import java.util.Random;
-//#endif
-import net.minecraft.block.AbstractSignBlock;
-import net.minecraft.block.Block;
-import net.minecraft.block.BlockState;
-import net.minecraft.block.Blocks;
-import net.minecraft.block.CobwebBlock;
-import net.minecraft.block.DoorBlock;
-import net.minecraft.block.LadderBlock;
-import net.minecraft.block.RedstoneWireBlock;
-import net.minecraft.block.SnowBlock;
-import net.minecraft.block.VineBlock;
-import net.minecraft.client.MinecraftClient;
-import net.minecraft.client.render.model.BakedModel;
-import net.minecraft.client.render.model.BakedQuad;
-//#if MC>=260100
-//$$ import net.minecraft.client.renderer.block.dispatch.BlockStateModelPart;
-//#elseif MC>=12105
-//$$ import net.minecraft.client.render.model.BlockModelPart;
-//#endif
-import net.minecraft.client.texture.MissingSprite;
-import net.minecraft.client.texture.NativeImage;
-import net.minecraft.client.texture.Sprite;
-import net.minecraft.client.texture.SpriteAtlasTexture;
-import net.minecraft.util.Identifier;
-import net.minecraft.util.math.BlockPos;
-import net.minecraft.util.math.Direction;
-//#if MC>=11900
-//$$ import net.minecraft.util.math.random.Random;
-//#endif
-import net.minecraft.world.BlockView;
+import net.minecraft.world.level.block.SignBlock;
+import net.minecraft.world.level.block.Block;
+import net.minecraft.world.level.block.state.BlockState;
+import net.minecraft.world.level.block.Blocks;
+import net.minecraft.world.level.block.WebBlock;
+import net.minecraft.world.level.block.DoorBlock;
+import net.minecraft.world.level.block.LadderBlock;
+import net.minecraft.world.level.block.RedStoneWireBlock;
+import net.minecraft.world.level.block.SnowLayerBlock;
+import net.minecraft.world.level.block.VineBlock;
+import net.minecraft.client.Minecraft;
+import net.minecraft.client.renderer.block.dispatch.BlockStateModel;
+import net.minecraft.client.resources.model.geometry.BakedQuad;
+import net.minecraft.client.renderer.block.dispatch.BlockStateModelPart;
+import net.minecraft.client.renderer.texture.MissingTextureAtlasSprite;
+import com.mojang.blaze3d.platform.NativeImage;
+import net.minecraft.client.renderer.texture.TextureAtlasSprite;
+import net.minecraft.client.renderer.texture.TextureAtlas;
+import net.minecraft.resources.Identifier;
+import net.minecraft.core.BlockPos;
+import net.minecraft.core.Direction;
+import net.minecraft.util.RandomSource;
+import net.minecraft.world.level.BlockGetter;
 
 /**
  * Per-BlockState cached base color and 4x4 luminance profile, per
@@ -46,7 +37,7 @@ import net.minecraft.world.BlockView;
  * block-texture atlas (via each sprite's own un-stitched frame-0 source image) -
  * never from Minecraft's built-in map-item palette.
  *
- * <p>Main-thread only (touches {@link BakedModel}s); the returned colors are
+ * <p>Main-thread only (touches {@link BlockStateModel}s); the returned colors are
  * plain ints safe to hand to worker threads afterward.
  */
 public final class SpriteColorSampler {
@@ -56,19 +47,14 @@ public final class SpriteColorSampler {
     private static final Identifier WATER_STILL = Ids.of("block/water_still");
     private static final Identifier LAVA_STILL = Ids.of("block/lava_still");
 
-    private final MinecraftClient client;
-    //#if MC>=11900
-    //$$ private final Random modelRandom = Random.create(42L);
-    //$$ private final Random xaeroModelRandom = Random.create(0L);
-    //#else
-    private final Random modelRandom = new Random(42L);
-    private final Random xaeroModelRandom = new Random(0L);
-    //#endif
+    private final Minecraft client;
+    private final RandomSource modelRandom = RandomSource.create(42L);
+    private final RandomSource xaeroModelRandom = RandomSource.create(0L);
     private SampledMaterial[] cache = new SampledMaterial[4096];
     private int[] xaeroCache = new int[4096];
     private boolean[] xaeroCached = new boolean[4096];
 
-    public SpriteColorSampler(final MinecraftClient client) {
+    public SpriteColorSampler(final Minecraft client) {
         this.client = client;
     }
 
@@ -80,21 +66,21 @@ public final class SpriteColorSampler {
     }
 
     /** The cached base color (tint not applied) for {@code state}, sampling and caching it if new. */
-    public int colorFor(final BlockState state, final BlockView world, final BlockPos pos) {
-        final int id = Block.getRawIdFromState(state);
+    public int colorFor(final BlockState state, final BlockGetter world, final BlockPos pos) {
+        final int id = Block.getId(state);
         final SampledMaterial material = materialFor(state, world, pos, id);
         return material.detail().apply(material.argb(), pos.getX(), pos.getZ(), material.patternSalt());
     }
 
     /** Resource-derived base color before the stable world-position detail profile is applied. */
-    public int baseColorFor(final BlockState state, final BlockView world, final BlockPos pos) {
-        final int id = Block.getRawIdFromState(state);
+    public int baseColorFor(final BlockState state, final BlockGetter world, final BlockPos pos) {
+        final int id = Block.getId(state);
         return materialFor(state, world, pos, id).argb();
     }
 
     /** Xaero's raw top-texture average, before biome tint and terrain lighting. */
-    public int xaeroColorFor(final BlockState state, final BlockView world, final BlockPos pos) {
-        final int id = Block.getRawIdFromState(state);
+    public int xaeroColorFor(final BlockState state, final BlockGetter world, final BlockPos pos) {
+        final int id = Block.getId(state);
         if (id >= 0 && id < xaeroCached.length && xaeroCached[id]) {
             return xaeroCache[id];
         }
@@ -111,120 +97,29 @@ public final class SpriteColorSampler {
         return color;
     }
 
-    private int computeXaeroColor(final BlockState state, final BlockView world, final BlockPos pos) {
-        //#if MC>=260100
-        //$$ // Xaero's pinned oracle is 1.21.11; newer unobfuscated versions retain the normal
-        //$$ // raw average until an oracle artifact for that game line exists.
-        //$$ return baseColorFor(state, world, pos);
-        //#else
-        final BakedModel model = client.getBlockRenderManager().getModel(state);
-        if (model == null) {
-            return fallbackToMapColor(state, world, pos).argb();
-        }
-        BakedQuad biggest = null;
-        float biggestArea = 0f;
-        //#if MC>=12105
-        //$$ for (final BlockModelPart part : model.getParts(xaeroModelRandom)) {
-        //$$     for (final BakedQuad quad : part.getQuads(Direction.UP)) {
-        //$$         final float area = xaeroTopArea(quad);
-        //$$         if (area > biggestArea) {
-        //$$             biggest = quad;
-        //$$             biggestArea = area;
-        //$$         }
-        //$$     }
-        //$$ }
-        //$$ for (final BlockModelPart part : model.getParts(xaeroModelRandom)) {
-        //$$     for (final BakedQuad quad : part.getQuads(null)) {
-        //#if MC>=12105
-        //$$         if (quad.face() != Direction.UP) {
-        //#else
-        //$$         if (quad.getFace() != Direction.UP) {
-        //#endif
-        //$$             continue;
-        //$$         }
-        //$$         final float area = xaeroTopArea(quad);
-        //$$         if (area > biggestArea) {
-        //$$             biggest = quad;
-        //$$             biggestArea = area;
-        //$$         }
-        //$$     }
-        //$$ }
-        //#else
-        for (final BakedQuad quad : model.getQuads(state, Direction.UP, xaeroModelRandom)) {
-            final float area = xaeroTopArea(quad);
-            if (area > biggestArea) {
-                biggest = quad;
-                biggestArea = area;
-            }
-        }
-        for (final BakedQuad quad : model.getQuads(state, null, xaeroModelRandom)) {
-            if (quad.getFace() != Direction.UP) {
-                continue;
-            }
-            final float area = xaeroTopArea(quad);
-            if (area > biggestArea) {
-                biggest = quad;
-                biggestArea = area;
-            }
-        }
-        //#endif
-        //#if MC>=12111
-        //$$ final Sprite sprite = biggest == null
-        //$$     ? client.getBlockRenderManager().getModels().getModelParticleSprite(state)
-        //$$     : biggest.sprite();
-        //#elseif MC>=12105
-        //$$ final Sprite sprite = biggest == null ? model.particleSprite() : biggest.sprite();
-        //#else
-        final Sprite sprite = biggest == null ? model.getParticleSprite() : biggest.getSprite();
-        //#endif
-        final Integer sampled = sampleOneSpriteXaero(sprite);
-        return sampled == null ? fallbackToMapColor(state, world, pos).argb() : sampled;
-        //#endif
+    private int computeXaeroColor(final BlockState state, final BlockGetter world, final BlockPos pos) {
+        // Xaero's pinned oracle is 1.21.11; newer unobfuscated versions retain the normal
+        // raw average until an oracle artifact for that game line exists.
+        return baseColorFor(state, world, pos);
     }
 
     private static float xaeroTopArea(final BakedQuad quad) {
-        //#if MC>=12111 && MC<260100
-        //$$ float minX = Float.POSITIVE_INFINITY;
-        //$$ float maxX = Float.NEGATIVE_INFINITY;
-        //$$ float minZ = Float.POSITIVE_INFINITY;
-        //$$ float maxZ = Float.NEGATIVE_INFINITY;
-        //$$ for (int vertex = 0; vertex < 4; vertex++) {
-        //$$     final org.joml.Vector3fc position = quad.getPosition(vertex);
-        //$$     minX = Math.min(minX, position.x());
-        //$$     maxX = Math.max(maxX, position.x());
-        //$$     minZ = Math.min(minZ, position.z());
-        //$$     maxZ = Math.max(maxZ, position.z());
-        //$$ }
-        //$$ return (maxX - minX) * (maxZ - minZ);
-        //#else
         return 1f;
-        //#endif
     }
 
-    private Integer sampleOneSpriteXaero(final Sprite sprite) {
+    private Integer sampleOneSpriteXaero(final TextureAtlasSprite sprite) {
         if (sprite == null || isMissing(sprite)) {
             return null;
         }
-        //#if MC>=11900
-        //$$ final NativeImage[] images = sprite.getContents().mipmapLevelsImages;
-        //#else
-        final NativeImage[] images = sprite.images;
-        //#endif
+        final NativeImage[] images = sprite.contents().byMipLevel;
         if (images == null || images.length == 0 || images[0] == null) {
             return null;
         }
         final NativeImage image = images[0];
-        //#if MC>=11900
-        //$$ final int size = Math.min(
-        //$$     Math.min(sprite.getContents().getWidth(), image.getWidth()),
-        //$$     Math.min(sprite.getContents().getHeight(), image.getHeight())
-        //$$ );
-        //#else
         final int size = Math.min(
-            Math.min(sprite.getWidth(), image.getWidth()),
-            Math.min(sprite.getHeight(), image.getHeight())
+            Math.min(sprite.contents().width(), image.getWidth()),
+            Math.min(sprite.contents().height(), image.getHeight())
         );
-        //#endif
         if (size <= 0) {
             return null;
         }
@@ -264,14 +159,14 @@ public final class SpriteColorSampler {
     }
 
     /** Resource-derived luminance profile for prediction's representative material palette. */
-    public MaterialDetailProfile detailProfileFor(final BlockState state, final BlockView world, final BlockPos pos) {
-        final int id = Block.getRawIdFromState(state);
+    public MaterialDetailProfile detailProfileFor(final BlockState state, final BlockGetter world, final BlockPos pos) {
+        final int id = Block.getId(state);
         return materialFor(state, world, pos, id).detail();
     }
 
     private SampledMaterial materialFor(
         final BlockState state,
-        final BlockView world,
+        final BlockGetter world,
         final BlockPos pos,
         final int id
     ) {
@@ -295,22 +190,22 @@ public final class SpriteColorSampler {
         cache[id] = material;
     }
 
-    private SampledMaterial compute(final BlockState state, final BlockView world, final BlockPos pos) {
+    private SampledMaterial compute(final BlockState state, final BlockGetter world, final BlockPos pos) {
         final Block block = state.getBlock();
-        if (block instanceof RedstoneWireBlock) {
+        if (block instanceof RedStoneWireBlock) {
             // §2: baked in unconditionally via the power-level color function, no texture sampling at all.
-            final int level = state.get(RedstoneWireBlock.POWER);
+            final int level = state.getValue(RedStoneWireBlock.POWER);
             return new SampledMaterial(
-                0xFF000000 | (RedstoneWireBlock.getWireColor(level) & 0xFFFFFF),
+                0xFF000000 | (RedStoneWireBlock.getColorForPower(level) & 0xFFFFFF),
                 MaterialDetailProfile.flat(),
                 state.toString().hashCode()
             );
         }
         final RawMaterial sampled = sampleModel(state, world, pos);
         int color = sampled.argb();
-        if (block instanceof CobwebBlock) {
+        if (block instanceof WebBlock) {
             color = withAlpha(color, 255);
-        } else if (block instanceof AbstractSignBlock) {
+        } else if (block instanceof SignBlock) {
             color = withAlpha(color, 31);
         } else if (block instanceof DoorBlock) {
             color = withAlpha(color, 47);
@@ -318,7 +213,7 @@ public final class SpriteColorSampler {
             color = withAlpha(color, 15);
         }
         final double maxDetail = !state.getFluidState().isEmpty()
-            || block == Blocks.ICE || block instanceof SnowBlock
+            || block == Blocks.ICE || block instanceof SnowLayerBlock
             ? 0.04
             : 0.08;
         return new SampledMaterial(
@@ -328,66 +223,37 @@ public final class SpriteColorSampler {
         );
     }
 
-    private RawMaterial sampleModel(final BlockState state, final BlockView world, final BlockPos pos) {
-        //#if MC>=260100
-        //$$ // 26.1 moved block-state models off the render dispatcher onto the model manager.
-        //$$ final BlockStateModel model = client.getModelManager().getBlockStateModelSet().get(state);
-        //#else
-        final BakedModel model = client.getBlockRenderManager().getModel(state);
-        //#endif
+    private RawMaterial sampleModel(final BlockState state, final BlockGetter world, final BlockPos pos) {
+        // 26.1 moved block-state models off the render dispatcher onto the model manager.
+        final BlockStateModel model = client.getModelManager().getBlockStateModelSet().get(state);
         if (model == null) {
             // §2 tier 1 (model sprite average) is unavailable for this state - fall straight
             // through to tier 3 (MapColor) rather than crash. Seen for some states very early
             // after a world join, before every block's model is baked.
             return fallbackToMapColor(state, world, pos);
         }
-        final List<Sprite> faceSprites = new ArrayList<>();
-        //#if MC>=260100
-        //$$ // 26.1 turned the part list into an out-parameter and moved a quad's sprite behind
-        //$$ // its material record.
-        //$$ final List<BlockStateModelPart> parts = new ArrayList<>();
-        //$$ model.collectParts(modelRandom, parts);
-        //$$ for (final BlockStateModelPart part : parts) {
-        //$$     for (final BakedQuad quad : part.getQuads(Direction.UP)) {
-        //$$         faceSprites.add(quad.materialInfo().sprite());
-        //$$     }
-        //$$     for (final BakedQuad quad : part.getQuads(null)) {
-        //$$         faceSprites.add(quad.materialInfo().sprite());
-        //$$     }
-        //$$ }
-        //#elseif MC>=12105
-        //$$ for (final BlockModelPart part : model.getParts(modelRandom)) {
-        //$$     for (final BakedQuad quad : part.getQuads(Direction.UP)) {
-        //$$         faceSprites.add(quad.sprite());
-        //$$     }
-        //$$     for (final BakedQuad quad : part.getQuads(null)) {
-        //$$         faceSprites.add(quad.sprite());
-        //$$     }
-        //$$ }
-        //#else
-        for (final BakedQuad quad : model.getQuads(state, Direction.UP, modelRandom)) {
-            faceSprites.add(quad.getSprite());
+        final List<TextureAtlasSprite> faceSprites = new ArrayList<>();
+        // 26.1 turned the part list into an out-parameter and moved a quad's sprite behind
+        // its material record.
+        final List<BlockStateModelPart> parts = new ArrayList<>();
+        model.collectParts(modelRandom, parts);
+        for (final BlockStateModelPart part : parts) {
+            for (final BakedQuad quad : part.getQuads(Direction.UP)) {
+                faceSprites.add(quad.materialInfo().sprite());
+            }
+            for (final BakedQuad quad : part.getQuads(null)) {
+                faceSprites.add(quad.materialInfo().sprite());
+            }
         }
-        for (final BakedQuad quad : model.getQuads(state, null, modelRandom)) {
-            faceSprites.add(quad.getSprite());
-        }
-        //#endif
         final RawMaterial primary = averageSprites(faceSprites);
         if (primary != null) {
             return primary.withArgb(clampAlphaFloor(primary.argb()));
         }
-
-        //#if MC>=260100
-        //$$ final TextureAtlasSprite particle = model.particleMaterial().sprite();
-        //#elseif MC>=12105
-        //$$ final Sprite particle = model.particleSprite();
-        //#else
-        final Sprite particle = model.getParticleSprite();
-        //#endif
+        final TextureAtlasSprite particle = model.particleMaterial().sprite();
         final boolean isFluid = !state.getFluidState().isEmpty();
         if (particle == null || isMissing(particle)) {
             if (isFluid) {
-                final Sprite fluidSprite = fluidSprite(state);
+                final TextureAtlasSprite fluidSprite = fluidSprite(state);
                 final RawMaterial sampled = fluidSprite == null ? null : sampleOneSprite(fluidSprite);
                 if (sampled != null) {
                     return sampled.withArgb(clampAlphaFloor(sampled.argb()));
@@ -401,9 +267,9 @@ public final class SpriteColorSampler {
             : fallbackToMapColor(state, world, pos);
     }
 
-    private RawMaterial fallbackToMapColor(final BlockState state, final BlockView world, final BlockPos pos) {
+    private RawMaterial fallbackToMapColor(final BlockState state, final BlockGetter world, final BlockPos pos) {
         try {
-            final int rgb = state.getMapColor(world, pos).color;
+            final int rgb = state.getMapColor(world, pos).col;
             if (rgb != 0) {
                 return RawMaterial.flat(0xFF000000 | (rgb & 0xFFFFFF));
             }
@@ -413,39 +279,27 @@ public final class SpriteColorSampler {
         return RawMaterial.flat(UNRESOLVED_ARGB);
     }
 
-    private Sprite fluidSprite(final BlockState state) {
-        final Identifier id = state.isOf(Blocks.LAVA) ? LAVA_STILL : WATER_STILL;
-        //#if MC>=260100
-        //$$ final TextureAtlas atlas = client.getAtlasManager().getAtlasOrThrow(
-        //$$     TextureAtlas.LOCATION_BLOCKS
-        //$$ );
-        //#elseif MC>=12109
-        //$$ final SpriteAtlasTexture atlas = client.getAtlasManager().getAtlasTexture(
-        //$$     SpriteAtlasTexture.BLOCK_ATLAS_TEXTURE
-        //$$ );
-        //#else
-        final SpriteAtlasTexture atlas = client.getBakedModelManager().getAtlas(SpriteAtlasTexture.BLOCK_ATLAS_TEXTURE);
-        //#endif
+    private TextureAtlasSprite fluidSprite(final BlockState state) {
+        final Identifier id = state.is(Blocks.LAVA) ? LAVA_STILL : WATER_STILL;
+        final TextureAtlas atlas = client.getAtlasManager().getAtlasOrThrow(
+            TextureAtlas.LOCATION_BLOCKS
+        );
         return atlas.getSprite(id);
     }
 
-    private static boolean isMissing(final Sprite sprite) {
-        //#if MC>=11900
-        //$$ return sprite.getContents().getId().equals(MissingSprite.getMissingSpriteId());
-        //#else
-        return sprite.getId().equals(MissingSprite.getMissingSpriteId());
-        //#endif
+    private static boolean isMissing(final TextureAtlasSprite sprite) {
+        return sprite.contents().name().equals(MissingTextureAtlasSprite.getLocation());
     }
 
     /** Equal-weighted average across every quad's resolved sprite color; null if none were usable. */
-    private RawMaterial averageSprites(final List<Sprite> sprites) {
+    private RawMaterial averageSprites(final List<TextureAtlasSprite> sprites) {
         long sumA = 0;
         long sumR = 0;
         long sumG = 0;
         long sumB = 0;
         final long[] cellLuminance = new long[MaterialDetailProfile.CELLS];
         int count = 0;
-        for (final Sprite sprite : sprites) {
+        for (final TextureAtlasSprite sprite : sprites) {
             final RawMaterial sample = sampleOneSprite(sprite);
             if (sample == null) {
                 continue;
@@ -479,26 +333,17 @@ public final class SpriteColorSampler {
      * textures (leaves, vines) average toward their visible color rather than toward black.
      * Null if the sprite is unresolvable or has no usable pixels at all.
      */
-    private RawMaterial sampleOneSprite(final Sprite sprite) {
+    private RawMaterial sampleOneSprite(final TextureAtlasSprite sprite) {
         if (sprite == null || isMissing(sprite)) {
             return null;
         }
-        //#if MC>=11900
-        //$$ final NativeImage[] images = sprite.getContents().mipmapLevelsImages;
-        //#else
-        final NativeImage[] images = sprite.images;
-        //#endif
+        final NativeImage[] images = sprite.contents().byMipLevel;
         if (images == null || images.length == 0 || images[0] == null) {
             return null;
         }
         final NativeImage image = images[0];
-        //#if MC>=11900
-        //$$ final int w = Math.min(sprite.getContents().getWidth(), image.getWidth());
-        //$$ final int h = Math.min(sprite.getContents().getHeight(), image.getHeight());
-        //#else
-        final int w = Math.min(sprite.getWidth(), image.getWidth());
-        final int h = Math.min(sprite.getHeight(), image.getHeight());
-        //#endif
+        final int w = Math.min(sprite.contents().width(), image.getWidth());
+        final int h = Math.min(sprite.contents().height(), image.getHeight());
         if (w <= 0 || h <= 0) {
             return null;
         }

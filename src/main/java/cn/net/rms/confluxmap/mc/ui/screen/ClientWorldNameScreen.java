@@ -5,11 +5,11 @@ import cn.net.rms.confluxmap.compat.Texts;
 import cn.net.rms.confluxmap.compat.Widgets;
 import cn.net.rms.confluxmap.mc.ui.GuiDraw;
 import java.util.function.Consumer;
-import net.minecraft.client.MinecraftClient;
-import net.minecraft.client.gui.screen.Screen;
-import net.minecraft.client.gui.widget.ButtonWidget;
-import net.minecraft.client.gui.widget.TextFieldWidget;
-import net.minecraft.text.Text;
+import net.minecraft.client.Minecraft;
+import net.minecraft.client.gui.screens.Screen;
+import net.minecraft.client.gui.components.Button;
+import net.minecraft.client.gui.components.EditBox;
+import net.minecraft.network.chat.Component;
 
 /** Create/rename form for one client-owned world profile. */
 final class ClientWorldNameScreen extends ConfluxScreen {
@@ -17,8 +17,8 @@ final class ClientWorldNameScreen extends ConfluxScreen {
     private final String initialName;
     private final Consumer<String> onSubmit;
     private final String fieldLabelKey;
-    private TextFieldWidget nameField;
-    private ButtonWidget doneButton;
+    private EditBox nameField;
+    private Button doneButton;
 
     ClientWorldNameScreen(
         final Screen parent,
@@ -41,7 +41,7 @@ final class ClientWorldNameScreen extends ConfluxScreen {
         final Screen parent,
         final String initialName,
         final Consumer<String> onSubmit,
-        final Text title,
+        final Component title,
         final String fieldLabelKey
     ) {
         super(title);
@@ -59,20 +59,20 @@ final class ClientWorldNameScreen extends ConfluxScreen {
     @Override
     protected void init() {
         final int fieldWidth = Math.min(240, width - 24);
-        nameField = new TextFieldWidget(
-            this.textRenderer, width / 2 - fieldWidth / 2, 62, fieldWidth, 20,
+        nameField = new EditBox(
+            this.font, width / 2 - fieldWidth / 2, 62, fieldWidth, 20,
             Texts.translatable(fieldLabelKey)
         );
         nameField.setMaxLength(64);
-        nameField.setText(initialName == null ? "" : initialName);
-        addDrawableChild(nameField);
+        nameField.setValue(initialName == null ? "" : initialName);
+        addRenderableWidget(nameField);
         setInitialFocus(nameField);
-        doneButton = addDrawableChild(Widgets.button(
+        doneButton = addRenderableWidget(Widgets.button(
             width / 2 - 104, 94, 100, 20,
             Texts.translatable("confluxmap.screen.waypoint.done"),
             ignored -> submit()
         ));
-        addDrawableChild(Widgets.button(
+        addRenderableWidget(Widgets.button(
             width / 2 + 4, 94, 100, 20,
             Texts.translatable("confluxmap.screen.waypoint.cancel"),
             ignored -> onClose()
@@ -88,23 +88,23 @@ final class ClientWorldNameScreen extends ConfluxScreen {
     }
 
     private void refreshDone() {
-        doneButton.active = nameField != null && !nameField.getText().trim().isEmpty();
+        doneButton.active = nameField != null && !nameField.getValue().trim().isEmpty();
     }
 
     private void submit() {
-        final String name = nameField.getText().trim();
+        final String name = nameField.getValue().trim();
         if (name.isEmpty()) {
             return;
         }
         onSubmit.accept(name);
-        if (MinecraftAccess.screen(MinecraftClient.getInstance()) == this) {
+        if (MinecraftAccess.screen(Minecraft.getInstance()) == this) {
             onClose();
         }
     }
 
     @Override
     public void onClose() {
-        MinecraftAccess.setScreen(MinecraftClient.getInstance(), parent);
+        MinecraftAccess.setScreen(Minecraft.getInstance(), parent);
     }
 
     @Override
@@ -112,11 +112,11 @@ final class ClientWorldNameScreen extends ConfluxScreen {
         draw.renderBackground(this, mouseX, mouseY, tickDelta);
         final String title = getTitle().getString();
         draw.drawTextWithShadow(
-            this.textRenderer, title, width / 2f - this.textRenderer.getWidth(title) / 2f, 24, 0xFFFFFFFF
+            this.font, title, width / 2f - this.font.width(title) / 2f, 24, 0xFFFFFFFF
         );
         final String prompt = Texts.translatable(fieldLabelKey).getString();
         draw.drawTextWithShadow(
-            this.textRenderer, prompt, width / 2f - this.textRenderer.getWidth(prompt) / 2f, 48, 0xFFBBBBBB
+            this.font, prompt, width / 2f - this.font.width(prompt) / 2f, 48, 0xFFBBBBBB
         );
     }
 }

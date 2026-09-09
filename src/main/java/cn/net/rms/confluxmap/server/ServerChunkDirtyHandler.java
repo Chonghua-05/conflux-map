@@ -1,8 +1,8 @@
 package cn.net.rms.confluxmap.server;
 
-import net.minecraft.server.world.ServerWorld;
-import net.minecraft.world.World;
-import net.minecraft.world.chunk.WorldChunk;
+import net.minecraft.server.level.ServerLevel;
+import net.minecraft.world.level.Level;
+import net.minecraft.world.level.chunk.LevelChunk;
 
 /** Routes successful live block writes to the active server summary service. */
 public final class ServerChunkDirtyHandler {
@@ -15,13 +15,13 @@ public final class ServerChunkDirtyHandler {
         summaries = service;
     }
 
-    public static void chunkDirty(final WorldChunk chunk) {
+    public static void chunkDirty(final LevelChunk chunk) {
         final RegionSummaryService current = summaries;
         if (current == null || chunk == null) {
             return;
         }
-        final World world = chunk.getWorld();
-        if (world instanceof final ServerWorld serverWorld) {
+        final Level world = chunk.getLevel();
+        if (world instanceof final ServerLevel serverWorld) {
             current.onChunkDirty(serverWorld, chunk);
         }
     }

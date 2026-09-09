@@ -4,7 +4,7 @@ import cn.net.rms.confluxmap.core.net.HelloPolicyS2C;
 import cn.net.rms.confluxmap.core.net.MapSyncCapability;
 import cn.net.rms.confluxmap.core.net.NegotiatedMapSync;
 
-/** Platform-neutral policy projection shared by the Fabric and Paper transports. */
+/** Platform-neutral policy projection shared by the NeoForge transport. */
 public final class CompanionPolicy {
     private CompanionPolicy() {
     }

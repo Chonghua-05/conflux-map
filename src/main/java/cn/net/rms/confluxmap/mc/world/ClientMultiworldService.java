@@ -35,13 +35,13 @@ import java.util.OptionalLong;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.Executor;
 import java.util.function.Supplier;
-import net.fabricmc.fabric.api.client.event.lifecycle.v1.ClientTickEvents;
-import net.fabricmc.fabric.api.client.networking.v1.ClientPlayConnectionEvents;
-import net.minecraft.client.MinecraftClient;
-import net.minecraft.client.network.ClientPlayNetworkHandler;
-import net.minecraft.client.network.ServerInfo;
-import net.minecraft.util.Identifier;
-import net.minecraft.util.Formatting;
+import cn.net.rms.confluxmap.neoforge.compat.ClientTickEvents;
+import cn.net.rms.confluxmap.neoforge.compat.ClientPlayConnectionEvents;
+import net.minecraft.client.Minecraft;
+import net.minecraft.client.multiplayer.ClientPacketListener;
+import net.minecraft.client.multiplayer.ServerData;
+import net.minecraft.resources.Identifier;
+import net.minecraft.ChatFormatting;
 
 /**
  * Client-only upstream world resolver for proxy addresses. A structurally verified Velocity
@@ -54,7 +54,7 @@ public final class ClientMultiworldService {
     private static final int SIGNAL_REFRESH_TICKS = 20;
     private static final int VELOCITY_QUERY_TIMEOUT_TICKS = 40;
 
-    private final MinecraftClient client;
+    private final Minecraft client;
     private final CompanionSession companion;
     private final ClientWorldProfileResolver resolver;
     private final Path cacheRoot;
@@ -85,7 +85,7 @@ public final class ClientMultiworldService {
     private Supplier<String> openMapKeyDisplayName;
 
     public ClientMultiworldService(
-        final MinecraftClient client,
+        final Minecraft client,
         final CompanionSession companion,
         final ClientWorldProfileResolver resolver,
         final Path cacheRoot,
@@ -100,7 +100,7 @@ public final class ClientMultiworldService {
      *                raw address
      */
     public ClientMultiworldService(
-        final MinecraftClient client,
+        final Minecraft client,
         final CompanionSession companion,
         final ClientWorldProfileResolver resolver,
         final Path cacheRoot,
@@ -200,7 +200,7 @@ public final class ClientMultiworldService {
     }
 
     public boolean canManageProfiles() {
-        if (client == null || client.world == null || client.isInSingleplayer()) {
+        if (client == null || client.level == null || client.isLocalServer()) {
             return false;
         }
         // The companion owns the active cache identity, but the client profile list is still the
@@ -218,7 +218,7 @@ public final class ClientMultiworldService {
      * a server. This is the alias-resolved id, not the typed address.
      */
     public Optional<String> currentServerId() {
-        if (client == null || client.world == null || client.isInSingleplayer()) {
+        if (client == null || client.level == null || client.isLocalServer()) {
             return Optional.empty();
         }
         ensureAddressObserved();
@@ -332,7 +332,7 @@ public final class ClientMultiworldService {
                 ProfileMigrationStatus.ALREADY_RUNNING, profileId, null, null
             );
         }
-        if (client == null || client.world == null || client.isInSingleplayer() || serverId == null) {
+        if (client == null || client.level == null || client.isLocalServer() || serverId == null) {
             return new ProfileMigrationPreparation(
                 ProfileMigrationStatus.NOT_CONNECTED, profileId, null, null
             );
@@ -448,7 +448,7 @@ public final class ClientMultiworldService {
 
     private void tickSignals() {
         clientTick++;
-        if (client.world == null || client.player == null || client.getNetworkHandler() == null || client.isInSingleplayer()) {
+        if (client.level == null || client.player == null || client.getConnection() == null || client.isLocalServer()) {
             return;
         }
         if (++signalTicks < SIGNAL_REFRESH_TICKS) {
@@ -523,36 +523,30 @@ public final class ClientMultiworldService {
 
     private Map<String, String> collectSignals() {
         final Map<String, String> observed = new LinkedHashMap<>();
-        //#if MC>=260100
-        //$$ final String brand = client.getConnection().serverBrand();
-        //#elseif MC>=12100
-        //$$ final String brand = client.getNetworkHandler().getBrand();
-        //#else
-        final String brand = client.player.getServerBrand();
-        //#endif
+        final String brand = client.getConnection().serverBrand();
         if (brand != null && !brand.isBlank()) {
             observed.put("brand", ClientWorldSignalHasher.hash(brand));
         }
 
-        final List<String> commands = client.getNetworkHandler().getCommandDispatcher().getRoot().getChildren().stream()
+        final List<String> commands = client.getConnection().getCommands().getRoot().getChildren().stream()
             .map(CommandNode::getName)
             .toList();
         if (!commands.isEmpty()) {
             observed.put("commands", ClientWorldSignalHasher.hashSorted(commands));
         }
 
-        final List<String> biomes = Regs.biomes(client.world).getIds().stream()
+        final List<String> biomes = Regs.biomes(client.level).keySet().stream()
             .map(Identifier::toString)
             .toList();
         if (!biomes.isEmpty()) {
             observed.put("biomes", ClientWorldSignalHasher.hashSorted(biomes));
         }
 
-        final Identifier dimension = client.world.getRegistryKey().getValue();
+        final Identifier dimension = client.level.dimension().identifier();
         observed.put("dimension", ClientWorldSignalHasher.hash(dimension.toString()));
         observed.put("dimension_type", ClientWorldSignalHasher.hash(
-            client.world.getDimension().hasCeiling() + ":"
-                + client.world.getDimension().hasSkyLight()
+            client.level.dimensionType().hasCeiling() + ":"
+                + client.level.dimensionType().hasSkyLight()
         ));
         return Map.copyOf(observed);
     }
@@ -564,7 +558,7 @@ public final class ClientMultiworldService {
             return;
         }
         final List<ClientWorldProfile> profiles = resolver.profiles(serverId);
-        if (profiles.size() < 2 || client.world == null) {
+        if (profiles.size() < 2 || client.level == null) {
             return;
         }
         final MapLayer layer = terrainProbeLayer();
@@ -576,8 +570,8 @@ public final class ClientMultiworldService {
         final long generation = observationGeneration;
         final String expectedServer = serverId;
         final String dimension = DimensionId.of(
-            client.world.getRegistryKey().getValue().getNamespace(),
-            client.world.getRegistryKey().getValue().getPath()
+            client.level.dimension().identifier().getNamespace(),
+            client.level.dimension().identifier().getPath()
         ).fileName();
         io.execute(() -> {
             final List<TerrainFingerprintMatcher.Candidate> candidates = loadTerrainCandidates(
@@ -601,7 +595,7 @@ public final class ClientMultiworldService {
     }
 
     private MapLayer terrainProbeLayer() {
-        switch (LayerSelector.classify(client.world.getDimension())) {
+        switch (LayerSelector.classify(client.level.dimensionType())) {
             case HAS_CEILING:
                 return MapLayer.NETHER_CEILING;
             case NO_SKY_NO_CEILING:
@@ -655,20 +649,11 @@ public final class ClientMultiworldService {
             return;
         }
         ambiguityNotified = true;
-        //#if MC>=260100
-        //$$ client.player.sendSystemMessage(
-        //$$     Texts.translatable(
-        //$$         "confluxmap.client_world.ambiguous_chat", openMapKeyDisplayName.get()
-        //$$     ).withStyle(ChatFormatting.YELLOW)
-        //$$ );
-        //#else
-        client.player.sendMessage(
+        client.player.sendSystemMessage(
             Texts.translatable(
                 "confluxmap.client_world.ambiguous_chat", openMapKeyDisplayName.get()
-            ).formatted(Formatting.YELLOW),
-            false
+            ).withStyle(ChatFormatting.YELLOW)
         );
-        //#endif
     }
 
     private void requireConnection() {
@@ -696,9 +681,9 @@ public final class ClientMultiworldService {
         observationGeneration++;
     }
 
-    private void onDisconnect(final ClientPlayNetworkHandler handler) {
+    private void onDisconnect(final ClientPacketListener handler) {
         client.execute(() -> {
-            final ClientPlayNetworkHandler current = client.getNetworkHandler();
+            final ClientPacketListener current = client.getConnection();
             if (current == null || current == handler) {
                 resetObservation();
             }
@@ -731,7 +716,7 @@ public final class ClientMultiworldService {
     }
 
     private void ensureAddressObserved() {
-        if (client != null && client.world != null && !client.isInSingleplayer()) {
+        if (client != null && client.level != null && !client.isLocalServer()) {
             observeAddress(canonicalAddress(resolveAddress(client)));
         }
     }
@@ -749,13 +734,13 @@ public final class ClientMultiworldService {
             ).canonicalId();
     }
 
-    private static String resolveAddress(final MinecraftClient client) {
-        final ServerInfo server = client.getCurrentServerEntry();
+    private static String resolveAddress(final Minecraft client) {
+        final ServerData server = client.getCurrentServer();
         if (server != null) {
-            return server.address;
+            return server.ip;
         }
-        if (client.getNetworkHandler() != null && client.getNetworkHandler().getConnection() != null) {
-            return client.getNetworkHandler().getConnection().getAddress().toString();
+        if (client.getConnection() != null && client.getConnection().getConnection() != null) {
+            return client.getConnection().getConnection().getRemoteAddress().toString();
         }
         return "unknown";
     }
@@ -780,21 +765,11 @@ public final class ClientMultiworldService {
     }
 
     private boolean supportsVelocityServerQuery() {
-        if (client == null || client.player == null || client.getNetworkHandler() == null) {
+        if (client == null || client.player == null || client.getConnection() == null) {
             return false;
         }
-        //#if MC>=260100
-        //$$ final String brand = client.getConnection().serverBrand();
-        //$$ final boolean hasServerCommand = client.getConnection().getCommands().getRoot().getChild("server") != null;
-        //#elseif MC>=12100
-        //$$ final String brand = client.getNetworkHandler().getBrand();
-        //$$ final boolean hasServerCommand = client.getNetworkHandler()
-        //$$     .getCommandDispatcher().getRoot().getChild("server") != null;
-        //#else
-        final String brand = client.player.getServerBrand();
-        final boolean hasServerCommand = client.getNetworkHandler()
-            .getCommandDispatcher().getRoot().getChild("server") != null;
-        //#endif
+        final String brand = client.getConnection().serverBrand();
+        final boolean hasServerCommand = client.getConnection().getCommands().getRoot().getChild("server") != null;
         return brand != null && brand.toLowerCase(Locale.ROOT).contains("velocity") && hasServerCommand;
     }
 }

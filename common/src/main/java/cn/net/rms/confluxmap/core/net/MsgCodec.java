@@ -35,7 +35,7 @@ import java.util.UUID;
  *       unknown type byte throws.</li>
  * </ul>
  *
- * <p>This class is deliberately Minecraft-free (pure {@code byte[]}). The Fabric wiring in
+ * <p>This class is deliberately Minecraft-free (pure {@code byte[]}). The NeoForge wiring in
  * {@code mc.net.ClientNetworking} / {@code server.ServerNetworking} is a thin {@link
  * java.io.DataOutput} bridge on top of {@code PacketByteBuf}.
  */

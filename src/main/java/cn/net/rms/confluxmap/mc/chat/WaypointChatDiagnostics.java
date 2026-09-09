@@ -9,9 +9,8 @@ import java.util.IdentityHashMap;
 import java.util.Optional;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicLong;
-import net.fabricmc.loader.api.FabricLoader;
-import net.fabricmc.loader.api.ModContainer;
-import net.minecraft.text.Text;
+import net.neoforged.fml.ModList;
+import net.minecraft.network.chat.Component;
 
 /** Opt-in component-tree diagnostics for the issue #87 compatibility environment. */
 public final class WaypointChatDiagnostics {
@@ -42,8 +41,8 @@ public final class WaypointChatDiagnostics {
     }
 
     public static void rewrite(
-        final Text original,
-        final Text rewritten,
+        final Component original,
+        final Component rewritten,
         final DimensionId receivedDimension,
         final Optional<WaypointChatCodec.Candidate> candidate,
         final boolean payloadAvailable
@@ -73,25 +72,25 @@ public final class WaypointChatDiagnostics {
         );
     }
 
-    static String describe(final Text root) {
+    static String describe(final Component root) {
         final StringBuilder result = new StringBuilder();
         appendNode(
             root,
             "root",
             0,
             new int[] {0},
-            new IdentityHashMap<Text, Boolean>(),
+            new IdentityHashMap<Component, Boolean>(),
             result
         );
         return result.toString();
     }
 
     private static void appendNode(
-        final Text node,
+        final Component node,
         final String path,
         final int depth,
         final int[] nodeCount,
-        final IdentityHashMap<Text, Boolean> visited,
+        final IdentityHashMap<Component, Boolean> visited,
         final StringBuilder result
     ) {
         if (nodeCount[0] >= MAX_TREE_NODES) {
@@ -130,7 +129,7 @@ public final class WaypointChatDiagnostics {
         }
     }
 
-    private static String contentDescription(final Text node) {
+    private static String contentDescription(final Component node) {
         for (final String accessor : new String[] {"getContent", "getContents"}) {
             try {
                 final Method getContent = node.getClass().getMethod(accessor);
@@ -151,24 +150,21 @@ public final class WaypointChatDiagnostics {
         if (!ENVIRONMENT_LOGGED.compareAndSet(false, true)) {
             return;
         }
-        final FabricLoader loader = FabricLoader.getInstance();
         ConfluxMapMod.LOGGER.info(
-            "[issue-87] diagnostics enabled: minecraft={}, fabric-loader={}, fabric-api={}, "
+            "[issue-87] diagnostics enabled: minecraft={}, neoforge={}, "
                 + "confluxmap={}, chat-heads={}, java={}",
-            modVersion(loader, "minecraft"),
-            modVersion(loader, "fabricloader"),
-            modVersion(loader, "fabric-api"),
-            modVersion(loader, ConfluxMapMod.ID),
-            modVersion(loader, "chat_heads"),
+            modVersion("minecraft"),
+            modVersion("neoforge"),
+            modVersion(ConfluxMapMod.ID),
+            modVersion("chat_heads"),
             System.getProperty("java.version", "unknown")
         );
     }
 
-    private static String modVersion(final FabricLoader loader, final String modId) {
-        final Optional<ModContainer> container = loader.getModContainer(modId);
-        return container.isPresent()
-            ? container.get().getMetadata().getVersion().getFriendlyString()
-            : "not-installed";
+    private static String modVersion(final String modId) {
+        return ModList.get().getModContainerById(modId)
+            .map(container -> container.getModInfo().getVersion().toString())
+            .orElse("not-installed");
     }
 
     private static boolean enabled() {

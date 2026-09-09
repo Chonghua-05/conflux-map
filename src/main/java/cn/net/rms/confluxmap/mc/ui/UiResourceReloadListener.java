@@ -2,9 +2,9 @@ package cn.net.rms.confluxmap.mc.ui;
 
 import cn.net.rms.confluxmap.ConfluxMapMod;
 import cn.net.rms.confluxmap.compat.Ids;
-import net.fabricmc.fabric.api.resource.SimpleSynchronousResourceReloadListener;
-import net.minecraft.resource.ResourceManager;
-import net.minecraft.util.Identifier;
+import cn.net.rms.confluxmap.neoforge.compat.SimpleSynchronousResourceReloadListener;
+import net.minecraft.server.packs.resources.ResourceManager;
+import net.minecraft.resources.Identifier;
 
 /** Refreshes project-native and Xaero-compatible UI resource selection after F3+T. */
 public final class UiResourceReloadListener implements SimpleSynchronousResourceReloadListener {
@@ -17,12 +17,12 @@ public final class UiResourceReloadListener implements SimpleSynchronousResource
     }
 
     @Override
-    public Identifier getFabricId() {
+    public Identifier getId() {
         return ID;
     }
 
     @Override
-    public void reload(final ResourceManager manager) {
+    public void onResourceManagerReload(final ResourceManager manager) {
         theme.reload(manager);
     }
 }

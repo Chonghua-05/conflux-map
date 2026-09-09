@@ -16,8 +16,8 @@ import java.util.concurrent.Executor;
 import java.util.concurrent.RejectedExecutionException;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.function.LongSupplier;
-import net.minecraft.nbt.NbtCompound;
-import net.minecraft.util.math.ChunkPos;
+import net.minecraft.nbt.CompoundTag;
+import net.minecraft.world.level.ChunkPos;
 
 /** One reusable, freshness-checked progressive correction scan for an LOD-3/4 tile. */
 final class ProgressiveRegionPatch {
@@ -37,7 +37,7 @@ final class ProgressiveRegionPatch {
 
     @FunctionalInterface
     interface ChunkNbtReader {
-        NbtCompound read(ChunkPos pos) throws IOException;
+        CompoundTag read(ChunkPos pos) throws IOException;
     }
 
     @FunctionalInterface
@@ -591,7 +591,7 @@ final class ProgressiveRegionPatch {
             } else if (cached != null && cached.chunks()[chunkIndex].generated()) {
                 summary = cached.chunks()[chunkIndex];
             } else {
-                NbtCompound nbt = null;
+                CompoundTag nbt = null;
                 final long ioStartedNanos = System.nanoTime();
                 try {
                     nbt = nbtReader.read(new ChunkPos(chunkX, chunkZ));

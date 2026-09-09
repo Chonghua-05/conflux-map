@@ -1,7 +1,7 @@
 package cn.net.rms.confluxmap.mc.ui.hud;
 
 import cn.net.rms.confluxmap.mc.render.RenderUtil;
-import net.minecraft.client.util.math.MatrixStack;
+import com.mojang.blaze3d.vertex.PoseStack;
 
 /** Draws the supported Xaero square-frame atlas layout after its texture is bound. */
 final class XaeroMinimapFrameRenderer {
@@ -11,7 +11,7 @@ final class XaeroMinimapFrameRenderer {
     }
 
     static void drawSquare(
-        final MatrixStack matrices,
+        final PoseStack matrices,
         final int x,
         final int y,
         final int size
@@ -32,7 +32,7 @@ final class XaeroMinimapFrameRenderer {
     }
 
     private static void drawPart(
-        final MatrixStack matrices,
+        final PoseStack matrices,
         final float x,
         final float y,
         final float width,

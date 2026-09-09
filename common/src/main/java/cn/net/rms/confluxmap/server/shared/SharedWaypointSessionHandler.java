@@ -23,7 +23,7 @@ import java.util.UUID;
 /**
  * Minecraft-free shared-waypoint protocol state machine.
  *
- * <p>The Fabric adapter invokes this class on the server thread. A connection is eligible for
+ * <p>The NeoForge adapter invokes this class on the server thread. A connection is eligible for
  * snapshots or deltas only after a compatible {@link HelloC2S}; subscriptions and malformed
  * strikes are connection state, while mutation idempotency remains owned by the longer-lived
  * {@link SharedWaypointService}.

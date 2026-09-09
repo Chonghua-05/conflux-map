@@ -5,9 +5,9 @@ import cn.net.rms.confluxmap.core.color.BiomeSampleWindow;
 import cn.net.rms.confluxmap.core.model.ChunkSnapshot;
 import java.util.HashMap;
 import java.util.Map;
-import net.minecraft.client.world.ClientWorld;
-import net.minecraft.util.Identifier;
-import net.minecraft.util.math.BlockPos;
+import net.minecraft.client.multiplayer.ClientLevel;
+import net.minecraft.resources.Identifier;
+import net.minecraft.core.BlockPos;
 
 /** Client-only extraction of the stable biome resource-id plane for one captured chunk. */
 final class BiomeIdentityCapture {
@@ -26,8 +26,8 @@ final class BiomeIdentityCapture {
     }
 
     static void capture(
-        final ClientWorld world,
-        final BlockPos.Mutable pos,
+        final ClientLevel world,
+        final BlockPos.MutableBlockPos pos,
         final int baseX,
         final int baseZ,
         final short[] surfaceY,

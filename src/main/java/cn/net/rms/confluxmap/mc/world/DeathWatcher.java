@@ -14,9 +14,9 @@ import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Optional;
-import net.fabricmc.fabric.api.client.event.lifecycle.v1.ClientTickEvents;
-import net.minecraft.client.MinecraftClient;
-import net.minecraft.client.gui.screen.DeathScreen;
+import cn.net.rms.confluxmap.neoforge.compat.ClientTickEvents;
+import net.minecraft.client.Minecraft;
+import net.minecraft.client.gui.screens.DeathScreen;
 
 /**
  * Watches for the local player's death screen appearing (edge-triggered:
@@ -53,7 +53,7 @@ public final class DeathWatcher {
         ClientTickEvents.END_CLIENT_TICK.register(this::tick);
     }
 
-    private void tick(final MinecraftClient client) {
+    private void tick(final Minecraft client) {
         final boolean deathScreenOpen = MinecraftAccess.screen(client) instanceof DeathScreen;
         final boolean justDied = deathScreenOpen && !deathScreenWasOpen;
         deathScreenWasOpen = deathScreenOpen;

@@ -12,16 +12,16 @@ import java.util.List;
 import java.util.Objects;
 import java.util.Optional;
 import java.util.function.Consumer;
-import net.fabricmc.fabric.api.client.event.lifecycle.v1.ClientTickEvents;
-import net.minecraft.client.MinecraftClient;
-import net.minecraft.client.network.ServerInfo;
-import net.minecraft.util.Identifier;
-import net.minecraft.util.WorldSavePath;
+import cn.net.rms.confluxmap.neoforge.compat.ClientTickEvents;
+import net.minecraft.client.Minecraft;
+import net.minecraft.client.multiplayer.ServerData;
+import net.minecraft.resources.Identifier;
+import net.minecraft.world.level.storage.LevelResource;
 
 /**
  * Watches the client for world joins, disconnects, dimension changes and identity rotations
  * and rotates the {@link SessionGuard} session accordingly. Detection is tick-based so it also
- * covers paths that fire no Fabric event (e.g. some proxy setups).
+ * covers paths that fire no connection event (e.g. some proxy setups).
  *
  * <p>Identity rotation: when a companion server is active, its advertised {@code worldId}
  * overrides the non-companion fallback. If a proxy world switch re-fires JOIN and the server
@@ -98,12 +98,12 @@ public final class WorldSessionTracker {
         notifyListeners(guard.current());
     }
 
-    private void tick(final MinecraftClient client) {
+    private void tick(final Minecraft client) {
         // Pump the handshake state machine once per tick so the HELLO_SENT timeout fires on schedule.
         companion.tick();
 
         final SessionGuard.Session current = guard.current();
-        if (client.world == null || client.player == null) {
+        if (client.level == null || client.player == null) {
             singleplayerSaveRoot = null;
             singleplayerIdentity = null;
             forgetCanonicalAddress();
@@ -113,7 +113,7 @@ public final class WorldSessionTracker {
             }
             return;
         }
-        final DimensionId dimension = toDimensionId(client.world.getRegistryKey().getValue());
+        final DimensionId dimension = toDimensionId(client.level.dimension().identifier());
         updateSession(resolveWorldIdentity(client), dimension);
     }
 
@@ -171,9 +171,9 @@ public final class WorldSessionTracker {
      * sessions delegate handshake state and companion world ids to {@link CompanionSession}.
      * Empty means a HELLO is outstanding and any existing session must be suspended.
      */
-    private Optional<WorldIdentity> resolveWorldIdentity(final MinecraftClient client) {
-        if (client.isInSingleplayer() && client.getServer() != null) {
-            final Path saveRoot = client.getServer().getSavePath(WorldSavePath.ROOT).normalize();
+    private Optional<WorldIdentity> resolveWorldIdentity(final Minecraft client) {
+        if (client.isLocalServer() && client.getSingleplayerServer() != null) {
+            final Path saveRoot = client.getSingleplayerServer().getWorldPath(LevelResource.ROOT).normalize();
             if (!saveRoot.equals(singleplayerSaveRoot)) {
                 singleplayerSaveRoot = saveRoot;
                 singleplayerIdentity = WorldIdentity.singleplayerSave(saveRoot);
@@ -248,13 +248,13 @@ public final class WorldSessionTracker {
         }
     }
 
-    private static String resolveAddress(final MinecraftClient client) {
-        final ServerInfo server = client.getCurrentServerEntry();
+    private static String resolveAddress(final Minecraft client) {
+        final ServerData server = client.getCurrentServer();
         if (server != null) {
-            return server.address;
+            return server.ip;
         }
-        if (client.getNetworkHandler() != null && client.getNetworkHandler().getConnection() != null) {
-            return client.getNetworkHandler().getConnection().getAddress().toString();
+        if (client.getConnection() != null && client.getConnection().getConnection() != null) {
+            return client.getConnection().getConnection().getRemoteAddress().toString();
         }
         return "unknown";
     }

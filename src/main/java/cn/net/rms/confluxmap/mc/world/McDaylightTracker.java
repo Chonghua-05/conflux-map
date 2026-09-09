@@ -6,13 +6,12 @@ import cn.net.rms.confluxmap.core.config.ConfluxConfig;
 import cn.net.rms.confluxmap.core.store.MapWorld;
 import cn.net.rms.confluxmap.core.store.MapWorldService;
 import cn.net.rms.confluxmap.core.tile.TileService;
-import net.fabricmc.fabric.api.client.event.lifecycle.v1.ClientTickEvents;
-import net.minecraft.client.MinecraftClient;
-import net.minecraft.client.world.ClientWorld;
-import net.minecraft.util.math.MathHelper;
-//#if MC>=12111
-//$$ import net.minecraft.world.attribute.EnvironmentAttributes;
-//#endif
+import cn.net.rms.confluxmap.neoforge.compat.ClientTickEvents;
+import net.minecraft.client.Minecraft;
+import net.minecraft.client.multiplayer.ClientLevel;
+import net.minecraft.util.Mth;
+import net.minecraft.world.attribute.EnvironmentAttributes;
+import net.minecraft.world.attribute.SpatialAttributeInterpolator;
 
 /**
  * Drives {@link DaylightModel} once per client tick from the live world's sky angle and
@@ -31,7 +30,7 @@ import net.minecraft.util.math.MathHelper;
  * whose base light tint was baked into stored columns recompose from their gamma-free data.
  */
 public final class McDaylightTracker {
-    private final MinecraftClient client;
+    private final Minecraft client;
     private final ConfluxConfig config;
     private final DaylightModel model;
     private final MapWorldService mapWorlds;
@@ -39,7 +38,7 @@ public final class McDaylightTracker {
     private final Runnable gammaChanged;
 
     public McDaylightTracker(
-        final MinecraftClient client,
+        final Minecraft client,
         final ConfluxConfig config,
         final DaylightModel model,
         final MapWorldService mapWorlds,
@@ -77,34 +76,31 @@ public final class McDaylightTracker {
     }
 
     private float computeFactor() {
-        final ClientWorld world = client.world;
-        if (!config.dynamicLighting || world == null || !world.getDimension().hasSkyLight()) {
+        final ClientLevel world = client.level;
+        if (!config.dynamicLighting || world == null || client.player == null || !world.dimensionType().hasSkyLight()) {
             return 1f;
         }
-        //#if MC>=12111
-        //$$ return daylightFactor(world.getEnvironmentAttributes().getAttributeValue(
-        //$$     EnvironmentAttributes.SUN_ANGLE_VISUAL
-        //$$ ));
-        //#else
-        return daylightFactor(world.getSkyAngleRadians(1.0f));
-        //#endif
+        // 26.1 treats the sun-angle attribute as positional. Supplying the local
+        // player position avoids the hard failure thrown by getDimensionValue for
+        // positional attributes while preserving vanilla's environment overrides.
+        return daylightFactor(world.environmentAttributes().getValue(
+            EnvironmentAttributes.SUN_ANGLE,
+            client.player.position(),
+            new SpatialAttributeInterpolator()
+        ));
     }
 
     /**
      * Vanilla's sky-brightness cosine curve, taking the sun angle in whatever unit the running
      * version reports it: radians from {@code World#getSkyAngleRadians} before 1.21.11, degrees
-     * from {@code EnvironmentAttributes#SUN_ANGLE_VISUAL} on 1.21.11 and later. Vanilla's own
+     * from {@code EnvironmentAttributes#SUN_ANGLE} on 1.21.11 and later. Vanilla's own
      * {@code DaylightDetectorBlock} applies the same degree-to-radian conversion to that
      * attribute; feeding the raw degrees to {@code cos} instead runs ~57 brightness cycles per
      * Minecraft day, which reads as the map flickering between bright and dark.
      */
     static float daylightFactor(final float sunAngle) {
-        //#if MC>=12111
-        //$$ final float skyAngle = sunAngle * MathHelper.RADIANS_PER_DEGREE;
-        //#else
-        final float skyAngle = sunAngle;
-        //#endif
-        final float raw = MathHelper.cos(skyAngle) * 2.0f + 0.5f;
-        return MathHelper.clamp(raw, 0f, 1f);
+        final float skyAngle = sunAngle * Mth.DEG_TO_RAD;
+        final float raw = Mth.cos(skyAngle) * 2.0f + 0.5f;
+        return Mth.clamp(raw, 0f, 1f);
     }
 }

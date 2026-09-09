@@ -6,23 +6,23 @@ import cn.net.rms.confluxmap.core.predict.SyncedMaterialPalette;
 import java.util.LinkedHashSet;
 import java.util.Optional;
 import java.util.Set;
-import net.minecraft.block.Block;
-import net.minecraft.block.BlockState;
-import net.minecraft.client.MinecraftClient;
-import net.minecraft.client.world.ClientWorld;
-import net.minecraft.util.Identifier;
-import net.minecraft.util.math.BlockPos;
+import net.minecraft.world.level.block.Block;
+import net.minecraft.world.level.block.state.BlockState;
+import net.minecraft.client.Minecraft;
+import net.minecraft.client.multiplayer.ClientLevel;
+import net.minecraft.resources.Identifier;
+import net.minecraft.core.BlockPos;
 
 /** Resolves synchronized registry ids through the live client model and resource atlas. */
 public final class SyncedMaterialResolver {
-    private final MinecraftClient client;
+    private final Minecraft client;
     private final SpriteColorSampler sampler;
     private final BiomeTintResolver tints;
     private final SyncedMaterialPalette palette;
     private final Set<String> knownMaterials = new LinkedHashSet<>();
 
     public SyncedMaterialResolver(
-        final MinecraftClient client,
+        final Minecraft client,
         final SpriteColorSampler sampler,
         final BiomeTintResolver tints,
         final SyncedMaterialPalette palette
@@ -57,7 +57,7 @@ public final class SyncedMaterialResolver {
     }
 
     private void sample(final String materialId) {
-        final ClientWorld world = client.world;
+        final ClientLevel world = client.level;
         final Identifier id = Identifier.tryParse(materialId);
         if (world == null || id == null) {
             return;
@@ -66,9 +66,9 @@ public final class SyncedMaterialResolver {
         if (block.isEmpty()) {
             return;
         }
-        final BlockState state = block.get().getDefaultState();
+        final BlockState state = block.get().defaultBlockState();
         final BlockPos reference = client.player == null
-            ? BlockPos.ORIGIN : client.player.getBlockPos();
+            ? BlockPos.ZERO : client.player.blockPosition();
         palette.put(materialId, new SyncedMaterialPalette.Sample(
             sampler.baseColorFor(state, world, reference),
             sampler.detailProfileFor(state, world, reference),

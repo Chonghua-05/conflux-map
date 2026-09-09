@@ -1,6 +1,6 @@
 package cn.net.rms.confluxmap.mc.ui;
 
-import net.minecraft.util.Identifier;
+import net.minecraft.resources.Identifier;
 
 /** A resolved UI icon together with the color contract expected by its source texture. */
 public record UiIcon(UiTextureRegion region, ColorMode colorMode) {

@@ -1,87 +1,37 @@
 name: Cache Refresh
+
 on:
   schedule:
     - cron: '0 2 */5 * *'
   workflow_dispatch:
+
 permissions:
   contents: read
+
 jobs:
-  Get-Versions:
+  refresh-neoforge:
     runs-on: ubuntu-24.04
-    outputs:
-      versions: ${{ steps.Get_Versions.outputs.versions }}
     steps:
       - name: Checkout repository
         uses: actions/checkout@v5
-      - name: Get Minecraft versions
-        id: Get_Versions
-        run: |
-          VERSIONS=$(find versions -maxdepth 1 -type d -name "[0-9]*.[0-9]*" | xargs -I {} basename {} | sort -V | jq -R . | jq -s -c .)
-          echo "versions=$VERSIONS" >> $GITHUB_OUTPUT
-
-  Refresh-Matrix:
-    runs-on: ubuntu-24.04
-    needs: Get-Versions
-    strategy:
-      matrix:
-        minecraft_version: ${{ fromJson(needs.Get-Versions.outputs.versions) }}
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@v5
-        with:
-          fetch-depth: 0
       - name: Validate Gradle wrapper
         uses: gradle/actions/wrapper-validation@v5
-      - name: Setup JDK
+      - name: Setup JDK 25
         uses: actions/setup-java@v5
         with:
-          java-version: '22'
-          distribution: 'temurin'
+          java-version: '25'
+          distribution: temurin
       - name: Cache Gradle packages
         uses: actions/cache@v5
         with:
           path: |
             ~/.gradle/caches
             ~/.gradle/wrapper
-          key: ${{ runner.os }}-gradle-${{ matrix.minecraft_version }}-${{ hashFiles('**/*.gradle*', '**/gradle-wrapper.properties') }}
+          key: ${{ runner.os }}-gradle-neoforge-${{ hashFiles('**/*.gradle*', '**/gradle-wrapper.properties') }}
           restore-keys: |
-            ${{ runner.os }}-gradle-${{ matrix.minecraft_version }}-
+            ${{ runner.os }}-gradle-neoforge-
             ${{ runner.os }}-gradle-
       - name: Make Gradle wrapper executable
         run: chmod +x ./gradlew
-      - name: Refresh cache for ${{ matrix.minecraft_version }}
-        run: ./gradlew :${{ matrix.minecraft_version }}:dependencies
-      - name: Stop Gradle daemon
-        run: ./gradlew --stop
-
-  Refresh-Paper:
-    runs-on: ubuntu-24.04
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@v5
-        with:
-          fetch-depth: 0
-      - name: Validate Gradle wrapper
-        uses: gradle/actions/wrapper-validation@v5
-      - name: Setup JDK
-        uses: actions/setup-java@v5
-        with:
-          java-version: '22'
-          distribution: 'temurin'
-      - name: Cache Gradle packages
-        uses: actions/cache@v5
-        with:
-          path: |
-            ~/.gradle/caches
-            ~/.gradle/wrapper
-          key: ${{ runner.os }}-gradle-paper-${{ hashFiles('**/*.gradle*', '**/gradle-wrapper.properties') }}
-          restore-keys: |
-            ${{ runner.os }}-gradle-paper-
-            ${{ runner.os }}-gradle-
-      - name: Make Gradle wrapper executable
-        run: chmod +x ./gradlew
-      - name: Refresh Paper cache
-        run: ./gradlew :paper:dependencies
-      - name: Stop Gradle daemon
-        if: always()
-        run: ./gradlew --stop
+      - name: Refresh NeoForge dependencies
+        run: ./gradlew :26.1:dependencies --no-daemon --console=plain

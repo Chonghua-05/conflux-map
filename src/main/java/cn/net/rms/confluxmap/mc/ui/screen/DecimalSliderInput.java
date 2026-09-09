@@ -4,11 +4,11 @@ import cn.net.rms.confluxmap.compat.Widgets;
 import java.util.function.DoubleConsumer;
 import java.util.function.DoubleFunction;
 import java.util.regex.Pattern;
-import net.minecraft.client.font.TextRenderer;
-import net.minecraft.client.gui.widget.ClickableWidget;
-import net.minecraft.client.gui.widget.SliderWidget;
-import net.minecraft.client.gui.widget.TextFieldWidget;
-import net.minecraft.text.Text;
+import net.minecraft.client.gui.Font;
+import net.minecraft.client.gui.components.AbstractWidget;
+import net.minecraft.client.gui.components.AbstractSliderButton;
+import net.minecraft.client.gui.components.EditBox;
+import net.minecraft.network.chat.Component;
 
 /** A decimal slider and numeric field backed by one range-checked map scale. */
 final class DecimalSliderInput {
@@ -21,12 +21,12 @@ final class DecimalSliderInput {
     private final DecimalSliderValue value;
     private final DoubleConsumer setter;
     private final ValueSlider slider;
-    private final TextFieldWidget input;
+    private final EditBox input;
     private String lastAcceptedText;
     private boolean synchronizingInput;
 
     DecimalSliderInput(
-        final TextRenderer textRenderer,
+        final Font textRenderer,
         final int x,
         final int y,
         final int width,
@@ -36,7 +36,7 @@ final class DecimalSliderInput {
         final double step,
         final double initialValue,
         final DoubleConsumer setter,
-        final DoubleFunction<Text> message
+        final DoubleFunction<Component> message
     ) {
         this.value = new DecimalSliderValue(min, max, step, initialValue);
         this.setter = setter;
@@ -48,7 +48,7 @@ final class DecimalSliderInput {
         final int inputWidth = Math.min(preferredInputWidth, Math.max(1, width - CONTROL_GAP - 1));
         final int sliderWidth = Math.max(1, width - CONTROL_GAP - inputWidth);
         this.slider = new ValueSlider(x, y, sliderWidth, height, message);
-        this.input = new TextFieldWidget(
+        this.input = new EditBox(
             textRenderer,
             x + sliderWidth + CONTROL_GAP,
             y,
@@ -62,11 +62,11 @@ final class DecimalSliderInput {
         Widgets.setChangedListener(this.input, this::onInputChanged);
     }
 
-    ClickableWidget slider() {
+    AbstractWidget slider() {
         return slider;
     }
 
-    TextFieldWidget input() {
+    EditBox input() {
         return input;
     }
 
@@ -112,17 +112,17 @@ final class DecimalSliderInput {
         }
     }
 
-    private final class ValueSlider extends SliderWidget {
-        private final DoubleFunction<Text> message;
+    private final class ValueSlider extends AbstractSliderButton {
+        private final DoubleFunction<Component> message;
 
         private ValueSlider(
             final int x,
             final int y,
             final int width,
             final int height,
-            final DoubleFunction<Text> message
+            final DoubleFunction<Component> message
         ) {
-            super(x, y, width, height, Text.of(""), DecimalSliderInput.this.value.position());
+            super(x, y, width, height, Component.nullToEmpty(""), DecimalSliderInput.this.value.position());
             this.message = message;
             updateMessage();
         }

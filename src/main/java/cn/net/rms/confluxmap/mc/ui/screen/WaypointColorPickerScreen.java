@@ -8,13 +8,11 @@ import cn.net.rms.confluxmap.mc.ui.GuiDraw;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.function.IntConsumer;
-import net.minecraft.client.MinecraftClient;
-//#if MC>=12109
-//$$ import net.minecraft.client.gui.Click;
-//#endif
-import net.minecraft.client.gui.screen.Screen;
-import net.minecraft.client.gui.widget.TextFieldWidget;
-import net.minecraft.text.Text;
+import net.minecraft.client.Minecraft;
+import net.minecraft.client.input.MouseButtonEvent;
+import net.minecraft.client.gui.screens.Screen;
+import net.minecraft.client.gui.components.EditBox;
+import net.minecraft.network.chat.Component;
 
 /** Small dependency-free HSV picker for waypoint colors. */
 final class WaypointColorPickerScreen extends ConfluxScreen {
@@ -26,7 +24,7 @@ final class WaypointColorPickerScreen extends ConfluxScreen {
     private final Screen parent;
     private final WaypointColorPickerModel color;
     private final IntConsumer onApply;
-    private TextFieldWidget hexField;
+    private EditBox hexField;
     private boolean draggingPicker;
     private boolean draggingHue;
     private boolean invalidHex;
@@ -55,20 +53,20 @@ final class WaypointColorPickerScreen extends ConfluxScreen {
         cachedPickerHue = Float.NaN;
         pickerRects = List.of();
         final int centerX = width / 2;
-        hexField = new TextFieldWidget(
-            this.textRenderer, centerX - 50, pickerTop() + PICKER_SIZE + 22,
-            100, 20, Text.of("")
+        hexField = new EditBox(
+            this.font, centerX - 50, pickerTop() + PICKER_SIZE + 22,
+            100, 20, Component.nullToEmpty("")
         );
         hexField.setMaxLength(7);
         lastHexText = color.hex();
-        hexField.setText(lastHexText);
-        addDrawableChild(hexField);
-        addDrawableChild(Widgets.button(
+        hexField.setValue(lastHexText);
+        addRenderableWidget(hexField);
+        addRenderableWidget(Widgets.button(
             centerX - 104, height - 32, 100, 20,
             Texts.translatable("confluxmap.screen.waypoint.color_apply"),
             button -> apply()
         ));
-        addDrawableChild(Widgets.button(
+        addRenderableWidget(Widgets.button(
             centerX + 4, height - 32, 100, 20,
             Texts.translatable("confluxmap.screen.waypoint.cancel"),
             button -> onClose()
@@ -81,7 +79,7 @@ final class WaypointColorPickerScreen extends ConfluxScreen {
         super.tick();
         Widgets.tick(hexField);
         if (hexField != null) {
-            final String current = hexField.getText();
+            final String current = hexField.getValue();
             if (!current.equals(lastHexText)) {
                 lastHexText = current;
                 invalidHex = !color.setHex(current);
@@ -90,33 +88,25 @@ final class WaypointColorPickerScreen extends ConfluxScreen {
     }
 
     private void apply() {
-        if (hexField == null || !color.setHex(hexField.getText())) {
+        if (hexField == null || !color.setHex(hexField.getValue())) {
             invalidHex = true;
             return;
         }
         onApply.accept(color.colorArgb());
-        MinecraftAccess.setScreen(MinecraftClient.getInstance(), parent);
+        MinecraftAccess.setScreen(Minecraft.getInstance(), parent);
     }
 
     @Override
     public void onClose() {
-        MinecraftAccess.setScreen(MinecraftClient.getInstance(), parent);
+        MinecraftAccess.setScreen(Minecraft.getInstance(), parent);
     }
 
     @Override
-    //#if MC>=12109
-    //$$ public boolean mouseClicked(final Click click, final boolean doubledClick) {
-    //$$     final double mouseX = click.x();
-    //$$     final double mouseY = click.y();
-    //$$     final int button = click.button();
-    //#else
-    public boolean mouseClicked(final double mouseX, final double mouseY, final int button) {
-    //#endif
-        //#if MC>=12109
-        //$$ if (super.mouseClicked(click, doubledClick)) {
-        //#else
-        if (super.mouseClicked(mouseX, mouseY, button)) {
-        //#endif
+    public boolean mouseClicked(final MouseButtonEvent click, final boolean doubledClick) {
+        final double mouseX = click.x();
+        final double mouseY = click.y();
+        final int button = click.button();
+        if (super.mouseClicked(click, doubledClick)) {
             return true;
         }
         if (button != 0) {
@@ -136,20 +126,10 @@ final class WaypointColorPickerScreen extends ConfluxScreen {
     }
 
     @Override
-    //#if MC>=12109
-    //$$ public boolean mouseDragged(final Click click, final double deltaX, final double deltaY) {
-    //$$     final double mouseX = click.x();
-    //$$     final double mouseY = click.y();
-    //$$     final int button = click.button();
-    //#else
-    public boolean mouseDragged(
-        final double mouseX,
-        final double mouseY,
-        final int button,
-        final double deltaX,
-        final double deltaY
-    ) {
-    //#endif
+    public boolean mouseDragged(final MouseButtonEvent click, final double deltaX, final double deltaY) {
+        final double mouseX = click.x();
+        final double mouseY = click.y();
+        final int button = click.button();
         if (button == 0 && draggingPicker) {
             updatePicker(mouseX, mouseY);
             return true;
@@ -158,30 +138,18 @@ final class WaypointColorPickerScreen extends ConfluxScreen {
             updateHue(mouseY);
             return true;
         }
-        //#if MC>=12109
-        //$$ return super.mouseDragged(click, deltaX, deltaY);
-        //#else
-        return super.mouseDragged(mouseX, mouseY, button, deltaX, deltaY);
-        //#endif
+        return super.mouseDragged(click, deltaX, deltaY);
     }
 
     @Override
-    //#if MC>=12109
-    //$$ public boolean mouseReleased(final Click click) {
-    //$$     final int button = click.button();
-    //#else
-    public boolean mouseReleased(final double mouseX, final double mouseY, final int button) {
-    //#endif
+    public boolean mouseReleased(final MouseButtonEvent click) {
+        final int button = click.button();
         if (button == 0 && (draggingPicker || draggingHue)) {
             draggingPicker = false;
             draggingHue = false;
             return true;
         }
-        //#if MC>=12109
-        //$$ return super.mouseReleased(click);
-        //#else
-        return super.mouseReleased(mouseX, mouseY, button);
-        //#endif
+        return super.mouseReleased(click);
     }
 
     private void updatePicker(final double mouseX, final double mouseY) {
@@ -200,7 +168,7 @@ final class WaypointColorPickerScreen extends ConfluxScreen {
         invalidHex = false;
         if (hexField != null) {
             lastHexText = color.hex();
-            hexField.setText(lastHexText);
+            hexField.setValue(lastHexText);
         }
     }
 
@@ -302,9 +270,9 @@ final class WaypointColorPickerScreen extends ConfluxScreen {
         final int colorArgb
     ) {
         draw.drawTextWithShadow(
-            this.textRenderer,
+            this.font,
             text,
-            width / 2f - this.textRenderer.getWidth(text) / 2f,
+            width / 2f - this.font.width(text) / 2f,
             y,
             colorArgb
         );

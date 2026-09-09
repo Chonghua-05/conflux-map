@@ -52,8 +52,8 @@ for what it predicts; this file is only the build/maintenance side.
   committed `common/src/main/resources/webmap/predictor.wasm` asset.
 - `prebuilt/<target>/<libname>` - **committed** compiled binaries, so a
   contributor without a C toolchain can still build/run/test the mod; `git`
-  must not ignore this directory. `common.gradle`'s `processResources` copies
-  it into every version subproject's jar (and dev classpath) as `natives/`.
+  must not ignore this directory. `neoforge.gradle`'s `processResources` copies
+  it into each NeoForge version module's jar (and dev classpath) as `natives/`.
 
 ## Building
 

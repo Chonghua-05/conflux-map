@@ -6,7 +6,7 @@ import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentMap;
 import net.minecraft.server.MinecraftServer;
-import net.minecraft.util.WorldSavePath;
+import net.minecraft.world.level.storage.LevelResource;
 
 /**
  * Stable per-world UUID namespace for cache keys. Reads/writes {@code
@@ -30,7 +30,7 @@ public final class WorldIds {
     }
 
     private UUID loadOrGenerate(final MinecraftServer server) {
-        final Path worldRoot = server.getSavePath(WorldSavePath.ROOT);
+        final Path worldRoot = server.getWorldPath(LevelResource.ROOT);
         return Io.loadOrCreate(worldRoot);
     }
 
@@ -42,7 +42,7 @@ public final class WorldIds {
         private Io() {
         }
 
-        /** {@code worldRoot} is the directory the server resolved as {@link WorldSavePath#ROOT}. */
+        /** {@code worldRoot} is the directory the server resolved as {@link LevelResource#ROOT}. */
         public static UUID loadOrCreate(final Path worldRoot) {
             return WorldIdStore.loadOrCreate(worldRoot);
         }

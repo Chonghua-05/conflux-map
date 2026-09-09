@@ -7,11 +7,11 @@ import cn.net.rms.confluxmap.core.config.ConfigIo;
 import cn.net.rms.confluxmap.core.config.ConfluxConfig;
 import cn.net.rms.confluxmap.mc.ui.GuiDraw;
 import cn.net.rms.confluxmap.nativepredict.PlatformClassifier;
-import net.minecraft.client.MinecraftClient;
-import net.minecraft.client.gui.screen.Screen;
-import net.minecraft.client.gui.widget.ButtonWidget;
-import net.minecraft.text.OrderedText;
-import net.minecraft.text.StringVisitable;
+import net.minecraft.client.Minecraft;
+import net.minecraft.client.gui.screens.Screen;
+import net.minecraft.client.gui.components.Button;
+import net.minecraft.util.FormattedCharSequence;
+import net.minecraft.network.chat.FormattedText;
 
 /** Fullscreen warning shown before entering an officially unsupported client platform. */
 public final class UnsupportedPlatformWarningScreen extends ConfluxScreen {
@@ -25,7 +25,7 @@ public final class UnsupportedPlatformWarningScreen extends ConfluxScreen {
     private final ConfluxConfig config;
     private final ConfigIo configIo;
     private boolean dismissPermanently;
-    private ButtonWidget dismissButton;
+    private Button dismissButton;
 
     public UnsupportedPlatformWarningScreen(
         final Screen parent,
@@ -44,7 +44,7 @@ public final class UnsupportedPlatformWarningScreen extends ConfluxScreen {
     protected void init() {
         final int buttonWidth = Math.min(260, Math.max(120, width - 32));
         final int left = width / 2 - buttonWidth / 2;
-        dismissButton = addDrawableChild(Widgets.button(
+        dismissButton = addRenderableWidget(Widgets.button(
             left,
             height - 58,
             buttonWidth,
@@ -56,7 +56,7 @@ public final class UnsupportedPlatformWarningScreen extends ConfluxScreen {
             }
         ));
         updateDismissButton();
-        addDrawableChild(Widgets.button(
+        addRenderableWidget(Widgets.button(
             left,
             height - 32,
             buttonWidth,
@@ -82,7 +82,7 @@ public final class UnsupportedPlatformWarningScreen extends ConfluxScreen {
             config.unsupportedPlatformWarningDismissed = true;
             configIo.save(config);
         }
-        MinecraftAccess.setScreen(MinecraftClient.getInstance(), parent);
+        MinecraftAccess.setScreen(Minecraft.getInstance(), parent);
     }
 
     @Override
@@ -151,28 +151,28 @@ public final class UnsupportedPlatformWarningScreen extends ConfluxScreen {
     ) {
         int lineY = y;
         final int textWidth = Math.min(MAX_TEXT_WIDTH, Math.max(80, width - 32));
-        for (final OrderedText line : this.textRenderer.wrapLines(
-            StringVisitable.plain(value),
+        for (final FormattedCharSequence line : this.font.split(
+            FormattedText.of(value),
             textWidth
         )) {
             draw.drawTextWithShadow(
-                this.textRenderer,
+                this.font,
                 line,
-                width / 2f - this.textRenderer.getWidth(line) / 2f,
+                width / 2f - this.font.width(line) / 2f,
                 lineY,
                 color
             );
-            lineY += this.textRenderer.fontHeight + 1;
+            lineY += this.font.lineHeight + 1;
         }
         return lineY;
     }
 
     private void drawCentered(final GuiDraw draw, final String value, final int y, final int color) {
-        final String text = this.textRenderer.trimToWidth(value, Math.max(40, width - 32));
+        final String text = this.font.plainSubstrByWidth(value, Math.max(40, width - 32));
         draw.drawTextWithShadow(
-            this.textRenderer,
+            this.font,
             text,
-            width / 2f - this.textRenderer.getWidth(text) / 2f,
+            width / 2f - this.font.width(text) / 2f,
             y,
             color
         );

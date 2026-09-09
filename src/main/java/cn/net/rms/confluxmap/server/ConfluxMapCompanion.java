@@ -19,12 +19,14 @@ import java.time.Clock;
 import java.util.LinkedHashMap;
 import java.util.Map;
 import java.util.UUID;
-import net.fabricmc.fabric.api.event.lifecycle.v1.ServerLifecycleEvents;
-import net.fabricmc.fabric.api.event.lifecycle.v1.ServerChunkEvents;
-import net.fabricmc.fabric.api.event.lifecycle.v1.ServerTickEvents;
+import java.util.concurrent.ConcurrentLinkedQueue;
+import net.neoforged.neoforge.common.NeoForge;
+import net.neoforged.neoforge.event.level.ChunkEvent;
+import net.neoforged.neoforge.event.tick.ServerTickEvent;
 import net.minecraft.server.MinecraftServer;
-import net.minecraft.server.world.ServerWorld;
-import net.minecraft.util.WorldSavePath;
+import net.minecraft.server.level.ServerLevel;
+import net.minecraft.world.level.storage.LevelResource;
+import net.minecraft.world.level.chunk.LevelChunk;
 
 /**
  * Top-level companion service, owned by {@code ConfluxMapMod}'s {@code main} entrypoint so the
@@ -33,7 +35,7 @@ import net.minecraft.util.WorldSavePath;
  *
  * <p>State is started/stopped on {@link ServerLifecycleEvents#SERVER_STARTED} / {@link
  * ServerLifecycleEvents#SERVER_STOPPING}. Dedicated servers activate immediately; integrated
- * servers stay inert until the world is published to LAN. The global Fabric-API receivers remain
+ * servers stay inert until the world is published to LAN. NeoForge event receivers remain
  * registered so a running singleplayer world can activate without restarting.
  */
 public final class ConfluxMapCompanion {
@@ -43,13 +45,14 @@ public final class ConfluxMapCompanion {
     private final SharedWaypointNetworking sharedWaypointNetworking;
     private final UpdateCheckService updateCheck;
     private final CompanionRuntimeState runtime = new CompanionRuntimeState();
+    private final ConcurrentLinkedQueue<LevelChunk> pendingChunkLoads = new ConcurrentLinkedQueue<>();
     private volatile ServerConfig config;
     private volatile UUID instanceId;
     private volatile RegionSummaryService summaries;
     private volatile ChunkLoadStateService chunkLoadStates;
     private volatile SharedWaypointService sharedWaypoints;
     private volatile WebMapServer webMap;
-    private volatile FabricWebMapBackend webMapBackend;
+    private volatile NeoForgeWebMapBackend webMapBackend;
     private int webPlayerTicks;
     private volatile WebMapPrivacyStore webMapPrivacy;
     private final PlayerPositionBroadcastGate playerPositionBroadcast =
@@ -69,44 +72,17 @@ public final class ConfluxMapCompanion {
     }
 
     public void initialize() {
-        // Fabric global receivers and command callbacks outlive individual integrated worlds.
-        networking.register();
-        sharedWaypointNetworking.register();
-        ConfluxMapCommands.register(this);
-        ServerLifecycleEvents.SERVER_STARTING.register(this::onServerStarting);
-        ServerLifecycleEvents.SERVER_STARTED.register(this::onServerStarted);
-        ServerLifecycleEvents.SERVER_STOPPING.register(this::onServerStopping);
-        ServerLifecycleEvents.SERVER_STOPPED.register(this::onServerStopped);
-        ServerTickEvents.END_SERVER_TICK.register(this::onServerTick);
-        //#if MC>=260100
-        //$$ ServerChunkEvents.CHUNK_LOAD.register((world, chunk, generated) -> {
-        //#else
-        ServerChunkEvents.CHUNK_LOAD.register((world, chunk) -> {
-        //#endif
-            final RegionSummaryService current = summaries;
-            if (current != null && isEnabled()) {
-                current.onChunkLoad(world, chunk);
-            }
-            final ChunkLoadStateService loadStates = chunkLoadStates;
-            if (loadStates != null) {
-                loadStates.onChunkLoad(world, chunk);
-            }
-        });
-        ServerChunkEvents.CHUNK_UNLOAD.register((world, chunk) -> {
-            final RegionSummaryService current = summaries;
-            if (current != null && isEnabled()) {
-                current.onChunkUnload(world, chunk);
-            }
-            final ChunkLoadStateService loadStates = chunkLoadStates;
-            if (loadStates != null) {
-                loadStates.onChunkUnload(world, chunk);
-            }
-        });
-        ConfluxMapMod.LOGGER.info("companion initialized");
+        networking.register(); sharedWaypointNetworking.register(); ConfluxMapCommands.register(this);
+        NeoForge.EVENT_BUS.addListener((net.neoforged.neoforge.event.server.ServerAboutToStartEvent e) -> onServerStarting(e.getServer()));
+        NeoForge.EVENT_BUS.addListener((net.neoforged.neoforge.event.server.ServerStartedEvent e) -> onServerStarted(e.getServer()));
+        NeoForge.EVENT_BUS.addListener((net.neoforged.neoforge.event.server.ServerStoppingEvent e) -> onServerStopping(e.getServer()));
+        NeoForge.EVENT_BUS.addListener((net.neoforged.neoforge.event.server.ServerStoppedEvent e) -> onServerStopped(e.getServer()));
+        NeoForge.EVENT_BUS.addListener((ServerTickEvent.Post e) -> onServerTick(e.getServer()));
+        NeoForge.EVENT_BUS.addListener((ChunkEvent.Load e) -> { if (e.getChunk() instanceof LevelChunk c) pendingChunkLoads.add(c); });
+        NeoForge.EVENT_BUS.addListener((ChunkEvent.Unload e) -> { if (e.getChunk() instanceof LevelChunk c) pendingChunkLoads.remove(c); });
     }
-
-    private void onServerTick(final MinecraftServer server) {
-        activateIfNeeded(server);
+        private void onServerTick(final MinecraftServer server) {
+        activateIfNeeded(server); while(!pendingChunkLoads.isEmpty()){ LevelChunk c=pendingChunkLoads.poll(); if(c.getLevel() instanceof ServerLevel w){ if(summaries!=null&&isEnabled()) summaries.onChunkLoad(w,c); if(chunkLoadStates!=null) chunkLoadStates.onChunkLoad(w,c); }}
         final RegionSummaryService current = summaries;
         if (current != null && isEnabled()) {
             current.tick(server);
@@ -118,7 +94,7 @@ public final class ConfluxMapCompanion {
         if (playerPositionBroadcast.tick(isEnabled() && config.allowEntityRadar)) {
             networking.broadcastPlayerPositions(server);
         }
-        final FabricWebMapBackend currentWebBackend = webMapBackend;
+        final NeoForgeWebMapBackend currentWebBackend = webMapBackend;
         if (currentWebBackend != null && (config.webMap.sharePlayers || sharedWaypointsEnabled())
             && ++webPlayerTicks >= 40) {
             webPlayerTicks = 0;
@@ -144,7 +120,7 @@ public final class ConfluxMapCompanion {
     private void onServerStarted(final MinecraftServer server) {
         // Console-only notice, dedicated servers only: on an integrated server the client
         // entrypoint already runs its own check and notifies in-game.
-        if (server.isDedicated() && config.checkForUpdates) {
+        if (server.isDedicatedServer() && config.checkForUpdates) {
             updateCheck.checkAsync(info -> ConfluxMapMod.LOGGER.warn(
                 "Conflux Map {} is available (installed {}). Download: {}",
                 info.latestVersion(), info.currentVersion(), info.releaseUrl()
@@ -154,7 +130,7 @@ public final class ConfluxMapCompanion {
             ConfluxMapMod.LOGGER.info("companion disabled by server.json (enabled=false); no HELLO replies");
             return;
         }
-        activateIfNeeded(server);
+        activateIfNeeded(server); while(!pendingChunkLoads.isEmpty()){ LevelChunk c=pendingChunkLoads.poll(); if(c.getLevel() instanceof ServerLevel w){ if(summaries!=null&&isEnabled()) summaries.onChunkLoad(w,c); if(chunkLoadStates!=null) chunkLoadStates.onChunkLoad(w,c); }}
         if (!runtime.isActive()) {
             ConfluxMapMod.LOGGER.info(
                 "companion inactive in local singleplayer; publishing to LAN will activate it"
@@ -337,14 +313,14 @@ public final class ConfluxMapCompanion {
 
     private SharedWaypointService loadSharedWaypoints(final MinecraftServer server) {
         final SharedWaypointIo io = new SharedWaypointIo(
-            server.getSavePath(WorldSavePath.ROOT), instanceId().toString(), ConfluxMapMod.LOGGER
+            server.getWorldPath(LevelResource.ROOT), instanceId().toString(), ConfluxMapMod.LOGGER
         );
         try {
             final Map<DimensionId, SharedWaypointValidator.HeightRange> dimensions = new LinkedHashMap<>();
-            for (final ServerWorld world : server.getWorlds()) {
+            for (final ServerLevel world : server.getAllLevels()) {
                 dimensions.put(
-                    DimensionId.parse(world.getRegistryKey().getValue().toString()),
-                    new SharedWaypointValidator.HeightRange(world.getBottomY(), world.getTopY())
+                    DimensionId.parse(world.dimension().identifier().toString()),
+                    new SharedWaypointValidator.HeightRange(world.getMinY(), world.getMaxY())
                 );
             }
             final SharedWaypointValidator validator = new SharedWaypointValidator(dimensions);
@@ -383,16 +359,16 @@ public final class ConfluxMapCompanion {
     }
 
     private void activateIfNeeded(final MinecraftServer server) {
-        if (!runtime.activateIfAllowed(config.enabled, server.isDedicated(), server.getServerPort())) {
+        if (!runtime.activateIfAllowed(config.enabled, server.isDedicatedServer(), server.getPort())) {
             return;
         }
         summaries = new RegionSummaryService(config);
         ServerChunkDirtyHandler.bind(summaries);
         // Corrections can use the same predictor as the client when a bundled native exists;
         // failure is non-fatal and RegionSummaryService falls back to absolute samples.
-        NativeLib.init(server.getSavePath(WorldSavePath.ROOT).resolve("confluxmap"));
+        NativeLib.init(server.getWorldPath(LevelResource.ROOT).resolve("confluxmap"));
         webMapPrivacy = new WebMapPrivacyStore(
-            server.getSavePath(WorldSavePath.ROOT).resolve("confluxmap/webmap-hidden.txt")
+            server.getWorldPath(LevelResource.ROOT).resolve("confluxmap/webmap-hidden.txt")
         );
         try {
             webMapPrivacy.load();
@@ -404,7 +380,7 @@ public final class ConfluxMapCompanion {
         }
         if (config.webMap.enabled) {
             try {
-                webMapBackend = new FabricWebMapBackend(server, this);
+                webMapBackend = new NeoForgeWebMapBackend(server, this);
                 webMap = WebMapServer.start(config.webMap, webMapBackend);
                 ConfluxMapMod.LOGGER.info(
                     "web map listening on {}:{}",

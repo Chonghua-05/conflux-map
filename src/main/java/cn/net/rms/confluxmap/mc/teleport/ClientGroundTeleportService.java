@@ -7,24 +7,24 @@ import cn.net.rms.confluxmap.core.model.DimensionId;
 import cn.net.rms.confluxmap.core.model.WorldIdentity;
 import cn.net.rms.confluxmap.core.util.TileMath;
 import java.util.OptionalInt;
-import net.fabricmc.fabric.api.client.event.lifecycle.v1.ClientTickEvents;
-import net.minecraft.client.MinecraftClient;
-import net.minecraft.client.world.ClientWorld;
-import net.minecraft.world.Heightmap;
-import net.minecraft.world.chunk.ChunkStatus;
-import net.minecraft.world.chunk.WorldChunk;
+import cn.net.rms.confluxmap.neoforge.compat.ClientTickEvents;
+import net.minecraft.client.Minecraft;
+import net.minecraft.client.multiplayer.ClientLevel;
+import net.minecraft.world.level.levelgen.Heightmap;
+import net.minecraft.world.level.chunk.status.ChunkStatus;
+import net.minecraft.world.level.chunk.LevelChunk;
 
 /** Pure-client two-stage teleport that resolves the final ground height from the loaded target chunk. */
 public final class ClientGroundTeleportService {
     static final int STAGING_HEADROOM = 32;
     private static final int MAX_WAIT_TICKS = 200;
 
-    private final MinecraftClient client;
+    private final Minecraft client;
     private final ConfluxConfig config;
     private Pending pending;
 
     public ClientGroundTeleportService(
-        final MinecraftClient client,
+        final Minecraft client,
         final ConfluxConfig config
     ) {
         this.client = client;
@@ -47,7 +47,7 @@ public final class ClientGroundTeleportService {
         final DimensionId dimension,
         final WorldIdentity worldIdentity
     ) {
-        if (client.world == null || client.player == null) {
+        if (client.level == null || client.player == null) {
             return;
         }
         pending = null;
@@ -66,7 +66,7 @@ public final class ClientGroundTeleportService {
         final WorldIdentity worldIdentity,
         final boolean direct
     ) {
-        final ClientWorld world = client.world;
+        final ClientLevel world = client.level;
         if (world == null || client.player == null) {
             return;
         }
@@ -97,7 +97,7 @@ public final class ClientGroundTeleportService {
         );
         sendCommand(
             centered(blockX),
-            stagingY(estimatedPlayerY, world.getBottomY(), world.getTopY()),
+            stagingY(estimatedPlayerY, world.getMinY(), world.getMaxY()),
             centered(blockZ),
             dimension,
             worldIdentity
@@ -109,7 +109,7 @@ public final class ClientGroundTeleportService {
         if (current == null) {
             return;
         }
-        if (client.world != current.world() || client.player == null) {
+        if (client.level != current.world() || client.player == null) {
             pending = null;
             return;
         }
@@ -147,22 +147,22 @@ public final class ClientGroundTeleportService {
     }
 
     private static GroundSample sampleGround(
-        final ClientWorld world,
+        final ClientLevel world,
         final int blockX,
         final int blockZ
     ) {
-        final WorldChunk chunk = (WorldChunk) world.getChunkManager().getChunk(
+        final LevelChunk chunk = (LevelChunk) world.getChunkSource().getChunk(
             TileMath.blockToChunk(blockX), TileMath.blockToChunk(blockZ), ChunkStatus.FULL, false
         );
         if (chunk == null) {
             return new GroundSample(false, OptionalInt.empty());
         }
-        final int height = chunk.sampleHeightmap(
-            Heightmap.Type.MOTION_BLOCKING,
+        final int height = chunk.getHeight(
+            Heightmap.Types.MOTION_BLOCKING,
             Math.floorMod(blockX, 16),
             Math.floorMod(blockZ, 16)
         );
-        return new GroundSample(true, groundY(height, world.getBottomY(), world.getTopY()));
+        return new GroundSample(true, groundY(height, world.getMinY(), world.getMaxY()));
     }
 
     static int stagingY(
@@ -220,7 +220,7 @@ public final class ClientGroundTeleportService {
     }
 
     private record Pending(
-        ClientWorld world,
+        ClientLevel world,
         int blockX,
         int blockZ,
         double returnX,

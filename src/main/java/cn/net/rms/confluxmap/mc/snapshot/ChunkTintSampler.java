@@ -3,11 +3,11 @@ package cn.net.rms.confluxmap.mc.snapshot;
 import cn.net.rms.confluxmap.compat.MinecraftAccess;
 import cn.net.rms.confluxmap.core.color.BiomeSampleWindow;
 import cn.net.rms.confluxmap.mc.color.BiomeTintResolver;
-import net.minecraft.block.BlockState;
-import net.minecraft.client.MinecraftClient;
-import net.minecraft.client.world.ClientWorld;
-import net.minecraft.util.math.BlockPos;
-import net.minecraft.world.chunk.ChunkStatus;
+import net.minecraft.world.level.block.state.BlockState;
+import net.minecraft.client.Minecraft;
+import net.minecraft.client.multiplayer.ClientLevel;
+import net.minecraft.core.BlockPos;
+import net.minecraft.world.level.chunk.status.ChunkStatus;
 
 /**
  * Resolves biome tints for one chunk at a time, keeping every sample position inside the
@@ -26,22 +26,22 @@ import net.minecraft.world.chunk.ChunkStatus;
  * loaded data. Main thread only, like the factory that owns it.
  */
 final class ChunkTintSampler {
-    private final MinecraftClient client;
+    private final Minecraft client;
     private final BiomeTintResolver resolver;
-    private final BlockPos.Mutable samplePos = new BlockPos.Mutable();
+    private final BlockPos.MutableBlockPos samplePos = new BlockPos.MutableBlockPos();
 
     private BiomeSampleWindow window = BiomeSampleWindow.FULL;
     private BiomeSampleWindow biomeIdentityWindow = BiomeSampleWindow.FULL;
     private int baseX;
     private int baseZ;
 
-    ChunkTintSampler(final MinecraftClient client, final BiomeTintResolver resolver) {
+    ChunkTintSampler(final Minecraft client, final BiomeTintResolver resolver) {
         this.client = client;
         this.resolver = resolver;
     }
 
     /** Points the sampler at a chunk, deriving its window from which neighbours are loaded. */
-    void beginChunk(final ClientWorld world, final int chunkX, final int chunkZ) {
+    void beginChunk(final ClientLevel world, final int chunkX, final int chunkZ) {
         baseX = chunkX << 4;
         baseZ = chunkZ << 4;
         final int blendRadius = MinecraftAccess.biomeBlendRadius(client);
@@ -74,7 +74,7 @@ final class ChunkTintSampler {
     }
 
     /** The tint for {@code state}, sampled at the window-clamped column of the given position. */
-    int resolve(final BlockState state, final ClientWorld world, final int worldX, final int y, final int worldZ) {
+    int resolve(final BlockState state, final ClientLevel world, final int worldX, final int y, final int worldZ) {
         samplePos.set(
             baseX + window.clampLocalX(worldX - baseX),
             y,
@@ -83,7 +83,7 @@ final class ChunkTintSampler {
         return resolver.resolve(state, world, samplePos);
     }
 
-    static boolean loaded(final ClientWorld world, final int chunkX, final int chunkZ) {
-        return world.getChunkManager().getChunk(chunkX, chunkZ, ChunkStatus.FULL, false) != null;
+    static boolean loaded(final ClientLevel world, final int chunkX, final int chunkZ) {
+        return world.getChunkSource().getChunk(chunkX, chunkZ, ChunkStatus.FULL, false) != null;
     }
 }

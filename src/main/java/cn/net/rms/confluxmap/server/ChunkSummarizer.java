@@ -4,7 +4,7 @@ import cn.net.rms.confluxmap.core.model.SurfaceKind;
 import cn.net.rms.confluxmap.core.net.SummaryCodec;
 import cn.net.rms.confluxmap.core.predict.CubiomesBiomeIds;
 import cn.net.rms.confluxmap.nativepredict.NativeChunkNbtScanner;
-import net.minecraft.nbt.NbtCompound;
+import net.minecraft.nbt.CompoundTag;
 
 /** Converts a narrow column source into a cheap surface-only chunk summary. */
 public final class ChunkSummarizer {
@@ -31,7 +31,7 @@ public final class ChunkSummarizer {
         this.columns = new ChunkColumnSummarizer(this.mapColors);
     }
 
-    public SummaryCodec.Chunk summarize(final NbtCompound root) {
+    public SummaryCodec.Chunk summarize(final CompoundTag root) {
         return summarize(new NbtChunkColumnSource(root));
     }
 
@@ -39,7 +39,7 @@ public final class ChunkSummarizer {
         return columns.summarize(source);
     }
 
-    SummaryCodec.SampledChunk summarizeForLod(final NbtCompound root, final int lod) {
+    SummaryCodec.SampledChunk summarizeForLod(final CompoundTag root, final int lod) {
         return summarizeForLod(new NbtChunkColumnSource(root), lod);
     }
 

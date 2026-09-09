@@ -21,25 +21,23 @@ import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.Executor;
 import java.util.function.IntBinaryOperator;
-import net.fabricmc.fabric.api.client.event.lifecycle.v1.ClientTickEvents;
-import net.minecraft.client.MinecraftClient;
-import net.minecraft.client.network.AbstractClientPlayerEntity;
-import net.minecraft.client.network.PlayerListEntry;
-import net.minecraft.client.render.entity.EntityRenderer;
-import net.minecraft.client.render.entity.LivingEntityRenderer;
-import net.minecraft.client.render.entity.model.EntityModel;
-import net.minecraft.client.texture.NativeImage;
-//#if MC>=12103
-//$$ import net.minecraft.client.render.entity.state.LivingEntityRenderState;
-//$$ import net.minecraft.client.render.entity.state.TropicalFishEntityRenderState;
-//#endif
-import net.minecraft.client.util.math.MatrixStack;
-import net.minecraft.entity.Entity;
-import net.minecraft.entity.LivingEntity;
-import net.minecraft.entity.passive.PufferfishEntity;
-import net.minecraft.entity.passive.TropicalFishEntity;
-import net.minecraft.resource.ResourceManager;
-import net.minecraft.util.Identifier;
+import cn.net.rms.confluxmap.neoforge.compat.ClientTickEvents;
+import net.minecraft.client.Minecraft;
+import net.minecraft.client.player.AbstractClientPlayer;
+import net.minecraft.client.multiplayer.PlayerInfo;
+import net.minecraft.client.renderer.entity.EntityRenderer;
+import net.minecraft.client.renderer.entity.LivingEntityRenderer;
+import net.minecraft.client.model.EntityModel;
+import com.mojang.blaze3d.platform.NativeImage;
+import net.minecraft.client.renderer.entity.state.LivingEntityRenderState;
+import net.minecraft.client.renderer.entity.state.TropicalFishRenderState;
+import com.mojang.blaze3d.vertex.PoseStack;
+import net.minecraft.world.entity.Entity;
+import net.minecraft.world.entity.LivingEntity;
+import net.minecraft.world.entity.animal.fish.Pufferfish;
+import net.minecraft.world.entity.animal.fish.TropicalFish;
+import net.minecraft.server.packs.resources.ResourceManager;
+import net.minecraft.resources.Identifier;
 
 /**
  * Render-thread facade for radar portraits. Player faces remain direct skin crops; every living
@@ -134,11 +132,11 @@ public final class EntityIconManager implements AutoCloseable {
         ClientTickEvents.END_CLIENT_TICK.register(this::tick);
     }
 
-    private void tick(final MinecraftClient client) {
+    private void tick(final Minecraft client) {
         assert RenderSystem.isOnRenderThread() : "EntityIconManager.tick() must run on the render thread";
         clock++;
         textureLoader.poll().ifPresent(result -> finishBake(client, result));
-        if (client.world == null) {
+        if (client.level == null) {
             return;
         }
         cache.pollNext(clock).ifPresent(key -> bakeOne(client, key, clock));
@@ -146,19 +144,19 @@ public final class EntityIconManager implements AutoCloseable {
 
     /** Returns a ready portrait or null while its first distinct appearance is queued/failed. */
     public FaceIcon iconFor(final Entity entity) {
-        if (entity instanceof AbstractClientPlayerEntity) {
-            return playerIcon((AbstractClientPlayerEntity) entity);
+        if (entity instanceof AbstractClientPlayer) {
+            return playerIcon((AbstractClientPlayer) entity);
         }
         if (!(entity instanceof LivingEntity)) {
             return null;
         }
         final LivingEntity living = (LivingEntity) entity;
-        final UUID entityId = entity.getUuid();
+        final UUID entityId = entity.getUUID();
         ObservedPortrait observed = observedPortraits.get(entityId);
         if (observed == null || clock - observed.checkedAt() >= VARIANT_CHECK_TICKS) {
             PortraitKey key = observed == null ? null : observed.key();
             try {
-                final PortraitKey resolved = resolvePortrait(MinecraftClient.getInstance(), living, 0f);
+                final PortraitKey resolved = resolvePortrait(Minecraft.getInstance(), living, 0f);
                 if (resolved != null) {
                     key = resolved;
                 }
@@ -188,21 +186,15 @@ public final class EntityIconManager implements AutoCloseable {
 
     /** Resolves a server-synchronized player portrait without requiring a loaded entity. */
     public FaceIcon iconForPlayer(final UUID playerId) {
-        final MinecraftClient client = MinecraftClient.getInstance();
-        if (client.getNetworkHandler() == null) {
+        final Minecraft client = Minecraft.getInstance();
+        if (client.getConnection() == null) {
             return null;
         }
-        final PlayerListEntry player = client.getNetworkHandler().getPlayerListEntry(playerId);
+        final PlayerInfo player = client.getConnection().getPlayerInfo(playerId);
         if (player == null) {
             return null;
         }
-        //#if MC>=12109
-        //$$ final Identifier skin = player.getSkinTextures().body().texturePath();
-        //#elseif MC>=12100
-        //$$ final Identifier skin = player.getSkinTextures().texture();
-        //#else
-        final Identifier skin = player.getSkinTexture();
-        //#endif
+        final Identifier skin = player.getSkin().body().texturePath();
         return playerIcon(skin);
     }
 
@@ -233,17 +225,13 @@ public final class EntityIconManager implements AutoCloseable {
     }
 
     private void bakeOne(
-        final MinecraftClient client,
+        final Minecraft client,
         final PortraitKey key,
         final long now
     ) {
         final WeakReference<LivingEntity> reference = liveEntities.get(key);
         final LivingEntity entity = reference == null ? null : reference.get();
-        //#if MC>=12108 && MC<12109
-        //$$ final boolean wrongWorld = entity == null || entity.getWorld() != client.world;
-        //#else
-        final boolean wrongWorld = entity == null || entity.getEntityWorld() != client.world;
-        //#endif
+        final boolean wrongWorld = entity == null || entity.level() != client.level;
         if (entity == null || wrongWorld) {
             cache.fail(key, now);
             liveEntities.remove(key);
@@ -273,7 +261,7 @@ public final class EntityIconManager implements AutoCloseable {
     }
 
     private void finishBake(
-        final MinecraftClient client,
+        final Minecraft client,
         final PortraitTextureLoader.Result<TextureRequest> result
     ) {
         final TextureRequest request = result.key();
@@ -283,11 +271,7 @@ public final class EntityIconManager implements AutoCloseable {
         final PortraitKey key = request.key();
         final WeakReference<LivingEntity> reference = liveEntities.get(key);
         final LivingEntity entity = reference == null ? null : reference.get();
-        //#if MC>=12108 && MC<12109
-        //$$ final boolean wrongWorld = entity == null || entity.getWorld() != client.world;
-        //#else
-        final boolean wrongWorld = entity == null || entity.getEntityWorld() != client.world;
-        //#endif
+        final boolean wrongWorld = entity == null || entity.level() != client.level;
         if (entity == null || wrongWorld) {
             cache.fail(key, clock);
             liveEntities.remove(key);
@@ -312,7 +296,7 @@ public final class EntityIconManager implements AutoCloseable {
     }
 
     private void completeBake(
-        final MinecraftClient client,
+        final Minecraft client,
         final PortraitKey key,
         final float[] geometry,
         final int[] visibleBounds,
@@ -330,7 +314,7 @@ public final class EntityIconManager implements AutoCloseable {
 
     @SuppressWarnings({"rawtypes", "unchecked"})
     private PortraitKey resolvePortrait(
-        final MinecraftClient client,
+        final Minecraft client,
         final LivingEntity entity,
         final float tickDelta
     ) {
@@ -341,38 +325,19 @@ public final class EntityIconManager implements AutoCloseable {
         final LivingEntityRenderer livingRenderer = (LivingEntityRenderer) renderer;
         final EntityModel model;
         final Identifier texture;
-        //#if MC>=12103
-        //$$ final LivingEntityRenderState state = (LivingEntityRenderState) renderer.getAndUpdateRenderState(entity, tickDelta);
-        //$$ model = portraitModel(livingRenderer, entity, state);
-        //$$ texture = livingRenderer.getTexture(state);
-        //#else
-        model = portraitModel(livingRenderer, entity);
-        texture = renderer.getTexture(entity);
-        //#endif
+        final LivingEntityRenderState state = (LivingEntityRenderState) renderer.createRenderState(entity, tickDelta);
+        model = portraitModel(livingRenderer, entity, state);
+        texture = livingRenderer.getTextureLocation(state);
         if (texture == null) {
             return null;
         }
         final TropicalFishPortrait.Appearance appearance;
-        if (entity instanceof TropicalFishEntity) {
-            final TropicalFishEntity fish = (TropicalFishEntity) entity;
-            //#if MC>=12103
-            //$$ final TropicalFishEntityRenderState fishState = (TropicalFishEntityRenderState) state;
-            //$$ appearance = TropicalFishPortrait.appearance(
-            //$$     fishState.variety.asString(), fishState.baseColor, fishState.patternColor
-            //$$ );
-            //#elseif MC>=11903
-            //$$ appearance = TropicalFishPortrait.appearance(
-            //$$     fish.getVariant().asString(),
-            //$$     fish.getBaseColorComponents().getColorComponents(),
-            //$$     fish.getPatternColorComponents().getColorComponents()
-            //$$ );
-            //#else
+        if (entity instanceof TropicalFish) {
+            final TropicalFish fish = (TropicalFish) entity;
+            final TropicalFishRenderState fishState = (TropicalFishRenderState) state;
             appearance = TropicalFishPortrait.appearance(
-                fish.getVarietyId(),
-                fish.getBaseColorComponents(),
-                fish.getPatternColorComponents()
+                fishState.pattern.getSerializedName(), fishState.baseColor, fishState.patternColor
             );
-            //#endif
         } else {
             appearance = new TropicalFishPortrait.Appearance(null, 0xFFFFFFFF, 0xFFFFFFFF);
         }
@@ -387,7 +352,7 @@ public final class EntityIconManager implements AutoCloseable {
     }
 
     private AtlasSprite bake(
-        final MinecraftClient client,
+        final Minecraft client,
         final PortraitKey key,
         final AtlasSprite current,
         final float[] geometry,
@@ -403,7 +368,7 @@ public final class EntityIconManager implements AutoCloseable {
         final AtlasSprite cropped = cropSprite(sprite, geometry, visibleBounds, visibleArea);
         translate(geometry, column * CELL_PX, row * CELL_PX);
 
-        final MatrixStack matrices = new MatrixStack();
+        final PoseStack matrices = new PoseStack();
         matrices.translate(0f, 0f, OffscreenCanvas.atlasDrawPlaneZ());
         colorAtlas.beginPreserving(ATLAS_PX);
         try {
@@ -426,74 +391,36 @@ public final class EntityIconManager implements AutoCloseable {
         }
         return cropped;
     }
-
-    //#if MC>=12103
-    //$$ private static EntityModel portraitModel(
-    //$$     final LivingEntityRenderer renderer,
-    //$$     final LivingEntity entity,
-    //$$     final LivingEntityRenderState state
-    //$$ ) {
-    //$$     if (renderer instanceof TropicalFishEntityRendererAccessor
-    //$$         && entity instanceof TropicalFishEntity) {
-    //$$         final TropicalFishEntityRendererAccessor fish =
-    //$$             (TropicalFishEntityRendererAccessor) renderer;
-    //$$         final TropicalFishEntityRenderState fishState =
-    //$$             (TropicalFishEntityRenderState) state;
-    //$$         return (EntityModel) (fishState.variety.getSize() == TropicalFishEntity.Size.SMALL
-    //$$             ? fish.confluxmap$getSmallModel()
-    //$$             : fish.confluxmap$getLargeModel());
-    //$$     }
-    //$$     if (renderer instanceof PufferfishEntityRendererAccessor
-    //$$         && entity instanceof PufferfishEntity) {
-    //$$         return pufferfishModel(
-    //$$             (PufferfishEntityRendererAccessor) renderer,
-    //$$             ((PufferfishEntity) entity).getPuffState()
-    //$$         );
-    //$$     }
-    //$$     if (!(renderer instanceof AgeableMobEntityRendererAccessor)) {
-    //$$         return (EntityModel) renderer.getModel();
-    //$$     }
-    //$$     final AgeableMobEntityRendererAccessor ageable = (AgeableMobEntityRendererAccessor) renderer;
-    //#if MC>=260100
-    //$$     return (EntityModel) (state.isBaby
-    //#else
-    //$$     return (EntityModel) (state.baby
-    //#endif
-    //$$         ? ageable.confluxmap$getBabyModel()
-    //$$         : ageable.confluxmap$getAdultModel());
-    //$$ }
-    //#endif
-
-    //#if MC<12103
     private static EntityModel portraitModel(
         final LivingEntityRenderer renderer,
-        final LivingEntity entity
+        final LivingEntity entity,
+        final LivingEntityRenderState state
     ) {
         if (renderer instanceof TropicalFishEntityRendererAccessor
-            && entity instanceof TropicalFishEntity) {
+            && entity instanceof TropicalFish) {
             final TropicalFishEntityRendererAccessor fish =
                 (TropicalFishEntityRendererAccessor) renderer;
-            final TropicalFishEntity tropicalFish = (TropicalFishEntity) entity;
-            //#if MC>=11903
-            //$$ final boolean small = tropicalFish.getVariant().getSize()
-            //$$     == TropicalFishEntity.Size.SMALL;
-            //#else
-            final boolean small = tropicalFish.getShape() == 0;
-            //#endif
-            return (EntityModel) (small
+            final TropicalFishRenderState fishState =
+                (TropicalFishRenderState) state;
+            return (EntityModel) (fishState.pattern.base() == TropicalFish.Base.SMALL
                 ? fish.confluxmap$getSmallModel()
                 : fish.confluxmap$getLargeModel());
         }
         if (renderer instanceof PufferfishEntityRendererAccessor
-            && entity instanceof PufferfishEntity) {
+            && entity instanceof Pufferfish) {
             return pufferfishModel(
                 (PufferfishEntityRendererAccessor) renderer,
-                ((PufferfishEntity) entity).getPuffState()
+                ((Pufferfish) entity).getPuffState()
             );
         }
-        return (EntityModel) renderer.getModel();
+        if (!(renderer instanceof AgeableMobEntityRendererAccessor)) {
+            return (EntityModel) renderer.getModel();
+        }
+        final AgeableMobEntityRendererAccessor ageable = (AgeableMobEntityRendererAccessor) renderer;
+        return (EntityModel) (state.isBaby
+            ? ageable.confluxmap$getBabyModel()
+            : ageable.confluxmap$getAdultModel());
     }
-    //#endif
 
     private static EntityModel pufferfishModel(
         final PufferfishEntityRendererAccessor renderer,
@@ -725,14 +652,8 @@ public final class EntityIconManager implements AutoCloseable {
         );
     }
 
-    private static FaceIcon playerIcon(final AbstractClientPlayerEntity player) {
-        //#if MC>=12109
-        //$$ final Identifier skin = player.getSkin().body().texturePath();
-        //#elseif MC>=12100
-        //$$ final Identifier skin = player.getSkinTextures().texture();
-        //#else
-        final Identifier skin = player.getSkinTexture();
-        //#endif
+    private static FaceIcon playerIcon(final AbstractClientPlayer player) {
+        final Identifier skin = player.getSkin().body().texturePath();
         return playerIcon(skin);
     }
 

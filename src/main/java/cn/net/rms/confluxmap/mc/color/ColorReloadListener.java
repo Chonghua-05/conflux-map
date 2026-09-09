@@ -2,21 +2,21 @@ package cn.net.rms.confluxmap.mc.color;
 
 import cn.net.rms.confluxmap.ConfluxMapMod;
 import cn.net.rms.confluxmap.compat.Ids;
-import net.fabricmc.fabric.api.resource.SimpleSynchronousResourceReloadListener;
-import net.minecraft.client.MinecraftClient;
-import net.minecraft.resource.ResourceManager;
-import net.minecraft.util.Identifier;
+import cn.net.rms.confluxmap.neoforge.compat.SimpleSynchronousResourceReloadListener;
+import net.minecraft.client.Minecraft;
+import net.minecraft.server.packs.resources.ResourceManager;
+import net.minecraft.resources.Identifier;
 
 /** Clears captured material samples and rebuilds prediction material profiles after a resource reload. */
 public final class ColorReloadListener implements SimpleSynchronousResourceReloadListener {
     private static final Identifier ID = Ids.of(ConfluxMapMod.ID, "sprite_color_cache");
 
-    private final MinecraftClient client;
+    private final Minecraft client;
     private final SpriteColorSampler sampler;
     private final Runnable afterReload;
 
     public ColorReloadListener(
-        final MinecraftClient client,
+        final Minecraft client,
         final SpriteColorSampler sampler,
         final Runnable afterReload
     ) {
@@ -26,12 +26,12 @@ public final class ColorReloadListener implements SimpleSynchronousResourceReloa
     }
 
     @Override
-    public Identifier getFabricId() {
+    public Identifier getId() {
         return ID;
     }
 
     @Override
-    public void reload(final ResourceManager manager) {
+    public void onResourceManagerReload(final ResourceManager manager) {
         sampler.clearCache();
         client.execute(afterReload);
     }
