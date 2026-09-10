@@ -62,7 +62,12 @@ jobs:
       - name: Build Folia companion
         env:
           PLUGIN_VERSION: ${{ steps.release.outputs.plugin_version }}
-        run: ./gradlew "-Pversion=$PLUGIN_VERSION" :paper:build
+        run: >-
+          ./gradlew "-Pversion=$PLUGIN_VERSION"
+          :paper:jar
+          :paper:checkFoliaCompat
+          :paper:checkPaperIsolation
+          :paper:compileLatestPaperJava
       - name: Prepare release files
         env:
           PLUGIN_VERSION: ${{ steps.release.outputs.plugin_version }}
