@@ -24,7 +24,7 @@ import java.util.concurrent.CompletableFuture;
 import java.util.function.Consumer;
 import org.bukkit.Bukkit;
 
-/** Paper main-thread adapter for the shared HTTP transport. */
+/** Paper adapter for the shared HTTP transport. */
 final class PaperWebMapBackend implements WebMapBackend {
     private final ConfluxMapPaperPlugin plugin;
     private final PaperCompanion companion;

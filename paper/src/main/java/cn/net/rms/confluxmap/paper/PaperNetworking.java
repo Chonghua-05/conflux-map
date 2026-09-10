@@ -87,7 +87,7 @@ final class PaperNetworking implements PluginMessageListener {
         messages.confirm(messages.recipient(plugin, player), channel);
         if (!Bukkit.isPrimaryThread()) {
             // Correction state lives in common/ and is not thread safe, so the payload is handled
-            // on the global region exactly as it used to be handled on the Bukkit main thread.
+            // on the global region, which owns the shared correction state.
             PaperPlatform.global(
                 plugin,
                 () -> receive(player.getUniqueId(), stablePayload)

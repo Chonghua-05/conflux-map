@@ -10,17 +10,15 @@ import org.bukkit.plugin.Plugin;
 /**
  * Region-aware scheduling entry points for the Paper companion.
  *
- * <p>Every call reaches the {@code io.papermc.paper.threadedregions} schedulers, which Paper
- * implements even when it is not running a regionised world: on a standard Paper server the
- * global region scheduler resolves to the main thread and the region scheduler simply runs the
- * task there too. That is why this module keeps a single scheduling path instead of branching
- * per platform.
+ * <p>Every call reaches the {@code io.papermc.paper.threadedregions} schedulers. Keeping all
+ * platform scheduling in this class makes the ownership rules explicit and prevents callers from
+ * accidentally reaching an incompatible scheduler.
  *
  * <p>The three thread scopes below are the only ones the companion is allowed to use:
  * <ul>
  *   <li><b>Global</b> — owns the correction service, invalidation publishers and every
  *       subscription table. Those live in {@code common/} and are not thread safe, so they must
- *       stay on one logical thread, exactly as they did on the Bukkit main thread.</li>
+ *       stay on one logical thread.</li>
  *   <li><b>Region</b> — owns chunks. Snapshots and load levels may only be read here.</li>
  *   <li><b>Entity</b> — owns players, and follows them across regions.</li>
  * </ul>
@@ -43,7 +41,7 @@ final class PaperPlatform {
         return Bukkit.getGlobalRegionScheduler().runAtFixedRate(plugin, tick, 1L, 1L);
     }
 
-    /** Runs {@code task} on the global region, which is the main thread on standard Paper. */
+    /** Runs {@code task} on the global region that owns shared companion state. */
     static void global(final Plugin plugin, final Runnable task) {
         Bukkit.getGlobalRegionScheduler().execute(plugin, task);
     }

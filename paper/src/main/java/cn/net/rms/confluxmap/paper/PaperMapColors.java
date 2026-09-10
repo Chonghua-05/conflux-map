@@ -7,7 +7,7 @@ import org.bukkit.Bukkit;
 import org.bukkit.Material;
 import org.bukkit.block.data.BlockData;
 
-/** Immutable main-thread snapshot of Bukkit block map colors for asynchronous Anvil scans. */
+/** Immutable Bukkit block-color snapshot captured during server startup for asynchronous scans. */
 final class PaperMapColors {
     private final Map<String, Integer> colors;
 

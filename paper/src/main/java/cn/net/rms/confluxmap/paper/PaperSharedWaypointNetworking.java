@@ -57,7 +57,7 @@ final class PaperSharedWaypointNetworking implements PluginMessageListener {
         messages.confirm(messages.recipient(plugin, player), channel);
         if (!Bukkit.isPrimaryThread()) {
             // Session and waypoint state live in common/ and are not thread safe, so the payload
-            // is handled on the global region exactly as it used to be on the Bukkit main thread.
+            // is handled on the global region, which owns the shared waypoint state.
             PaperPlatform.global(plugin, () -> receive(player.getUniqueId(), stable));
             return;
         }
