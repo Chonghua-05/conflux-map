@@ -121,7 +121,8 @@ Chat coordinate sharing requires no server companion and works on any server.
 With the companion installed, the whole server shares one live map and one waypoint list.
 
 - Fabric server: place the matching JAR into `mods/`.
-- Paper server: place `confluxmap-paper-<version>.jar` into `plugins/` (Paper 1.21.1 through 26.2).
+- Folia server: place `confluxmap-folia-<version>.jar` into `plugins/`. Version `0.1.4` is
+  verified on Folia 26.1.2 (Minecraft 26.1 through 26.1.2) with Java 25.
 
 Client and server versions can be upgraded independently: matching prediction algorithms use compact differential updates, differing algorithms fall back to full-data updates, and older-protocol clients always retain the basic map service.
 
@@ -132,7 +133,8 @@ All companion-shared content is controlled in `config/confluxmap/server.json`:
 - `enabled` is the master switch; `checkForUpdates` announces a newer version in the server console at startup.
 - `shareSeed` sends the world seed to clients so they can predict biomes and structures; `allowBiomeMap` and `allowStructureSearch` control the biome layer and the structure finder separately.
 - `shareCorrections` sends real-terrain data from the server to correct predicted maps.
-- `shareChunkLoadState` exposes the chunks the server keeps loaded. It is disabled by default to reduce exposure of player activity and farm locations.
+- `shareChunkLoadState` is not available on Folia and remains disabled even when enabled in the
+  configuration.
 - `allowEntityRadar` defaults to `true` and shares every online player's live position with compatible clients; disabling it stops the position stream and turns the client radar off.
 - `shareWaypoints` enables the shared waypoint list and defaults to `true`; `allowNonOperatorSharedWaypointManagement` defaults to letting ordinary players manage the entries they published.
 - `webMap.*` controls the web map and defaults to enabled: it listens on `127.0.0.1:8123` and hides player positions. For public access, place it behind an HTTPS reverse proxy that preserves the original `Host` header; `sharePlayers` controls whether player positions are included.
