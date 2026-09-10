@@ -81,7 +81,7 @@ jobs:
 
           - Runtime verified: Folia 26.1.2 (Minecraft 26.1 through 26.1.2) with Java 25.
           - Includes map synchronisation, shared waypoints, the optional web map, and graceful shutdown support for Folia's regionised scheduler model.
-          - **Chunk load state maps are unavailable on Folia.** The `shareChunkLoadState` setting is ignored and the feature remains disabled.
+          - **Chunk load state maps are unavailable on Folia.** The shareChunkLoadState setting is ignored and the feature remains disabled.
 
           ---
 
@@ -89,7 +89,7 @@ jobs:
 
           - 已验证运行环境：Folia 26.1.2（Minecraft 26.1 至 26.1.2）和 Java 25。
           - 支持地图同步、共享路径点、可选网页地图，并适配 Folia 的区域化调度模型和正常停机流程。
-          - **Folia 不支持区块加载票地图。** `shareChunkLoadState` 配置会被忽略，该功能始终保持禁用。
+          - **Folia 不支持区块加载票地图。** shareChunkLoadState 配置会被忽略，该功能始终保持禁用。
           EOF
       - name: Upload release artifact
         uses: actions/upload-artifact@v5
