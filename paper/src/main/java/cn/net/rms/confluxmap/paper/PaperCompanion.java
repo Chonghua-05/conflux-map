@@ -19,6 +19,7 @@ import cn.net.rms.confluxmap.server.shared.SharedWaypointIo;
 import cn.net.rms.confluxmap.server.shared.SharedWaypointService;
 import cn.net.rms.confluxmap.server.shared.SharedWaypointStore;
 import cn.net.rms.confluxmap.server.shared.SharedWaypointValidator;
+import io.papermc.paper.threadedregions.scheduler.ScheduledTask;
 import java.io.IOException;
 import java.nio.file.Path;
 import java.time.Clock;
@@ -44,7 +45,6 @@ import org.bukkit.event.player.PlayerRegisterChannelEvent;
 import org.bukkit.event.world.ChunkLoadEvent;
 import org.bukkit.event.world.ChunkUnloadEvent;
 import org.bukkit.event.world.WorldLoadEvent;
-import org.bukkit.scheduler.BukkitTask;
 
 /** Owns one Paper server's companion lifecycle and platform adapters. */
 final class PaperCompanion implements Listener {
@@ -72,10 +72,14 @@ final class PaperCompanion implements Listener {
     private final ConfluxMapPaperPlugin plugin;
     private final PaperServerConfigIo configIo;
     private final PaperWorldDirectory worlds = new PaperWorldDirectory();
-    private final Map<ChunkKey, Chunk> liveChunks = new LinkedHashMap<>();
-    private final Map<ChunkKey, PendingRemoval> pendingRemovals = new LinkedHashMap<>();
+    // Chunk handles are owned by their region, so only coordinates are tracked here; the rotation
+    // is what spreads the capture budget evenly across the loaded chunks.
+    private final PaperLiveChunkRotation<ChunkKey> liveChunks = new PaperLiveChunkRotation<>();
+    private final Map<ChunkKey, PendingRemoval> pendingRemovals = new ConcurrentHashMap<>();
     private final Map<Integer, FlatBaseline> flatBaselines = new ConcurrentHashMap<>();
-    private final Map<Integer, Map<FlatBaseline, Integer>> flatCandidates = new LinkedHashMap<>();
+    private final Map<Integer, Map<FlatBaseline, Integer>> flatCandidates =
+        new ConcurrentHashMap<>();
+    private final PaperPlayerProbe players;
     private ServerConfig config;
     private UUID worldId;
     private UUID instanceId;
@@ -88,7 +92,7 @@ final class PaperCompanion implements Listener {
     private PaperNetworking networking;
     private PaperSharedWaypointNetworking sharedNetworking;
     private PaperPluginMessageDispatcher pluginMessages;
-    private BukkitTask tickTask;
+    private ScheduledTask tickTask;
     private WebMapServer webMap;
     private PaperWebMapBackend webMapBackend;
     private int webPlayerTicks;
@@ -102,6 +106,7 @@ final class PaperCompanion implements Listener {
     ) {
         this.plugin = plugin;
         this.configIo = configIo;
+        this.players = new PaperPlayerProbe(plugin);
     }
 
     void enable() {
@@ -138,8 +143,17 @@ final class PaperCompanion implements Listener {
             mapColors,
             plugin.getSLF4JLogger()
         );
-        chunkLoadStates = config.enabled && config.shareChunkLoadState
+        // The load-level service polls Chunk.LoadLevel for every loaded chunk, and that is region
+        // owned state on Folia: publishing it there would cost thousands of region tasks per tick.
+        // The feature therefore stays off, and clients are told during the handshake that it is
+        // unavailable rather than silently receiving nothing.
+        chunkLoadStates = config.enabled && config.shareChunkLoadState && !PaperPlatform.FOLIA
             ? new PaperChunkLoadStateService() : null;
+        if (config.shareChunkLoadState && PaperPlatform.FOLIA) {
+            plugin.getSLF4JLogger().info(
+                "Chunk load state stays disabled: regionised servers cannot poll load levels"
+            );
+        }
         if (config.enabled) {
             NativeLib.init(primaryWorldRoot.resolve("confluxmap"));
             if (config.shareWaypoints) {
@@ -162,11 +176,20 @@ final class PaperCompanion implements Listener {
         networking.register();
         sharedNetworking.register();
         Bukkit.getPluginManager().registerEvents(this, plugin);
+        if (PaperPlatform.FOLIA) {
+            plugin.getSLF4JLogger().info(
+                "Skipping the initial loaded-chunk scan: regionised servers do not expose it, "
+                    + "so live summaries start from the chunk loads that follow"
+            );
+        }
         for (final PaperWorldDirectory.Entry entry : worlds.entries()) {
             plugin.getSLF4JLogger().info(
                 "Paper companion dimension {} index={} region={}",
                 entry.dimensionId(), entry.index(), entry.regionDirectory()
             );
+            if (PaperPlatform.FOLIA) {
+                continue;
+            }
             for (final Chunk chunk : entry.world().getLoadedChunks()) {
                 trackLoaded(
                     entry,
@@ -176,7 +199,7 @@ final class PaperCompanion implements Listener {
                 );
             }
         }
-        tickTask = Bukkit.getScheduler().runTaskTimer(plugin, this::tick, 1L, 1L);
+        tickTask = PaperPlatform.startTicking(plugin, ignored -> tick());
         if (config.enabled && config.webMap.enabled) {
             try {
                 webMapBackend = new PaperWebMapBackend(plugin, this);
@@ -231,6 +254,7 @@ final class PaperCompanion implements Listener {
         pendingRemovals.clear();
         flatBaselines.clear();
         flatCandidates.clear();
+        players.clear();
         mapColors = null;
         webMapPrivacy = null;
     }
@@ -246,6 +270,11 @@ final class PaperCompanion implements Listener {
             PaperWorldMetadata.flatBaseline(entry.world(), mapColors::mapColorId).ifPresent(
                 baseline -> flatBaselines.put(entry.index(), baseline)
             );
+        }
+        // Regionised servers do not expose the loaded-chunk set, so a world that appears after
+        // startup contributes its live summaries through the chunk loads that follow it.
+        if (PaperPlatform.FOLIA) {
+            return;
         }
         for (final Chunk chunk : event.getWorld().getLoadedChunks()) {
             trackLoaded(
@@ -275,7 +304,9 @@ final class PaperCompanion implements Listener {
             return;
         }
         final Chunk chunk = event.getChunk();
-        capture(entry, chunk);
+        // The unload event is dispatched by the region that owns the chunk, so the last summary
+        // can still be taken here; dispatching it would race the unload and lose the snapshot.
+        summarize(entry, chunk);
         final ChunkKey key = new ChunkKey(entry, chunk.getX(), chunk.getZ());
         liveChunks.remove(key);
         pendingRemovals.put(key, new PendingRemoval(
@@ -292,15 +323,26 @@ final class PaperCompanion implements Listener {
     @EventHandler
     public void onPlayerQuit(final PlayerQuitEvent event) {
         final UUID playerId = event.getPlayer().getUniqueId();
-        networking.disconnect(playerId);
-        sharedNetworking.disconnect(playerId);
-        pluginMessages.disconnect(playerId);
+        // Quit is dispatched by the region that owns the player, while the session tables it
+        // clears belong to the global state, so the teardown is handed back to the global region.
+        PaperPlatform.global(plugin, () -> {
+            players.forget(playerId);
+            if (networking != null) {
+                networking.disconnect(playerId);
+            }
+            if (sharedNetworking != null) {
+                sharedNetworking.disconnect(playerId);
+            }
+            if (pluginMessages != null) {
+                pluginMessages.disconnect(playerId);
+            }
+        });
     }
 
     @EventHandler
     public void onPlayerRegisterChannel(final PlayerRegisterChannelEvent event) {
         pluginMessages.channelRegistered(
-            PaperPluginMessageDispatcher.recipient(plugin, event.getPlayer()),
+            pluginMessages.recipient(plugin, event.getPlayer()),
             event.getChannel()
         );
     }
@@ -343,6 +385,16 @@ final class PaperCompanion implements Listener {
 
     PaperWorldDirectory worlds() {
         return worlds;
+    }
+
+    /**
+     * Player state captured on each player's own scheduler.
+     *
+     * <p>Positions, names and permissions belong to the entity, so the global tick may not read
+     * them directly; every consumer works from these snapshots instead.
+     */
+    PaperPlayerProbe players() {
+        return players;
     }
 
     PaperCorrectionService corrections() {
@@ -423,6 +475,7 @@ final class PaperCompanion implements Listener {
         if (!isEnabled()) {
             return;
         }
+        players.refresh();
         refreshLiveChunks();
         removeExpiredLiveSummaries();
         corrections.tick();
@@ -449,13 +502,15 @@ final class PaperCompanion implements Listener {
             return;
         }
         final ChunkKey key = new ChunkKey(entry, chunk.getX(), chunk.getZ());
-        liveChunks.put(key, chunk);
+        liveChunks.add(key);
         pendingRemovals.remove(key);
+        // Null on regionised servers by construction, so reaching this call means the handler is
+        // already running on the thread that owns the chunk.
         if (chunkLoadStates != null) {
             chunkLoadStates.onChunkLoad(entry, chunk);
         }
         if (captureNow && isEnabled()) {
-            capture(entry, chunk);
+            summarize(entry, chunk);
         }
     }
 
@@ -471,24 +526,70 @@ final class PaperCompanion implements Listener {
         for (int inspected = 0;
              inspected < inspectionBudget && captured < captureBudget;
              inspected++) {
-            final Iterator<Map.Entry<ChunkKey, Chunk>> iterator = liveChunks.entrySet().iterator();
-            final Map.Entry<ChunkKey, Chunk> entry = iterator.next();
-            iterator.remove();
-            liveChunks.put(entry.getKey(), entry.getValue());
+            final ChunkKey key = liveChunks.next();
+            if (key == null) {
+                break;
+            }
             if (!corrections.liveSummaryDemanded(
-                entry.getKey().world(),
-                entry.getKey().chunkX(),
-                entry.getKey().chunkZ(),
+                key.world(),
+                key.chunkX(),
+                key.chunkZ(),
                 nowNanos
             )) {
                 continue;
             }
-            capture(entry.getKey().world(), entry.getValue());
+            capture(key);
             captured++;
         }
     }
 
-    private void capture(final PaperWorldDirectory.Entry entry, final Chunk chunk) {
+    /**
+     * Schedules a live summary on the region that owns the chunk.
+     *
+     * <p>The world time and height limits are read here, on the global region, because they are
+     * world wide state; only the snapshot itself needs the owning region.
+     */
+    private void capture(final ChunkKey key) {
+        if (!isEnabled()) {
+            return;
+        }
+        final PaperWorldDirectory.Entry entry = key.world();
+        final World world = entry.world();
+        final long revision = Math.max(1L, world.getFullTime());
+        final int minHeight = world.getMinHeight();
+        final int maxHeight = world.getMaxHeight();
+        PaperPlatform.onChunk(plugin, world, key.chunkX(), key.chunkZ(), () -> {
+            if (!world.isChunkLoaded(key.chunkX(), key.chunkZ())) {
+                return;
+            }
+            summarize(
+                entry,
+                world.getChunkAt(key.chunkX(), key.chunkZ()),
+                revision,
+                minHeight,
+                maxHeight
+            );
+        });
+    }
+
+    /** Takes a snapshot of a chunk the calling thread already owns. */
+    private void summarize(final PaperWorldDirectory.Entry entry, final Chunk chunk) {
+        summarize(
+            entry,
+            chunk,
+            Math.max(1L, entry.world().getFullTime()),
+            entry.world().getMinHeight(),
+            entry.world().getMaxHeight()
+        );
+    }
+
+    private void summarize(
+        final PaperWorldDirectory.Entry entry,
+        final Chunk chunk,
+        final long revision,
+        final int minHeight,
+        final int maxHeight
+    ) {
         if (!isEnabled() || !chunk.isLoaded()) {
             return;
         }
@@ -496,9 +597,9 @@ final class PaperCompanion implements Listener {
             final ChunkSnapshot snapshot = chunk.getChunkSnapshot(true, true, false);
             final SummaryCodec.Chunk summary = corrections.summarizeLive(
                 snapshot,
-                Math.max(1L, entry.world().getFullTime()),
-                entry.world().getMinHeight(),
-                entry.world().getMaxHeight()
+                revision,
+                minHeight,
+                maxHeight
             );
             corrections.putLive(entry, chunk.getX(), chunk.getZ(), summary);
             learnFlatBaseline(entry, summary);
@@ -518,7 +619,7 @@ final class PaperCompanion implements Listener {
             return;
         }
         final Map<FlatBaseline, Integer> candidates = flatCandidates.computeIfAbsent(
-            entry.index(), ignored -> new LinkedHashMap<>()
+            entry.index(), ignored -> new ConcurrentHashMap<>()
         );
         for (int z = 2; z < 16; z += 4) {
             for (int x = 2; x < 16; x += 4) {

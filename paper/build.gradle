@@ -87,6 +87,28 @@ tasks.register('checkPaperIsolation') {
     }
 }
 
+tasks.register('checkFoliaCompat') {
+    group = 'verification'
+    description = 'Rejects Bukkit main-thread scheduling from the region-aware Paper adapter.'
+    doLast {
+        final List<String> violations = []
+        final def forbidden =
+            ~/Bukkit\.getScheduler\(\)|runTask\(|runTaskLater\(|runTaskTimer\(|runTaskAsynchronously\(/
+        fileTree('src/main/java').matching { include '**/*.java' }.each { final File file ->
+            file.readLines().eachWithIndex { final String line, final int index ->
+                final int comment = line.indexOf('//')
+                final String code = comment < 0 ? line : line.substring(0, comment)
+                if (code =~ forbidden) {
+                    violations << "${file}:${index + 1}: ${line.trim()}"
+                }
+            }
+        }
+        if (!violations.empty) {
+            throw new GradleException("Folia compatibility violated:\n" + violations.join('\n'))
+        }
+    }
+}
+
 tasks.register('compileLatestPaperJava', JavaCompile) {
     group = 'verification'
     description = 'Compiles the Paper adapter against the newest supported Paper 26.2 API.'
@@ -99,4 +121,4 @@ tasks.register('compileLatestPaperJava', JavaCompile) {
     options.release = 21
 }
 
-check.dependsOn 'checkPaperIsolation', 'compileLatestPaperJava', ':common:check'
+check.dependsOn 'checkPaperIsolation', 'checkFoliaCompat', 'compileLatestPaperJava', ':common:check'

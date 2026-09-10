@@ -1,10 +1,49 @@
-# Paper companion
+# Server companion (`paper/` module)
+
+> **This branch targets Folia only.** Everything below describes the regionised runtime.
+> The module directory is still `paper/` and the classes still use the `Paper` prefix because
+> Folia *is* a Paper fork and the adapter speaks the Paper API; keeping the layout identical to
+> `master` is deliberate — it is the same shape the NeoForge branch keeps when it replaces the
+> contents of `src/` — so that fixes travel between the branches by path instead of by rename.
 
 The standalone `confluxmap-paper` plugin provides the same public companion protocols as the
-Fabric server entrypoint. One Paper artifact targets Paper 1.21.1 through 26.2. It is deliberately
+Fabric server entrypoint. One artifact targets Paper 1.21.1 through 26.2. It is deliberately
 separate from the version-specific Fabric client artifacts: bundling Bukkit classes into every
 remapped Fabric jar would enlarge every client download and create avoidable class-loading and
 compatibility surfaces.
+
+## Folia thread model
+
+Folia splits each world into independently ticked regions, so the adapter follows three rules.
+`PaperPlatform` is the only place that talks to a scheduler, and every call goes through
+`io.papermc.paper.threadedregions` — Paper implements those schedulers too, which is why there is
+a single code path rather than one per platform.
+
+| Scope | Owns | May touch |
+|---|---|---|
+| Global region | correction service, invalidation publishers, subscription tables | nothing region-owned |
+| Region | chunks | its own chunk snapshots and load levels |
+| Entity | players | that player's position, profile and permissions |
+
+Two consequences worth knowing before changing anything here:
+
+- **Shared state stays on one logical thread.** `MapInvalidationPublisher`,
+  `MapRegionInvalidationPublisher`, `LiveChunkSummaryCache` and `PlayerBudget` live in `common/`
+  and are not thread safe, so plugin-message and web requests queue onto the global region exactly
+  as they used to queue onto the Bukkit main thread.
+- **Player state is never read from the global tick.** `PaperPlayerProbe` asks each player, on its
+  own scheduler, to publish an immutable snapshot; the position broadcast, the web map and the
+  shared-waypoint tick all consume those snapshots.
+
+Two features behave differently on a regionised server:
+
+- **Chunk load state is off.** Publishing it would mean polling `Chunk.LoadLevel` — region-owned
+  state — for every loaded chunk, thousands of region tasks per tick. The service is never
+  instantiated and clients are told during the handshake that the feature is unavailable.
+- **The initial loaded-chunk scan is skipped.** `World#getLoadedChunks()` does not exist on a
+  regionised server, so live summaries start from the chunk loads that follow startup. A world
+  that was already loaded when the plugin enabled contributes its summaries on the next load.
+
 
 ## Installation
 
@@ -16,13 +55,31 @@ compatibility surfaces.
 For local development, run `./gradlew :paper:runServer`. The task builds the plugin, downloads a
 Paper 1.21.1 development server, installs the new jar, and keeps its disposable state under the
 ignored `paper/run/` directory. The first invocation writes `paper/run/eula.txt`; review the
-Minecraft EULA, change that file to `eula=true`, and invoke the task again.
+Minecraft EULA, change that file to `eula=true`, and invoke the task again. That task exercises
+the Paper flavour of the scheduler only.
+
+To smoke-test the regionised runtime the branch actually targets, run a Folia server by hand:
+
+```sh
+curl -sL -o folia.jar \
+  "$(curl -s https://fill.papermc.io/v3/projects/folia/versions/26.1.2/builds \
+     | python -c 'import json,sys; print(json.load(sys.stdin)[-1]["downloads"]["server:default"]["url"])')"
+./gradlew :paper:jar
+mkdir -p run-folia/plugins && cp paper/build/libs/confluxmap-paper-*.jar run-folia/plugins/
+cd run-folia && java -Xmx2G -jar ../folia.jar nogui
+```
+
+A healthy start logs `Skipping the initial loaded-chunk scan`, one line per dimension,
+`Web map listening on 127.0.0.1:8123`, and `Paper companion ready`. `Chunk load state stays
+disabled` appears when `shareChunkLoadState` is on. Any `ConfluxMap` exception, or a Folia
+complaint about accessing state from the wrong thread, means the rules above were broken.
 
 The plugin bytecode targets Java 21 and supports the Paper API only. Run the
 [Java version required by Paper](https://docs.papermc.io/paper/getting-started/): Java 21 for Paper
-through 1.21.11 and Java 25 for Paper 26.x. Folia, Spigot, and CraftBukkit are outside the supported
-runtime contract. A proxy needs no companion plugin as long as it transparently forwards Minecraft
-plugin messages.
+through 1.21.11 and Java 25 for Paper 26.x — and therefore Java 25 for current Folia builds.
+Spigot and CraftBukkit are outside the supported runtime contract, as is any server that does not
+implement the threaded-regions schedulers. A proxy needs no companion plugin as long as it
+transparently forwards Minecraft plugin messages.
 
 ## Compatibility and protocol
 

@@ -1,8 +1,9 @@
 name: ConfluxMap
 version: '${version}'
 main: cn.net.rms.confluxmap.paper.ConfluxMapPaperPlugin
-description: Paper server companion for Conflux Map clients
+description: Folia (regionised Paper) server companion for Conflux Map clients
 api-version: '1.21'
+folia-supported: true
 authors: [Conflux Union]
 website: https://github.com/Conflux-Union/conflux-map
 load: POSTWORLD

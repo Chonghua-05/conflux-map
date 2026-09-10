@@ -15,7 +15,6 @@ import cn.net.rms.confluxmap.server.web.WebMapSnapshot;
 import cn.net.rms.confluxmap.server.web.WebPlayerSnapshot;
 import cn.net.rms.confluxmap.server.web.WebAvatarCache;
 import java.net.URI;
-import java.net.URISyntaxException;
 import java.util.HashMap;
 import java.util.Map;
 import java.util.ArrayList;
@@ -24,8 +23,6 @@ import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
 import java.util.function.Consumer;
 import org.bukkit.Bukkit;
-import org.bukkit.GameMode;
-import org.bukkit.entity.Player;
 
 /** Paper main-thread adapter for the shared HTTP transport. */
 final class PaperWebMapBackend implements WebMapBackend {
@@ -80,7 +77,9 @@ final class PaperWebMapBackend implements WebMapBackend {
         final int requestBytes,
         final Consumer<byte[]> response
     ) {
-        Bukkit.getScheduler().runTask(plugin, () -> companion.corrections().requestTiles(
+        // Correction state is global state, so these requests queue on the global region rather
+        // than being handled on the HTTP thread that accepted them.
+        PaperPlatform.global(plugin, () -> companion.corrections().requestTiles(
             clientId, request, requestBytes, true, sender(response)
         ));
     }
@@ -91,14 +90,14 @@ final class PaperWebMapBackend implements WebMapBackend {
         final MapRegionSyncSubscribeC2S request,
         final Consumer<byte[]> response
     ) {
-        Bukkit.getScheduler().runTask(plugin, () -> companion.corrections().subscribeRegions(
+        PaperPlatform.global(plugin, () -> companion.corrections().subscribeRegions(
             clientId, request, sender(response)
         ));
     }
 
     @Override
     public void removeClient(final UUID clientId) {
-        Bukkit.getScheduler().runTask(plugin, () -> companion.corrections().remove(clientId));
+        PaperPlatform.global(plugin, () -> companion.corrections().remove(clientId));
     }
 
     @Override
@@ -140,22 +139,20 @@ final class PaperWebMapBackend implements WebMapBackend {
         final List<WebPlayerSnapshot.Player> result = new ArrayList<>();
         final Map<UUID, URI> currentSkins = new HashMap<>();
         if (companion.config().webMap.sharePlayers) {
-            for (final Player player : Bukkit.getOnlinePlayers()) {
-                if (companion.webMapHidden(player.getUniqueId())) continue;
-                final PaperWorldDirectory.Entry world = companion.worlds().find(player.getWorld());
+            // Player state is read on each player's own scheduler; this only consumes snapshots.
+            for (final PaperPlayerProbe.Snapshot player : companion.players().snapshots()) {
+                if (companion.webMapHidden(player.id())) continue;
+                final PaperWorldDirectory.Entry world =
+                    companion.worlds().findByDimensionId(player.worldKey());
                 if (world == null) continue;
                 result.add(new WebPlayerSnapshot.Player(
-                    player.getUniqueId().toString(), player.getName(), world.index(),
-                    player.getX(), player.getZ(),
-                    player.getGameMode() == GameMode.SPECTATOR || player.isInvisible()
+                    player.id().toString(), player.name(), world.index(),
+                    player.x(), player.z(),
+                    player.hidden()
                 ));
-                final java.net.URL skin = player.getPlayerProfile().getTextures().getSkin();
+                final URI skin = player.skin();
                 if (skin != null) {
-                    try {
-                        currentSkins.put(player.getUniqueId(), skin.toURI());
-                    } catch (final URISyntaxException ignored) {
-                        // The cache independently rejects non-Minecraft texture origins.
-                    }
+                    currentSkins.put(player.id(), skin);
                 }
             }
         }
