@@ -81,6 +81,10 @@ final class PaperNetworking implements PluginMessageListener {
             return;
         }
         final byte[] stablePayload = payload.clone();
+        // A payload can only arrive on a channel the client registered, so this is the reliable
+        // moment to open the reply path: the handshake answer is produced in the same breath as
+        // the request, well before the channel mirror finishes running.
+        messages.confirm(messages.recipient(plugin, player), channel);
         if (!Bukkit.isPrimaryThread()) {
             // Correction state lives in common/ and is not thread safe, so the payload is handled
             // on the global region exactly as it used to be handled on the Bukkit main thread.

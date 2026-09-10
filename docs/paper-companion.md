@@ -58,14 +58,17 @@ ignored `paper/run/` directory. The first invocation writes `paper/run/eula.txt`
 Minecraft EULA, change that file to `eula=true`, and invoke the task again. That task exercises
 the Paper flavour of the scheduler only.
 
-To smoke-test the regionised runtime the branch actually targets, run a Folia server by hand:
+To smoke-test the regionised runtime the branch actually targets, run a Folia server by hand.
+Folia 26.x needs Java 25:
 
 ```sh
 curl -sL -o folia.jar \
   "$(curl -s https://fill.papermc.io/v3/projects/folia/versions/26.1.2/builds \
      | python -c 'import json,sys; print(json.load(sys.stdin)[-1]["downloads"]["server:default"]["url"])')"
 ./gradlew :paper:jar
-mkdir -p run-folia/plugins && cp paper/build/libs/confluxmap-paper-*.jar run-folia/plugins/
+mkdir -p run-folia/plugins
+cp paper/build/libs/confluxmap-paper-*.jar run-folia/plugins/
+printf 'eula=true\n' > run-folia/eula.txt
 cd run-folia && java -Xmx2G -jar ../folia.jar nogui
 ```
 
@@ -73,6 +76,10 @@ A healthy start logs `Skipping the initial loaded-chunk scan`, one line per dime
 `Web map listening on 127.0.0.1:8123`, and `Paper companion ready`. `Chunk load state stays
 disabled` appears when `shareChunkLoadState` is on. Any `ConfluxMap` exception, or a Folia
 complaint about accessing state from the wrong thread, means the rules above were broken.
+
+Set `enable-rcon=true` and a password in `server.properties` before shutting down: neither
+`SIGTERM` nor a piped stdin stops a Folia server on Windows, and a hard kill skips `onDisable`,
+which is where the tick task, the web map and every subscription are released.
 
 The plugin bytecode targets Java 21 and supports the Paper API only. Run the
 [Java version required by Paper](https://docs.papermc.io/paper/getting-started/): Java 21 for Paper

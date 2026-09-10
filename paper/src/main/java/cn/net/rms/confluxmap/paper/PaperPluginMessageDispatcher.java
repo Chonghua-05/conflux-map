@@ -92,11 +92,22 @@ final class PaperPluginMessageDispatcher {
     synchronized void channelRegistered(final Recipient recipient, final String channel) {
         Objects.requireNonNull(recipient, "recipient");
         Objects.requireNonNull(channel, "channel");
+        confirm(recipient, channel);
+    }
+
+    /**
+     * Records that the client listens to {@code channel} and releases anything queued for it.
+     *
+     * <p>Reaching this from an inbound payload is stronger evidence than the registration event:
+     * the client cannot have sent on a channel it did not register. The companion relies on that
+     * because a handshake reply is produced and sent in the same breath, before the asynchronous
+     * channel mirror can have run.
+     */
+    synchronized void confirm(final Recipient recipient, final String channel) {
+        Objects.requireNonNull(recipient, "recipient");
+        Objects.requireNonNull(channel, "channel");
         listening.computeIfAbsent(recipient.id(), ignored -> ConcurrentHashMap.newKeySet())
             .add(channel);
-        if (!recipient.listensTo(channel)) {
-            return;
-        }
         final Map<String, PendingChannel> playerPending = pending.get(recipient.id());
         if (playerPending == null) {
             return;
@@ -120,11 +131,13 @@ final class PaperPluginMessageDispatcher {
     }
 
     /**
-     * Mirrors the channels a player already listens to. Must run on the player's own scheduler,
-     * which is the only place the underlying channel set may be read.
+     * Adds the channels a player already listens to, without dropping any confirmed earlier.
+     * Must run on the player's own scheduler, which is the only place the underlying channel set
+     * may be read.
      */
     void seed(final Player player) {
-        listening.put(player.getUniqueId(), Set.copyOf(player.getListeningPluginChannels()));
+        listening.computeIfAbsent(player.getUniqueId(), ignored -> ConcurrentHashMap.newKeySet())
+            .addAll(player.getListeningPluginChannels());
     }
 
     synchronized void clear() {

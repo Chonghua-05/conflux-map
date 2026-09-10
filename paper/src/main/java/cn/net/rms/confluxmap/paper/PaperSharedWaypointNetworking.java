@@ -52,6 +52,9 @@ final class PaperSharedWaypointNetworking implements PluginMessageListener {
             return;
         }
         final byte[] stable = payload.clone();
+        // A payload can only arrive on a channel the client registered, so the reply path is
+        // opened here rather than waiting for the registration event.
+        messages.confirm(messages.recipient(plugin, player), channel);
         if (!Bukkit.isPrimaryThread()) {
             // Session and waypoint state live in common/ and are not thread safe, so the payload
             // is handled on the global region exactly as it used to be on the Bukkit main thread.
