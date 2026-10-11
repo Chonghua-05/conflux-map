@@ -69,7 +69,12 @@ test {
 }
 
 tasks.named('runServer') {
-    minecraftVersion('1.21.1')
+    minecraftVersion('26.3')
+    // Paper 26.x ships Java 25 classfiles; the Gradle daemon JVM can be older, so boot the
+    // server with the same toolchain compileLatestPaperJava verifies against.
+    javaLauncher = javaToolchains.launcherFor {
+        languageVersion = JavaLanguageVersion.of(25)
+    }
 }
 
 tasks.register('checkPaperIsolation') {
