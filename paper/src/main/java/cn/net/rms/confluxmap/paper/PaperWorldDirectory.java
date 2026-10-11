@@ -81,4 +81,26 @@ final class PaperWorldDirectory {
         }
         return candidates.get(0);
     }
+
+    /**
+     * The level directory — the one carrying {@code level.dat}, {@code datapacks/} and every
+     * other level-scoped file — for a world folder that Bukkit reports.
+     *
+     * <p>Modern versions park each dimension in {@code <level>/dimensions/<ns>/<id>}, and
+     * {@link World#getWorldFolder()} returns that dimension directory, not the level root;
+     * legacy layouts return either the level root or a {@code DIM-1}-style subfolder. Walking
+     * up to the nearest {@code level.dat} covers every layout, and a folder with none above it
+     * (nonstandard setups) falls back to itself so behavior never gets worse than the raw
+     * folder.
+     */
+    static Path levelRoot(final Path worldFolder) {
+        Path dir = worldFolder;
+        for (int hops = 0; dir != null && hops < 4; hops++) {
+            if (Files.isRegularFile(dir.resolve("level.dat"))) {
+                return dir;
+            }
+            dir = dir.getParent();
+        }
+        return worldFolder;
+    }
 }

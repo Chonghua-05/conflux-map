@@ -69,7 +69,7 @@ final class PaperWorldMetadata {
         final ChunkColumnSummarizer.MapColorResolver mapColors
     ) {
         return flatBaseline(
-            world.getWorldFolder().toPath().resolve("level.dat"),
+            PaperWorldDirectory.levelRoot(world.getWorldFolder().toPath()).resolve("level.dat"),
             world.getKey().toString(),
             canonicalDimension(world),
             world.getMinHeight(),
@@ -151,7 +151,7 @@ final class PaperWorldMetadata {
 
     private static Optional<CompoundTag> generator(final World world) {
         return generator(
-            world.getWorldFolder().toPath().resolve("level.dat"),
+            PaperWorldDirectory.levelRoot(world.getWorldFolder().toPath()).resolve("level.dat"),
             world.getKey().toString(),
             canonicalDimension(world)
         );

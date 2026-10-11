@@ -115,7 +115,7 @@ final class PaperCompanion implements Listener {
         if (primary == null) {
             throw new IllegalStateException("Paper server has no loaded worlds");
         }
-        primaryWorldRoot = primary.getWorldFolder().toPath();
+        primaryWorldRoot = PaperWorldDirectory.levelRoot(primary.getWorldFolder().toPath());
         worldId = WorldIdStore.loadOrCreate(primaryWorldRoot);
         // Kept beside the config rather than in the world, so a world synced to a mirror server
         // reaches it without carrying this server's identity along.
