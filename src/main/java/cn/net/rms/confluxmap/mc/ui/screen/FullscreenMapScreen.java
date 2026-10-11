@@ -47,7 +47,6 @@ import cn.net.rms.confluxmap.core.net.shared.SharedWaypointAvailability;
 import cn.net.rms.confluxmap.core.net.HelloPolicyS2C;
 import cn.net.rms.confluxmap.core.portal.PortalMarker;
 import cn.net.rms.confluxmap.core.portal.PortalService;
-import cn.net.rms.confluxmap.core.predict.CubiomesBiomeIds;
 import cn.net.rms.confluxmap.core.predict.BaselineSampler;
 import cn.net.rms.confluxmap.core.predict.BiomeCandidateSearch;
 import cn.net.rms.confluxmap.core.predict.NativeBaselineSampler;
@@ -92,6 +91,7 @@ import cn.net.rms.confluxmap.mc.render.RenderUtil;
 import cn.net.rms.confluxmap.mc.render.TileTextureManager;
 import cn.net.rms.confluxmap.mc.teleport.ClientGroundTeleportService;
 import cn.net.rms.confluxmap.mc.teleport.TeleportCommandAccess;
+import cn.net.rms.confluxmap.mc.ui.BiomeLabels;
 import cn.net.rms.confluxmap.mc.ui.GuiDraw;
 import cn.net.rms.confluxmap.mc.ui.MapLayerText;
 import cn.net.rms.confluxmap.mc.ui.UiIcon;
@@ -4976,24 +4976,12 @@ public final class FullscreenMapScreen extends ConfluxScreen {
 
     /**
      * A predicted biome only knows its cubiomes id, whose canonical vanilla name is the 1.17-era
-     * one; biomes renamed since (snowy_tundra -> snowy_plains, ...) have no translation under the
-     * old key on modern versions, which surfaced as a raw {@code biome.minecraft.snowy_tundra}
-     * footer. Try every spelling the id has carried and keep the first one the loaded language
-     * actually translates, falling back to the canonical raw key when none do.
+     * one; biomes renamed since have no translation under the old key on modern versions, so the
+     * chain in {@link BiomeLabels#predictedDisplayName} also tries the datapack set and finally
+     * the canonical registry id instead of leaking a raw {@code biome.minecraft.snowy_tundra}.
      */
     private static String predictedBiomeName(final int cubiomesId) {
-        String fallback = null;
-        for (final String name : CubiomesBiomeIds.namesForId(cubiomesId)) {
-            final String key = Util.createTranslationKey("biome", Ids.of("minecraft", name));
-            final String translated = Texts.translatable(key).getString();
-            if (!translated.equals(key)) {
-                return translated;
-            }
-            if (fallback == null) {
-                fallback = translated;
-            }
-        }
-        return fallback;
+        return BiomeLabels.predictedDisplayName(cubiomesId);
     }
 
     /** Bottom-right corner: a passive notice while a newer release is known (the chat line carries the clickable link). */
@@ -5008,7 +4996,7 @@ public final class FullscreenMapScreen extends ConfluxScreen {
     }
 
     private static String translatedBiomeName(final Identifier biomeId) {
-        return Texts.translatable(Util.createTranslationKey("biome", biomeId)).getString();
+        return BiomeLabels.displayName(biomeId);
     }
 
     private static String dimensionDisplayName(final DimensionId dimension) {

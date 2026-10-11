@@ -32,6 +32,35 @@ public final class MinecraftAccess {
         //#endif
     }
 
+    /** The client's selected language code (e.g. {@code "zh_cn"}). */
+    public static String language(final MinecraftClient client) {
+        //#if MC>=260100
+        //$$ return client.options.languageCode;
+        //#else
+        return client.options.language;
+        //#endif
+    }
+
+    /**
+     * The current singleplayer world's {@code datapacks} directory, or null on a dedicated
+     * connection. Read on the client thread; the returned path stays valid for the whole
+     * session. Datapack translations only ever exist server-side, and the companion stays
+     * inactive in an unpublished singleplayer world, so the client reads the local level
+     * itself instead of waiting for a network answer that never comes.
+     */
+    public static java.nio.file.Path singleplayerDatapacksDir(final MinecraftClient client) {
+        //#if MC>=260100
+        //$$ return client.getSingleplayerServer() == null
+        //$$     ? null
+        //$$     : client.getSingleplayerServer().getWorldPath(
+        //$$         net.minecraft.world.level.storage.LevelResource.DATAPACK_DIR);
+        //#else
+        return client.getServer() == null
+            ? null
+            : client.getServer().getSavePath(net.minecraft.util.WorldSavePath.DATAPACKS);
+        //#endif
+    }
+
     /**
      * The player's biome-blend radius in blocks: the tint at a position is averaged over the
      * square that many blocks around it, and 0 turns blending off entirely.

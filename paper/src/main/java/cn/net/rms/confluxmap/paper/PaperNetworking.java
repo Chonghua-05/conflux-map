@@ -1,5 +1,7 @@
 package cn.net.rms.confluxmap.paper;
 
+import cn.net.rms.confluxmap.core.net.BiomeLangReqC2S;
+import cn.net.rms.confluxmap.core.net.BiomeLangS2C;
 import cn.net.rms.confluxmap.core.net.CorrectionProfile;
 import cn.net.rms.confluxmap.core.net.ErrorS2C;
 import cn.net.rms.confluxmap.core.net.FlatBaselineS2C;
@@ -23,6 +25,7 @@ import cn.net.rms.confluxmap.core.net.ServerViewDistanceS2C;
 import cn.net.rms.confluxmap.core.predict.PredictionDimensions;
 import cn.net.rms.confluxmap.nativepredict.PredictorVersion;
 import cn.net.rms.confluxmap.server.CompanionPolicy;
+import cn.net.rms.confluxmap.server.DatapackLangService;
 import cn.net.rms.confluxmap.server.ServerConfig;
 import java.util.ArrayList;
 import java.util.List;
@@ -47,6 +50,9 @@ final class PaperNetworking implements PluginMessageListener {
     private final Set<UUID> mutedPlayers = ConcurrentHashMap.newKeySet();
     private final Map<UUID, NegotiatedMapSync> sessions =
         new ConcurrentHashMap<>();
+    /** Last BIOME_LANG answer time per player; one disk scan per interval is plenty. */
+    private final Map<UUID, Long> biomeLangRequests = new ConcurrentHashMap<>();
+    private static final long BIOME_LANG_REQUEST_INTERVAL_NANOS = 5_000_000_000L;
 
     PaperNetworking(
         final ConfluxMapPaperPlugin plugin,
@@ -96,6 +102,7 @@ final class PaperNetworking implements PluginMessageListener {
         malformedStrikes.remove(playerId);
         mutedPlayers.remove(playerId);
         sessions.remove(playerId);
+        biomeLangRequests.remove(playerId);
         companion.corrections().remove(playerId);
         final PaperChunkLoadStateService loadStates = companion.chunkLoadStates();
         if (loadStates != null) {
@@ -129,6 +136,8 @@ final class PaperNetworking implements PluginMessageListener {
                 subscribeRegions(player, request);
             } else if (message instanceof final LoadStateSubscribeC2S request) {
                 subscribeLoadStates(player, request);
+            } else if (message instanceof final BiomeLangReqC2S request) {
+                requestBiomeLangs(player, request);
             } else {
                 plugin.getSLF4JLogger().warn(
                     "Unexpected {} from {} on the serverbound map-sync channel",
@@ -144,8 +153,38 @@ final class PaperNetworking implements PluginMessageListener {
         }
     }
 
-    private void hello(final Player player, final HelloC2S hello) {
-        final MapSyncProtocol.ServerHandshake handshake = MapSyncProtocol.acceptClient(
+    /**
+     * Answers the client's biome-name request from the level's data packs. The scan runs on the
+     * lang service's worker; the plugin-message send hops back to the main thread, where the
+     * player's online state is re-checked.
+     */
+    private void requestBiomeLangs(final Player player, final BiomeLangReqC2S request) {
+        final NegotiatedMapSync session = session(player);
+        if (session == null || !session.supports(MapSyncCapability.DATAPACK_BIOME_LANGS)) {
+            return;
+        }
+        final DatapackLangService langs = companion.datapackLangs();
+        if (langs == null) {
+            return;
+        }
+        final long now = System.nanoTime();
+        final long last = biomeLangRequests.getOrDefault(player.getUniqueId(), 0L);
+        if (now - last < BIOME_LANG_REQUEST_INTERVAL_NANOS) {
+            return;
+        }
+        biomeLangRequests.put(player.getUniqueId(), now);
+        langs.requestBiomeNames(request.locale(), names ->
+            Bukkit.getScheduler().runTask(plugin, () -> {
+                final Player current = Bukkit.getPlayer(player.getUniqueId());
+                if (current == null || !current.isOnline()) {
+                    return;
+                }
+                sendNegotiated(current, session, new BiomeLangS2C(names));
+            })
+        );
+    }
+
+    private void hello(final Player player, final HelloC2S hello) {        final MapSyncProtocol.ServerHandshake handshake = MapSyncProtocol.acceptClient(
             hello, plugin.getPluginMeta().getVersion(), PredictorVersion.full()
         );
         final NegotiatedMapSync session = handshake.session();

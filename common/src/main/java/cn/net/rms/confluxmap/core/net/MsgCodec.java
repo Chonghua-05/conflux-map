@@ -13,6 +13,7 @@ import java.nio.charset.CharacterCodingException;
 import java.nio.charset.CodingErrorAction;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
@@ -107,6 +108,10 @@ public final class MsgCodec {
                 encodePlayerPositionsS2C(out, m);
             } else if (msg instanceof final QuadraLayoutS2C m) {
                 encodeQuadraLayoutS2C(out, m, carriesTopMaterial(negotiated, MapSyncCapability.QUADRA_LAYOUT));
+            } else if (msg instanceof final BiomeLangReqC2S m) {
+                writeUtf(out, m.locale());
+            } else if (msg instanceof final BiomeLangS2C m) {
+                encodeBiomeLangS2C(out, m);
             } else {
                 throw new ProtoException("unknown message type: " + msg.getClass().getName());
             }
@@ -147,12 +152,41 @@ public final class MsgCodec {
             || typeId == Proto.MSG_MAP_CAPABILITIES_S2C
             || typeId == Proto.MSG_SERVER_INSTANCE_S2C
             || typeId == Proto.MSG_PLAYER_POSITIONS_S2C
-            || typeId == Proto.MSG_QUADRA_LAYOUT_S2C;
+            || typeId == Proto.MSG_QUADRA_LAYOUT_S2C
+            || typeId == Proto.MSG_BIOME_LANG_S2C;
     }
 
     private static void encodeHelloC2S(final DataOutputStream out, final HelloC2S m) throws IOException, ProtoException {
         writeUtf(out, m.modVersion());
         writeUtf(out, m.predictorVersion());
+    }
+
+    private static void encodeBiomeLangS2C(final DataOutputStream out, final BiomeLangS2C m)
+        throws IOException, ProtoException {
+        if (m.names().size() > Proto.MAX_BIOME_LANG_ENTRIES) {
+            throw new ProtoException(
+                "biome-lang entry count " + m.names().size() + " above cap " + Proto.MAX_BIOME_LANG_ENTRIES
+            );
+        }
+        out.writeShort(m.names().size());
+        for (final Map.Entry<String, String> entry : m.names().entrySet()) {
+            writeUtf(out, entry.getKey());
+            writeUtf(out, entry.getValue());
+        }
+    }
+
+    private static BiomeLangS2C decodeBiomeLangS2C(final DataInputStream in) throws IOException, ProtoException {
+        final int count = in.readUnsignedShort();
+        if (count > Proto.MAX_BIOME_LANG_ENTRIES) {
+            throw new ProtoException(
+                "biome-lang entry count " + count + " above cap " + Proto.MAX_BIOME_LANG_ENTRIES
+            );
+        }
+        final Map<String, String> names = new LinkedHashMap<>();
+        for (int i = 0; i < count; i++) {
+            names.put(readUtf(in), readUtf(in));
+        }
+        return new BiomeLangS2C(names);
     }
 
     private static void encodePlayerPositionsS2C(
@@ -654,6 +688,8 @@ public final class MsgCodec {
                 case Proto.MSG_PLAYER_POSITIONS_S2C -> decodePlayerPositionsS2C(in);
                 case Proto.MSG_QUADRA_LAYOUT_S2C -> decodeQuadraLayoutS2C(
                     in, carriesTopMaterial(negotiated, MapSyncCapability.QUADRA_LAYOUT));
+                case Proto.MSG_BIOME_LANG_REQ_C2S -> new BiomeLangReqC2S(readUtf(in));
+                case Proto.MSG_BIOME_LANG_S2C -> decodeBiomeLangS2C(in);
                 default -> throw new ProtoException("unhandled message type id: 0x" + Integer.toHexString(typeId));
             };
             if (in.available() != 0) {

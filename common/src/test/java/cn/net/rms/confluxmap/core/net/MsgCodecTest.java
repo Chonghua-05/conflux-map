@@ -837,6 +837,33 @@ class MsgCodecTest {
         return Arrays.asList(tiles);
     }
 
+
+    @Test
+    void biomeLangRoundTrips() throws ProtoException {
+        final BiomeLangReqC2S request = new BiomeLangReqC2S("zh_cn");
+        final BiomeLangReqC2S decodedRequest =
+            (BiomeLangReqC2S) MsgCodec.decode(MsgCodec.encode(request));
+        assertEquals(Proto.MSG_BIOME_LANG_REQ_C2S, decodedRequest.typeId());
+        assertEquals("zh_cn", decodedRequest.locale());
+
+        final Map<String, String> names = new java.util.LinkedHashMap<>();
+        names.put("biome.custom.crystal_forest", "Crystal Forest");
+        names.put("biome.custom.火山", "Volcano");
+        final BiomeLangS2C reply = new BiomeLangS2C(names);
+        final BiomeLangS2C decodedReply = (BiomeLangS2C) MsgCodec.decode(MsgCodec.encode(reply));
+        assertEquals(Proto.MSG_BIOME_LANG_S2C, decodedReply.typeId());
+        assertEquals(names, decodedReply.names());
+    }
+
+    @Test
+    void biomeLangReplyEnforcesItsEntryCap() throws ProtoException {
+        final Map<String, String> names = new java.util.LinkedHashMap<>();
+        for (int i = 0; i <= Proto.MAX_BIOME_LANG_ENTRIES; i++) {
+            names.put("biome.big.b" + i, "B" + i);
+        }
+        assertThrows(ProtoException.class, () -> MsgCodec.encode(new BiomeLangS2C(names)));
+    }
+
     private static List<HelloPolicyS2C.DimDescriptor> randomDims(final Random rng) {
         final int n = rng.nextInt(Proto.MAX_DIM_ENTRIES) + 1;
         final HelloPolicyS2C.DimDescriptor[] dims = new HelloPolicyS2C.DimDescriptor[n];

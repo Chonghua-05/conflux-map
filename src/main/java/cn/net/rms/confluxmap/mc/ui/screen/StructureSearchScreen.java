@@ -11,6 +11,7 @@ import cn.net.rms.confluxmap.core.model.DimensionId;
 import cn.net.rms.confluxmap.core.predict.BiomeTable;
 import cn.net.rms.confluxmap.core.predict.CubiomesBiomeIds;
 import cn.net.rms.confluxmap.core.predict.StructureIndex;
+import cn.net.rms.confluxmap.mc.ui.BiomeLabels;
 import cn.net.rms.confluxmap.mc.net.CompanionSession;
 import cn.net.rms.confluxmap.mc.predict.StructureMarkerService;
 import cn.net.rms.confluxmap.mc.ui.GuiDraw;
@@ -31,7 +32,6 @@ import net.minecraft.client.gui.widget.ButtonWidget;
 import net.minecraft.client.gui.widget.TextFieldWidget;
 import net.minecraft.text.Text;
 import net.minecraft.util.Identifier;
-import net.minecraft.util.Util;
 
 /** Shared structure/biome picker with localized filtering and candidate browsing. */
 final class StructureSearchScreen extends ConfluxScreen {
@@ -765,8 +765,8 @@ final class StructureSearchScreen extends ConfluxScreen {
     }
 
     static String localizedBiomeName(final Identifier biome) {
-        final String key = Util.createTranslationKey("biome", biome);
-        final String translated = Texts.translatable(key).getString();
-        return translated.equals(key) ? biome.toString() : translated;
+        // Translated → datapack-synced → registry id; the datapack layer is what names custom
+        // biomes whose translations the client never loaded.
+        return BiomeLabels.displayName(biome);
     }
 }

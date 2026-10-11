@@ -3,6 +3,7 @@ package cn.net.rms.confluxmap;
 import cn.net.rms.confluxmap.api.ConfluxMapApi;
 import cn.net.rms.confluxmap.api.ConfluxMapPlugin;
 import cn.net.rms.confluxmap.bridge.GameBridge;
+import cn.net.rms.confluxmap.compat.MinecraftAccess;
 import cn.net.rms.confluxmap.core.annotation.AnnotationService;
 import cn.net.rms.confluxmap.core.api.ConfluxMapApiImpl;
 import cn.net.rms.confluxmap.core.api.CustomMarkerService;
@@ -68,6 +69,7 @@ import cn.net.rms.confluxmap.mc.teleport.ClientGroundTeleportService;
 import cn.net.rms.confluxmap.mc.trail.PlayerTrailTracker;
 import cn.net.rms.confluxmap.mc.ui.hud.MinimapHudRenderer;
 import cn.net.rms.confluxmap.mc.ui.PortalIconReloadListener;
+import cn.net.rms.confluxmap.mc.ui.DatapackBiomeNameService;
 import cn.net.rms.confluxmap.mc.ui.UiResourceReloadListener;
 import cn.net.rms.confluxmap.mc.ui.UiResourceTheme;
 import cn.net.rms.confluxmap.mc.ui.screen.FullscreenMapViewState;
@@ -147,6 +149,7 @@ public final class ConfluxMapClient implements ClientModInitializer {
     private StructureMarkerService structureMarkerService;
     private CompanionSession companionSession;
     private ClientNetworking clientNetworking;
+    private DatapackBiomeNameService datapackBiomeNames;
     private SharedWaypointClient sharedWaypoints;
     private CorrectionStore correctionStore;
     private MapSyncClient mapSyncClient;
@@ -263,6 +266,9 @@ public final class ConfluxMapClient implements ClientModInitializer {
             syncedMaterialResolver::register
         );
         clientNetworking = new ClientNetworking(companionSession);
+        datapackBiomeNames = new DatapackBiomeNameService(
+            client, () -> clientNetworking.requestDatapackBiomeNames(MinecraftAccess.language(client))
+        );
         mapSyncClient = new MapSyncClient(
             companionSession, clientNetworking, correctionStore, predictionTileService,
             config, syncedMaterialResolver::register
@@ -390,6 +396,7 @@ public final class ConfluxMapClient implements ClientModInitializer {
         sessionTracker.addListener(annotationService::onSessionChanged);
         sessionTracker.addListener(correctionStore::onSessionChanged);
         sessionTracker.addListener(session -> mapSyncClient.reset());
+        sessionTracker.addListener(datapackBiomeNames::onSessionChanged);
         sessionTracker.addListener(session -> chunkLoadStateClient.reset());
         sessionTracker.addListener(predictionBootstrap::onSessionChanged);
         sessionTracker.addListener(predictionPaletteBuilder::onSessionChanged);
@@ -427,6 +434,9 @@ public final class ConfluxMapClient implements ClientModInitializer {
         );
         ResourceManagerHelper.get(ResourceType.CLIENT_RESOURCES).registerReloadListener(
             new PortalIconReloadListener()
+        );
+        ResourceManagerHelper.get(ResourceType.CLIENT_RESOURCES).registerReloadListener(
+            datapackBiomeNames
         );
 
         updateCheck = new UpdateCheckService(
@@ -496,6 +506,7 @@ public final class ConfluxMapClient implements ClientModInitializer {
         configIo.save(config);
         entityIconManager.close();
         chunkCapture.close();
+        datapackBiomeNames.shutdown();
         //#if MC>=260200
         //$$ Mesh.close();
         //#endif

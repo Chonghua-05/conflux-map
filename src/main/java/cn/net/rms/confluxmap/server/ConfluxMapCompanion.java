@@ -48,6 +48,7 @@ public final class ConfluxMapCompanion {
     private volatile ServerConfig config;
     private volatile UUID instanceId;
     private volatile RegionSummaryService summaries;
+    private volatile DatapackLangService datapackLangs;
     private volatile ChunkLoadStateService chunkLoadStates;
     private volatile SharedWaypointService sharedWaypoints;
     private volatile WebMapServer webMap;
@@ -199,6 +200,11 @@ public final class ConfluxMapCompanion {
         if (wasActive && current != null) {
             current.close(server);
         }
+        final DatapackLangService langs = datapackLangs;
+        if (langs != null) {
+            langs.shutdown();
+        }
+        datapackLangs = null;
         summaries = null;
         quadraLayouts = Map.of();
         chunkLoadStates = null;
@@ -261,6 +267,11 @@ public final class ConfluxMapCompanion {
 
     public RegionSummaryService summaries() {
         return summaries;
+    }
+
+    /** Serves biome names from the level's data packs; null while the companion is inactive. */
+    public DatapackLangService datapackLangs() {
+        return datapackLangs;
     }
 
     /** The quadra-gen layouts detected for this server's lifetime; empty when none managed. */
@@ -398,6 +409,9 @@ public final class ConfluxMapCompanion {
             return;
         }
         summaries = new RegionSummaryService(config);
+        datapackLangs = new DatapackLangService(
+            () -> server.getSavePath(WorldSavePath.DATAPACKS), ConfluxMapMod.LOGGER
+        );
         // quadra-gen's config is read once per server lifetime (that mod never hot-reloads it);
         // both the handshake advertisement and the residual-baseline mask share this snapshot.
         quadraLayouts = QuadraGenLayouts.detect(server, !server.isDedicated());

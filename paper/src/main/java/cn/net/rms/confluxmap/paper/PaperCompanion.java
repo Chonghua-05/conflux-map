@@ -12,6 +12,7 @@ import cn.net.rms.confluxmap.core.update.GithubReleaseFetcher;
 import cn.net.rms.confluxmap.core.update.UpdateCheckService;
 import cn.net.rms.confluxmap.nativepredict.NativeLib;
 import cn.net.rms.confluxmap.server.ServerConfig;
+import cn.net.rms.confluxmap.server.DatapackLangService;
 import cn.net.rms.confluxmap.server.PlayerPositionBroadcastGate;
 import cn.net.rms.confluxmap.server.web.WebMapServer;
 import cn.net.rms.confluxmap.server.web.WebMapPrivacyStore;
@@ -82,6 +83,7 @@ final class PaperCompanion implements Listener {
     private long worldSeed;
     private Path primaryWorldRoot;
     private PaperCorrectionService corrections;
+    private DatapackLangService datapackLangs;
     private PaperMapColors mapColors;
     private PaperChunkLoadStateService chunkLoadStates;
     private SharedWaypointService sharedWaypoints;
@@ -127,6 +129,11 @@ final class PaperCompanion implements Listener {
         } catch (final IOException e) {
             plugin.getSLF4JLogger().error("Could not load web-map privacy preferences", e);
         }
+        // Vanilla never loads a data pack's assets/ half, so biome names from custom packs are
+        // only reachable by reading the level directory, exactly like the Fabric companion.
+        datapackLangs = new DatapackLangService(
+            () -> primaryWorldRoot.resolve("datapacks"), SHARED_LOGGER
+        );
         mapColors = new PaperMapColors();
         initializeFlatBaselines(mapColors);
         corrections = new PaperCorrectionService(
@@ -228,6 +235,10 @@ final class PaperCompanion implements Listener {
         if (corrections != null) {
             corrections.close();
             corrections = null;
+        }
+        if (datapackLangs != null) {
+            datapackLangs.shutdown();
+            datapackLangs = null;
         }
         sharedWaypoints = null;
         liveChunks.clear();
@@ -346,6 +357,10 @@ final class PaperCompanion implements Listener {
 
     PaperWorldDirectory worlds() {
         return worlds;
+    }
+
+    DatapackLangService datapackLangs() {
+        return datapackLangs;
     }
 
     PaperCorrectionService corrections() {

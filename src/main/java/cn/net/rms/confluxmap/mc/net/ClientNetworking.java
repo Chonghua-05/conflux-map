@@ -3,7 +3,10 @@ package cn.net.rms.confluxmap.mc.net;
 import cn.net.rms.confluxmap.ConfluxMapClient;
 import cn.net.rms.confluxmap.ConfluxMapMod;
 import cn.net.rms.confluxmap.compat.Ids;
+import cn.net.rms.confluxmap.compat.MinecraftAccess;
 import cn.net.rms.confluxmap.compat.PlayNetworking;
+import cn.net.rms.confluxmap.core.net.BiomeLangReqC2S;
+import cn.net.rms.confluxmap.core.net.BiomeLangS2C;
 import cn.net.rms.confluxmap.core.net.ErrorS2C;
 import cn.net.rms.confluxmap.core.net.FlatBaselineS2C;
 import cn.net.rms.confluxmap.core.net.QuadraLayoutS2C;
@@ -16,6 +19,7 @@ import cn.net.rms.confluxmap.core.net.MapInvalidateS2C;
 import cn.net.rms.confluxmap.core.net.MapPatchS2C;
 import cn.net.rms.confluxmap.core.net.MapRegionInvalidateS2C;
 import cn.net.rms.confluxmap.core.net.MapRegionPatchS2C;
+import cn.net.rms.confluxmap.core.net.MapSyncCapability;
 import cn.net.rms.confluxmap.core.net.MapSyncProtocol;
 import cn.net.rms.confluxmap.core.net.Message;
 import cn.net.rms.confluxmap.core.net.PolicyUpdateS2C;
@@ -24,6 +28,7 @@ import cn.net.rms.confluxmap.core.net.Proto;
 import cn.net.rms.confluxmap.core.net.ProtoException;
 import cn.net.rms.confluxmap.core.net.ServerInstanceS2C;
 import cn.net.rms.confluxmap.core.net.ServerViewDistanceS2C;
+import cn.net.rms.confluxmap.mc.ui.BiomeLabels;
 import cn.net.rms.confluxmap.nativepredict.PredictorVersion;
 import cn.net.rms.confluxmap.core.radar.ServerPlayerRadarState;
 import net.fabricmc.fabric.api.client.networking.v1.ClientPlayConnectionEvents;
@@ -89,12 +94,13 @@ public final class ClientNetworking {
             ConfluxMapMod.LOGGER.warn("companion: undecodable S2C payload ({} bytes): {}", payload.length, e.getMessage());
             return;
         }
-        executeForConnection(client, handler, () -> dispatch(msg, payload.length));
+        executeForConnection(client, handler, () -> dispatch(client, msg, payload.length));
     }
 
-    private void dispatch(final Message msg, final int payloadBytes) {
+    private void dispatch(final MinecraftClient client, final Message msg, final int payloadBytes) {
         if (msg instanceof final HelloPolicyS2C p) {
             session.onPolicy(p);
+            requestDatapackBiomeNames(MinecraftAccess.language(client));
         } else if (msg instanceof MapCompatibilityS2C || msg instanceof MapCapabilitiesS2C) {
             session.onSelection(msg);
         } else if (msg instanceof final ServerViewDistanceS2C viewDistance) {
@@ -134,6 +140,8 @@ public final class ClientNetworking {
             if (radar != null && session.entityRadarAllowed()) {
                 radar.accept(positions, System.currentTimeMillis());
             }
+        } else if (msg instanceof final BiomeLangS2C biomeLangs) {
+            BiomeLabels.acceptDatapackNames(biomeLangs.names());
         } else if (msg instanceof final ErrorS2C e) {
             onError(e, payloadBytes);
         } else {
@@ -166,7 +174,20 @@ public final class ClientNetworking {
             if (radar != null) {
                 radar.clear();
             }
+            BiomeLabels.clearDatapackNames();
         });
+    }
+
+    /**
+     * Asks a companion that advertised the DATAPACK_BIOME_LANGS capability for the level's
+     * biome names in {@code locale}. Safe to call on any connection state; without a capable
+     * companion this is a no-op and biome names fall back to the registry id.
+     */
+    public void requestDatapackBiomeNames(final String locale) {
+        if (!session.isActive() || !session.supportsServer(MapSyncCapability.DATAPACK_BIOME_LANGS)) {
+            return;
+        }
+        sendMessage(new BiomeLangReqC2S(locale));
     }
 
     private static void executeForConnection(

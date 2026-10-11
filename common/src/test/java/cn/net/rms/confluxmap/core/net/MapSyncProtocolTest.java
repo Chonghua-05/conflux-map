@@ -180,6 +180,22 @@ class MapSyncProtocolTest {
     }
 
     @Test
+    void biomeLangFramesFlowThroughNegotiationInBothDirections() throws Exception {
+        final HelloC2S hello = (HelloC2S) MsgCodec.decode(MsgCodec.encode(
+            MapSyncProtocol.clientHello("0.2.0", PREDICTOR)
+        ));
+        final NegotiatedMapSync session =
+            MapSyncProtocol.acceptClient(hello, "0.2.0", PREDICTOR).session();
+        assertTrue(session.supports(MapSyncCapability.DATAPACK_BIOME_LANGS));
+
+        final BiomeLangS2C reply = new BiomeLangS2C(Map.of("biome.custom.crystal_forest", "Crystal Forest"));
+        assertEquals(reply, MsgCodec.decode(session.encodeOutbound(reply)));
+
+        // The serverbound request frame must not encode as clientbound through the same session.
+        assertThrows(ProtoException.class, () -> session.encodeOutbound(new BiomeLangReqC2S("zh_cn")));
+    }
+
+    @Test
     void legacySessionWithoutTheQuadraCapabilityRefusesItsMessage() {
         final NegotiatedMapSync session = MapSyncProtocol.acceptClient(
             new HelloC2S("0.2.0", PREDICTOR + "|sync:1|wire:4.0|patch:4|region:2|source-light:1"),

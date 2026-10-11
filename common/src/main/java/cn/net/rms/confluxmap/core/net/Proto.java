@@ -84,11 +84,15 @@ public final class Proto {
     public static final int MSG_PLAYER_POSITIONS_S2C = 0x14;
     /** S2C: quadra-gen quadrant layouts per managed dimension; sent just before {@link #MSG_HELLO_POLICY_S2C}. */
     public static final int MSG_QUADRA_LAYOUT_S2C = 0x15;
+    /** C2S: client asks for the datapack-provided {@code biome.*} translations in its locale. */
+    public static final int MSG_BIOME_LANG_REQ_C2S = 0x16;
+    /** S2C: merged datapack biome display names; empty when the world's packs ship none. */
+    public static final int MSG_BIOME_LANG_S2C = 0x17;
 
     /** First valid message id; used to range-check the type byte. */
     public static final int MSG_MIN = MSG_HELLO_C2S;
     /** Last valid message id for this proto major version. */
-    public static final int MSG_MAX = MSG_QUADRA_LAYOUT_S2C;
+    public static final int MSG_MAX = MSG_BIOME_LANG_S2C;
 
     // ---- Hard caps (enforced everywhere untrusted bytes cross a boundary) ----
 
@@ -123,6 +127,8 @@ public final class Proto {
     public static final int MAX_MAP_SYNC_VIEW_TILES = 256;
     /** Maximum invalidated tiles carried in one server notification. */
     public static final int MAX_MAP_INVALIDATION_TILES = 256;
+    /** Maximum {@code biome.*} entries one BIOME_LANG reply may carry; each is two capped UTF-8 strings. */
+    public static final int MAX_BIOME_LANG_ENTRIES = 1024;
     /** Maximum cropped summary-region pages carried by one request. */
     public static final int MAX_REGION_PAGES_PER_REQ = 32;
     /** Maximum changed summary regions carried by one invalidation. */

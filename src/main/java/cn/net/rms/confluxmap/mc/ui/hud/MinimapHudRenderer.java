@@ -1,5 +1,6 @@
 package cn.net.rms.confluxmap.mc.ui.hud;
 
+import cn.net.rms.confluxmap.mc.ui.BiomeLabels;
 import cn.net.rms.confluxmap.compat.MinecraftAccess;
 import cn.net.rms.confluxmap.bridge.GameBridge;
 import cn.net.rms.confluxmap.bridge.PlayerView;
@@ -1019,8 +1020,9 @@ public final class MinimapHudRenderer {
         if (id == null) {
             return "";
         }
-        final Text name = Texts.translatable("biome." + id.getNamespace() + "." + id.getPath());
-        return name.getString();
+        // Translated → datapack-synced → registry id; a datapack biome with no client-side
+        // translation must degrade to the id like vanilla F3, never the raw translation key.
+        return BiomeLabels.displayName(id);
     }
 
     private void drawBorder(final MatrixStack matrices, final int x0, final int y0, final int size) {

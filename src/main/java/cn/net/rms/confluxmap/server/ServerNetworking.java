@@ -6,6 +6,8 @@ import cn.net.rms.confluxmap.compat.MinecraftAccess;
 import cn.net.rms.confluxmap.compat.MinecraftVersion;
 import cn.net.rms.confluxmap.compat.PlayNetworking;
 import cn.net.rms.confluxmap.core.model.DimensionId;
+import cn.net.rms.confluxmap.core.net.BiomeLangReqC2S;
+import cn.net.rms.confluxmap.core.net.BiomeLangS2C;
 import cn.net.rms.confluxmap.core.net.CorrectionProfile;
 import cn.net.rms.confluxmap.core.net.ErrorS2C;
 import cn.net.rms.confluxmap.core.net.FlatBaselineS2C;
@@ -61,6 +63,9 @@ public final class ServerNetworking {
     private final Set<UUID> mutedPlayers = ConcurrentHashMap.newKeySet();
     private final ConcurrentMap<UUID, NegotiatedMapSync> peerSessions =
         new ConcurrentHashMap<>();
+    /** Last BIOME_LANG answer time per player; one disk scan per interval is plenty. */
+    private final ConcurrentMap<UUID, Long> biomeLangRequests = new ConcurrentHashMap<>();
+    private static final long BIOME_LANG_REQUEST_INTERVAL_NANOS = 5_000_000_000L;
     private boolean registered;
 
     public ServerNetworking(final ConfluxMapCompanion companion) {
@@ -78,6 +83,7 @@ public final class ServerNetworking {
             malformedStrikes.remove(uuid);
             mutedPlayers.remove(uuid);
             peerSessions.remove(uuid);
+            biomeLangRequests.remove(uuid);
             final RegionSummaryService summaries = companion.summaries();
             if (summaries != null) {
                 summaries.remove(uuid);
@@ -128,6 +134,8 @@ public final class ServerNetworking {
                 handleMapRegionViewReq(server, player, req, payload.length);
             } else if (msg instanceof final MapRegionSyncSubscribeC2S req) {
                 handleMapRegionSyncSubscribe(server, player, req);
+            } else if (msg instanceof final BiomeLangReqC2S req) {
+                handleBiomeLangReq(server, player, req);
             } else {
                 ConfluxMapMod.LOGGER.warn(
                     "[ConfluxMap] companion: unexpected {} from {} (server-side handlers expect C2S only)",
@@ -147,6 +155,46 @@ public final class ServerNetworking {
         if (strikes >= 3) {
             mutedPlayers.add(player.getUuid());
         }
+    }
+
+    /**
+     * Answers the client's biome-name request from the level's data packs. The scan runs on the
+     * lang service's worker; the reply hops back to the server thread because that is where the
+     * other sends happen and where the player's connection state is trustworthy.
+     */
+    private void handleBiomeLangReq(
+        final MinecraftServer server,
+        final ServerPlayerEntity player,
+        final BiomeLangReqC2S req
+    ) {
+        final NegotiatedMapSync session = peerSession(player);
+        if (session == null || !session.supports(MapSyncCapability.DATAPACK_BIOME_LANGS)) {
+            // Only a hostile or buggy peer can get here: the codec already rejects the frame
+            // for sessions without the capability, so this is defense in depth.
+            ConfluxMapMod.LOGGER.warn(
+                "[ConfluxMap] companion: biome-lang request without the negotiated capability from {}",
+                MinecraftAccess.playerName(player)
+            );
+            return;
+        }
+        final DatapackLangService langs = companion.datapackLangs();
+        if (langs == null) {
+            return;
+        }
+        final long now = System.nanoTime();
+        final long last = biomeLangRequests.getOrDefault(player.getUuid(), 0L);
+        if (now - last < BIOME_LANG_REQUEST_INTERVAL_NANOS) {
+            return;
+        }
+        biomeLangRequests.put(player.getUuid(), now);
+        langs.requestBiomeNames(req.locale(), names ->
+            server.execute(() -> {
+                if (player.isDisconnected()) {
+                    return;
+                }
+                sendNegotiated(player, session, new BiomeLangS2C(names));
+            })
+        );
     }
 
     private void handleHello(final MinecraftServer server, final ServerPlayerEntity player, final HelloC2S hello) {

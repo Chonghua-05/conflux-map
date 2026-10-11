@@ -8,6 +8,7 @@ import cn.net.rms.confluxmap.core.net.HelloPolicyS2C;
 import cn.net.rms.confluxmap.core.net.MapCapabilitiesS2C;
 import cn.net.rms.confluxmap.core.net.MapCompatibilityS2C;
 import cn.net.rms.confluxmap.core.net.Message;
+import cn.net.rms.confluxmap.core.net.MapSyncCapability;
 import cn.net.rms.confluxmap.core.net.MapSyncCompatibility;
 import cn.net.rms.confluxmap.core.net.MapSyncProtocol;
 import cn.net.rms.confluxmap.core.net.MsgCodec;
@@ -329,6 +330,16 @@ public final class CompanionSession {
         return negotiated == null
             ? MapSyncProtocol.decodeClientbound(payload)
             : negotiated.decodeInbound(payload);
+    }
+
+    /**
+     * Whether the negotiated server advertised {@code capability}. This is the server's
+     * selection intersected with what this build knows, so it stays false against older
+     * companions even though the local enum knows the constant.
+     */
+    public boolean supportsServer(final MapSyncCapability capability) {
+        final NegotiatedMapSync negotiated = negotiatedMapSync;
+        return negotiated != null && negotiated.supports(capability);
     }
 
     byte[] encodeOutbound(final Message message) throws ProtoException {
