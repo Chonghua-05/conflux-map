@@ -141,6 +141,9 @@ public final class ClientNetworking {
                 radar.accept(positions, System.currentTimeMillis());
             }
         } else if (msg instanceof final BiomeLangS2C biomeLangs) {
+            ConfluxMapMod.LOGGER.info(
+                "companion: biome names synced from the level ({} entries)", biomeLangs.names().size()
+            );
             BiomeLabels.acceptDatapackNames(biomeLangs.names());
         } else if (msg instanceof final ErrorS2C e) {
             onError(e, payloadBytes);

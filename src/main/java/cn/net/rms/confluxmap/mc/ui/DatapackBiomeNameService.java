@@ -25,6 +25,12 @@ import org.jetbrains.annotations.Nullable;
  *
  * <p>Reloads re-run both paths because a language switch also fires a client resource reload;
  * the local read picks the new locale file, the companion request carries the new code.
+ *
+ * <p>Synced names live for the whole connection: {@code ClientNetworking} clears them on
+ * disconnect, and this listener deliberately does not. Session changes also fire on every
+ * dimension hop, and the companion's answer for a join can land either side of the session
+ * swap — clearing here would race that answer and strand the map on registry-id fallbacks
+ * (datapacks are level-scoped anyway, so dimension hops see the same names).
  */
 public final class DatapackBiomeNameService implements SimpleSynchronousResourceReloadListener {
     private static final Identifier RELOAD_ID =
@@ -43,9 +49,8 @@ public final class DatapackBiomeNameService implements SimpleSynchronousResource
         this.localReader = new DatapackLangService(() -> singleplayerDatapacks, logger);
     }
 
-    /** Session listener: re-binds the local reader to the new world and clears stale names. */
+    /** Session listener: re-binds the local reader to the new world; clearing is disconnect-owned. */
     public void onSessionChanged(final SessionGuard.Session session) {
-        BiomeLabels.clearDatapackNames();
         if (!session.active()) {
             singleplayerDatapacks = null;
             return;

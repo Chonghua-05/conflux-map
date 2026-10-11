@@ -160,6 +160,10 @@ final class PaperNetworking implements PluginMessageListener {
      */
     private void requestBiomeLangs(final Player player, final BiomeLangReqC2S request) {
         final NegotiatedMapSync session = session(player);
+        plugin.getSLF4JLogger().info(
+            "Biome lang request from {} locale={}",
+            player.getName(), request.locale()
+        );
         if (session == null || !session.supports(MapSyncCapability.DATAPACK_BIOME_LANGS)) {
             return;
         }
@@ -170,6 +174,7 @@ final class PaperNetworking implements PluginMessageListener {
         final long now = System.nanoTime();
         final long last = biomeLangRequests.getOrDefault(player.getUniqueId(), 0L);
         if (now - last < BIOME_LANG_REQUEST_INTERVAL_NANOS) {
+            plugin.getSLF4JLogger().debug("Biome lang request from {} rate-limited", player.getName());
             return;
         }
         biomeLangRequests.put(player.getUniqueId(), now);
@@ -179,6 +184,9 @@ final class PaperNetworking implements PluginMessageListener {
                 if (current == null || !current.isOnline()) {
                     return;
                 }
+                plugin.getSLF4JLogger().info(
+                    "Biome lang reply to {} entries={}", current.getName(), names.size()
+                );
                 sendNegotiated(current, session, new BiomeLangS2C(names));
             })
         );
