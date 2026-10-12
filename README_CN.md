@@ -128,7 +128,7 @@ Conflux Map 是一款 Fabric 平台的小地图与世界地图模组。客户端
 安装组件后，全服共用同一份实时地图与同一份路径点列表。
 
 - Fabric 服务端：将对应版本的 JAR 放入 `mods/` 目录。
-- Paper 服务端：将 `confluxmap-paper-<version>.jar` 放入 `plugins/` 目录，支持 Paper 1.21.1 至 26.3。
+- Paper / Folia 服务端：将 `confluxmap-paper-<version>.jar` 放入 `plugins/` 目录，支持 Paper 1.21.1 至 26.3 及 Folia。
 
 客户端与服务端可以分别升级：两侧预测算法一致时采用体积较小的差分同步，不一致时回退至完整数据同步，旧协议客户端始终可以获得基础地图服务。
 
@@ -141,7 +141,7 @@ Conflux Map 是一款 Fabric 平台的小地图与世界地图模组。客户端
 - `enabled` 为总开关；`checkForUpdates` 在服务端启动时于控制台提示新版本。
 - `shareSeed` 将世界种子发送至客户端，供预测群系与结构使用。默认关闭，因为共享后种子会暴露给所有玩家；`allowBiomeMap` 与 `allowStructureSearch` 分别控制群系图层与结构查找。
 - `shareCorrections` 将服务端掌握的真实地形发送至客户端，用于修正预测结果。
-- `shareChunkLoadState` 公开服务端保持加载的区块，默认关闭，以减少玩家活动与农场位置的暴露。
+- `shareChunkLoadState` 公开服务端保持加载的区块，默认关闭，以减少玩家活动与农场位置的暴露。（注：Folia 暂不支持区块加载状态，即使配置开启也会保持禁用）。
 - `allowEntityRadar` 默认开启，向客户端发送所有在线玩家的实时位置；关闭后位置流停止，客户端实体雷达不可用。
 - `shareWaypoints` 启用共享路径点列表，默认开启；`allowNonOperatorSharedWaypointManagement` 默认允许普通玩家管理自己发布的条目。
 - `webMap.*` 控制网页地图，默认开启：监听 `127.0.0.1:8123`，不显示玩家位置。如需公开访问，应置于保留原始 `Host` 请求头的 HTTPS 反向代理之后；`sharePlayers` 控制是否包含玩家位置。

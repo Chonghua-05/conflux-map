@@ -84,6 +84,24 @@ class PaperPluginMessageDispatcherTest {
         assertArrayEquals(new byte[] {(byte) extra}, player.sent.get(0));
     }
 
+    @Test
+    void anInboundPayloadReleasesRepliesQueuedBeforeTheRegistrationWasKnown() {
+        final PaperPluginMessageDispatcher dispatcher = new PaperPluginMessageDispatcher();
+        final FakeRecipient player = new FakeRecipient();
+        final byte[] reply = {0x7f, 0x01};
+
+        dispatcher.send(player, MAP_CHANNEL, reply);
+        assertTrue(player.sent.isEmpty());
+
+        // Receiving a payload proves the client registered the channel, which is the only
+        // reliable signal on a regionised server, where registration may not have been observed.
+        player.listening.add(MAP_CHANNEL);
+        dispatcher.confirm(player, MAP_CHANNEL);
+
+        assertEquals(1, player.sent.size());
+        assertArrayEquals(reply, player.sent.get(0));
+    }
+
     private static final class FakeRecipient implements PaperPluginMessageDispatcher.Recipient {
         private final UUID id = UUID.fromString("00000000-0000-0000-0000-000000000701");
         private final Set<String> listening = new HashSet<>();

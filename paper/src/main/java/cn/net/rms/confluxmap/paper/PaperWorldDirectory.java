@@ -53,6 +53,16 @@ final class PaperWorldDirectory {
         return byWorld.get(world);
     }
 
+    /** Resolves an entry by the world key carried in a player snapshot. */
+    synchronized Entry findByDimensionId(final String dimensionId) {
+        for (final Entry entry : entries) {
+            if (entry.dimensionId().equals(dimensionId)) {
+                return entry;
+            }
+        }
+        return null;
+    }
+
     synchronized List<Entry> entries() {
         return List.copyOf(entries);
     }

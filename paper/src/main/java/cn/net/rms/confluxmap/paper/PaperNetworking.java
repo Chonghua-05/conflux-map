@@ -28,6 +28,7 @@ import cn.net.rms.confluxmap.server.CompanionPolicy;
 import cn.net.rms.confluxmap.server.DatapackLangService;
 import cn.net.rms.confluxmap.server.ServerConfig;
 import java.util.ArrayList;
+import java.util.Collection;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
@@ -88,8 +89,14 @@ final class PaperNetworking implements PluginMessageListener {
             return;
         }
         final byte[] stablePayload = payload.clone();
+        // A payload can only arrive on a channel the client registered, so this is the reliable
+        // moment to open the reply path: the handshake answer is produced in the same breath as
+        // the request, well before the channel mirror finishes running.
+        messages.confirm(messages.recipient(plugin, player), channel);
         if (!Bukkit.isPrimaryThread()) {
-            Bukkit.getScheduler().runTask(
+            // Correction state lives in common/ and is not thread safe, so the payload is handled
+            // on the global region, which owns the shared correction state.
+            PaperPlatform.global(
                 plugin,
                 () -> receive(player.getUniqueId(), stablePayload)
             );
@@ -179,7 +186,7 @@ final class PaperNetworking implements PluginMessageListener {
         }
         biomeLangRequests.put(player.getUniqueId(), now);
         langs.requestBiomeNames(request.locale(), names ->
-            Bukkit.getScheduler().runTask(plugin, () -> {
+            PaperPlatform.global(plugin, () -> {
                 final Player current = Bukkit.getPlayer(player.getUniqueId());
                 if (current == null || !current.isOnline()) {
                     return;
@@ -192,7 +199,11 @@ final class PaperNetworking implements PluginMessageListener {
         );
     }
 
-    private void hello(final Player player, final HelloC2S hello) {        final MapSyncProtocol.ServerHandshake handshake = MapSyncProtocol.acceptClient(
+    private void hello(final Player player, final HelloC2S hello) {
+        // The channel set belongs to the entity, so it is mirrored from the player's own
+        // scheduler; this also covers clients that registered before this plugin attached.
+        PaperPlatform.onPlayer(plugin, player, () -> messages.seed(player));
+        final MapSyncProtocol.ServerHandshake handshake = MapSyncProtocol.acceptClient(
             hello, plugin.getPluginMeta().getVersion(), PredictorVersion.full()
         );
         final NegotiatedMapSync session = handshake.session();
@@ -352,24 +363,29 @@ final class PaperNetworking implements PluginMessageListener {
         if (!companion.config().allowEntityRadar) {
             return;
         }
+        // Positions come from the snapshots each player published on its own scheduler; reading
+        // them here would reach into entity state owned by another region.
+        final Collection<PaperPlayerProbe.Snapshot> players = companion.players().snapshots();
         final List<PlayerPositionsS2C.Entry> entries = new ArrayList<>();
-        for (final Player player : Bukkit.getOnlinePlayers()) {
-            final Location location = player.getLocation();
+        for (final PaperPlayerProbe.Snapshot snapshot : players) {
             entries.add(new PlayerPositionsS2C.Entry(
-                player.getUniqueId(),
-                player.getName(),
-                player.getWorld().getKey().toString(),
-                location.getX(),
-                location.getY(),
-                location.getZ(),
-                player.getGameMode() == GameMode.SPECTATOR
+                snapshot.id(),
+                snapshot.name(),
+                snapshot.worldKey(),
+                snapshot.x(),
+                snapshot.y(),
+                snapshot.z(),
+                snapshot.spectator()
             ));
         }
         final PlayerPositionsS2C snapshot = new PlayerPositionsS2C(entries);
-        for (final Player player : Bukkit.getOnlinePlayers()) {
-            final NegotiatedMapSync session = sessions.get(player.getUniqueId());
+        for (final PaperPlayerProbe.Snapshot player : players) {
+            final NegotiatedMapSync session = sessions.get(player.id());
             if (session != null && session.supports(MapSyncCapability.PLAYER_POSITIONS)) {
-                sendNegotiated(player, session, snapshot);
+                final Player target = Bukkit.getPlayer(player.id());
+                if (target != null) {
+                    sendNegotiated(target, session, snapshot);
+                }
             }
         }
     }
@@ -438,7 +454,7 @@ final class PaperNetworking implements PluginMessageListener {
     }
 
     private void send(final Player player, final byte[] payload) {
-        messages.send(PaperPluginMessageDispatcher.recipient(plugin, player), CHANNEL, payload);
+        messages.send(messages.recipient(plugin, player), CHANNEL, payload);
     }
 
     private void sendNegotiated(

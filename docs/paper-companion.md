@@ -1,28 +1,60 @@
-# Paper companion
+# Server companion (`paper/` module)
+
+> This branch targets Folia and other servers that expose Paper's threaded-region schedulers.
+> The module remains named `paper/` because the adapter uses the Paper API.
 
 The standalone `confluxmap-paper` plugin provides the same public companion protocols as the
-Fabric server entrypoint. One Paper artifact targets Paper 1.21.1 through 26.3. It is deliberately
-separate from the version-specific Fabric client artifacts: bundling Bukkit classes into every
-remapped Fabric jar would enlarge every client download and create avoidable class-loading and
-compatibility surfaces.
+Fabric server entrypoint. It is built against the Paper API and requires a server that exposes
+the threaded-region schedulers. It is separate from the version-specific Fabric client artifacts:
+bundling Bukkit classes into every remapped Fabric jar would enlarge every client download and
+create avoidable class-loading and compatibility surfaces.
+
+## Folia thread model
+
+Folia splits each world into independently ticked regions, so the adapter follows three rules.
+`PaperPlatform` is the only place that talks to a scheduler, and every call goes through
+`io.papermc.paper.threadedregions` — Paper implements those schedulers too, which is why there is
+a single code path rather than one per platform.
+
+| Scope | Owns | May touch |
+|---|---|---|
+| Global region | correction service, invalidation publishers, subscription tables | nothing region-owned |
+| Region | chunks | its own chunk snapshots and load levels |
+| Entity | players | that player's position, profile and permissions |
+
+Two consequences worth knowing before changing anything here:
+
+- **Shared state stays on one logical thread.** `MapInvalidationPublisher`,
+  `MapRegionInvalidationPublisher`, `LiveChunkSummaryCache` and `PlayerBudget` live in `common/`
+  and are not thread safe, so plugin-message and web requests queue onto the global region exactly
+  once, on the global region that owns the shared state.
+- **Player state is never read from the global tick.** `PaperPlayerProbe` asks each player, on its
+  own scheduler, to publish an immutable snapshot; the position broadcast, the web map and the
+  shared-waypoint tick all consume those snapshots.
+
+Two features behave differently on a regionised server:
+
+- **Chunk load state is off.** Publishing it would mean polling `Chunk.LoadLevel` — region-owned
+  state — for every loaded chunk, thousands of region tasks per tick. The service is never
+  instantiated and clients are told during the handshake that the feature is unavailable.
+- **The initial loaded-chunk scan is skipped.** `World#getLoadedChunks()` does not exist on a
+  regionised server, so live summaries start from the chunk loads that follow startup. A world
+  that was already loaded when the plugin enabled contributes its summaries on the next load.
+
 
 ## Installation
 
-1. Build with `./gradlew :paper:build`, or download the Paper artifact from a release.
-2. Put `confluxmap-paper-<version>.jar` in the Paper server's `plugins/` directory.
+1. Build with `./gradlew :paper:build`, or download the plugin artifact from a release.
+2. Put `confluxmap-paper-<version>.jar` in the Folia server's `plugins/` directory.
 3. Keep the normal version-specific Conflux Map Fabric jar on each client.
 4. Start the server once to create `config/confluxmap/server.json`, then adjust the opt-in policy.
 
-For local development, run `./gradlew :paper:runServer`. The task builds the plugin, downloads a
-Paper 1.21.1 development server, installs the new jar, and keeps its disposable state under the
-ignored `paper/run/` directory. The first invocation writes `paper/run/eula.txt`; review the
-Minecraft EULA, change that file to `eula=true`, and invoke the task again.
-
 The plugin bytecode targets Java 21 and supports the Paper API only. Run the
 [Java version required by Paper](https://docs.papermc.io/paper/getting-started/): Java 21 for Paper
-through 1.21.11 and Java 25 for Paper 26.x. Folia, Spigot, and CraftBukkit are outside the supported
-runtime contract. A proxy needs no companion plugin as long as it transparently forwards Minecraft
-plugin messages.
+through 1.21.11 and Java 25 for Paper 26.x — and therefore Java 25 for current Folia builds.
+Spigot and CraftBukkit are outside the supported runtime contract, as is any server that does not
+implement the threaded-regions schedulers. A proxy needs no companion plugin as long as it
+transparently forwards Minecraft plugin messages.
 
 ## Compatibility and protocol
 
@@ -41,8 +73,8 @@ mappings.
 
 ## Terrain access
 
-Loaded chunks are captured on the Paper main thread as immutable `ChunkSnapshot` values. Summary
-work then uses the platform-neutral column seam. Unloaded chunks are read directly from the
+Loaded chunks are captured on their owning region scheduler as immutable `ChunkSnapshot` values.
+Summary work then uses the platform-neutral column seam. Unloaded chunks are read directly from the
 world's `.mca` and external `.mcc` files by a bounded read-only scanner supporting GZIP, ZLIB,
 uncompressed, and LZ4 Anvil payloads. Correction requests never call `getChunkAt` and therefore do
 not generate terrain as a side effect.
@@ -51,11 +83,12 @@ The optional web map (`webMap.enabled`) is a browser client on the same wire pro
 and correction requests run through this same terrain-access and correction-sync path rather than
 a separate reader.
 
-Disk scans and patch construction run on two daemon workers. Plugin messages and all Bukkit world
-access stay on the main thread. Live summaries use Fabric's demand window and two-chunk-per-tick
-main-thread ceiling, further bounded by `maxChunkSummariesPerSecond`; chunk changes publish both
-tile and exact-region invalidations. LOD 3/4 legacy tile requests scan progressively and return
-`PARTIAL` while incomplete, so a coarse request cannot monopolize a worker or the server thread.
+Disk scans and patch construction run on two daemon workers. Plugin messages and Bukkit world
+access are dispatched to their owning global, region, or entity scheduler. Live summaries use the
+existing demand window and two-chunk-per-tick capture ceiling, further bounded by
+`maxChunkSummariesPerSecond`; chunk changes publish both tile and exact-region invalidations. LOD
+3/4 legacy tile requests scan progressively and return `PARTIAL` while incomplete, so a coarse
+request cannot monopolize a worker or a scheduler task.
 
 ## Data ownership
 

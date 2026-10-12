@@ -4,7 +4,9 @@ import java.util.ArrayDeque;
 import java.util.HashMap;
 import java.util.Map;
 import java.util.Objects;
+import java.util.Set;
 import java.util.UUID;
+import java.util.concurrent.ConcurrentHashMap;
 import org.bukkit.entity.Player;
 
 /** Delivers Paper plugin messages only after the client has registered the target channel. */
@@ -31,6 +33,11 @@ final class PaperPluginMessageDispatcher {
     }
 
     private final Map<UUID, Map<String, PendingChannel>> pending = new HashMap<>();
+    /**
+     * Channels each player has registered, mirrored here because the player's own channel set is
+     * entity state: the global region sends messages constantly and may not read it directly.
+     */
+    private final Map<UUID, Set<String>> listening = new ConcurrentHashMap<>();
 
     interface Recipient {
         UUID id();
@@ -40,7 +47,7 @@ final class PaperPluginMessageDispatcher {
         void send(String channel, byte[] payload);
     }
 
-    static Recipient recipient(
+    Recipient recipient(
         final ConfluxMapPaperPlugin plugin,
         final Player player
     ) {
@@ -54,7 +61,8 @@ final class PaperPluginMessageDispatcher {
 
             @Override
             public boolean listensTo(final String channel) {
-                return player.getListeningPluginChannels().contains(channel);
+                final Set<String> channels = listening.get(player.getUniqueId());
+                return channels != null && channels.contains(channel);
             }
 
             @Override
@@ -84,9 +92,22 @@ final class PaperPluginMessageDispatcher {
     synchronized void channelRegistered(final Recipient recipient, final String channel) {
         Objects.requireNonNull(recipient, "recipient");
         Objects.requireNonNull(channel, "channel");
-        if (!recipient.listensTo(channel)) {
-            return;
-        }
+        confirm(recipient, channel);
+    }
+
+    /**
+     * Records that the client listens to {@code channel} and releases anything queued for it.
+     *
+     * <p>Reaching this from an inbound payload is stronger evidence than the registration event:
+     * the client cannot have sent on a channel it did not register. The companion relies on that
+     * because a handshake reply is produced and sent in the same breath, before the asynchronous
+     * channel mirror can have run.
+     */
+    synchronized void confirm(final Recipient recipient, final String channel) {
+        Objects.requireNonNull(recipient, "recipient");
+        Objects.requireNonNull(channel, "channel");
+        listening.computeIfAbsent(recipient.id(), ignored -> ConcurrentHashMap.newKeySet())
+            .add(channel);
         final Map<String, PendingChannel> playerPending = pending.get(recipient.id());
         if (playerPending == null) {
             return;
@@ -104,10 +125,23 @@ final class PaperPluginMessageDispatcher {
     }
 
     synchronized void disconnect(final UUID playerId) {
-        pending.remove(Objects.requireNonNull(playerId, "playerId"));
+        Objects.requireNonNull(playerId, "playerId");
+        pending.remove(playerId);
+        listening.remove(playerId);
+    }
+
+    /**
+     * Adds the channels a player already listens to, without dropping any confirmed earlier.
+     * Must run on the player's own scheduler, which is the only place the underlying channel set
+     * may be read.
+     */
+    void seed(final Player player) {
+        listening.computeIfAbsent(player.getUniqueId(), ignored -> ConcurrentHashMap.newKeySet())
+            .addAll(player.getListeningPluginChannels());
     }
 
     synchronized void clear() {
         pending.clear();
+        listening.clear();
     }
 }
