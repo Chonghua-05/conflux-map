@@ -37,14 +37,14 @@ class CubiomesNativeTest {
     private static final int END = 1;
     /** cubiomes {@code enum StructureType} ordinal for Village at this pinned commit. */
     private static final int VILLAGE = 5;
-    private static final int END_CITY = 20;
-    private static final int STRONGHOLD = 25;
-    private static final int NETHER_FOSSIL = 26;
+    private static final int END_CITY = 21;
+    private static final int STRONGHOLD = 27;
+    private static final int NETHER_FOSSIL = 20;
     private static final int[] LEGACY_OVERWORLD_STRUCTURES = {
         1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 14, 15, STRONGHOLD
     };
     private static final int[] MODERN_OVERWORLD_STRUCTURES = {
-        1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 13, 14, 15, 23, 24, STRONGHOLD
+        1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 13, 14, 15, 24, 25, STRONGHOLD
     };
     private static final int[] MODERN_NETHER_STRUCTURES = {12, 18, 19, NETHER_FOSSIL};
 
@@ -100,6 +100,25 @@ class CubiomesNativeTest {
             final int[] out = new int[8 * 8];
             assertEquals(0, ctx.biomes(4, -32, -32, 8, 8, out));
             assertArrayEquals(expected, out);
+        }
+    }
+
+    @Test
+    void mc263SamplesDappledForestAtTheUpstreamFixture() {
+        // Upstream's test_biomes_26_3 fixture. Pins the whole version chain: McVersions must
+        // resolve "26.3" to the enum value the loaded native binary treats as MC_26_3. When
+        // the cubiomes 26.3 merge shifted that enum (32 -> 35) without this table following,
+        // 26.3 seeds were generated with MC_1_21_11 worldgen and dappled_forest never
+        // appeared in any prediction.
+        final OptionalInt mc = McVersions.toCubiomes("26.3");
+        assertTrue(mc.isPresent(), "McVersions must know \"26.3\"");
+        try (CubiomesContext ctx = CubiomesContext.create(
+            mc.getAsInt(), -3829811542736183482L, OVERWORLD, 0
+        )) {
+            assertNotNull(ctx, "context creation must succeed for MC_26_3");
+            final int[] out = new int[1];
+            assertEquals(0, ctx.biomes(4, 68148 >> 2, 80990 >> 2, 1, 1, out));
+            assertEquals(188, out[0], "the 26.3 fixture point must sample dappled_forest");
         }
     }
 
@@ -515,13 +534,13 @@ class CubiomesNativeTest {
     void nearestSearchCoversEverySupportedVanillaStructureFamily() {
         assertEveryStructureCanBeLocated(mc17(), OVERWORLD, LEGACY_OVERWORLD_STRUCTURES);
         assertEveryStructureCanBeLocated(mc17(), NETHER, MODERN_NETHER_STRUCTURES);
-        assertEveryStructureCanBeLocated(mc17(), END, new int[] {20});
+        assertEveryStructureCanBeLocated(mc17(), END, new int[] {END_CITY});
         assertEveryStructureCanBeLocated(mc261(), OVERWORLD, MODERN_OVERWORLD_STRUCTURES);
         assertEveryStructureCanBeLocated(mc261(), NETHER, MODERN_NETHER_STRUCTURES);
-        assertEveryStructureCanBeLocated(mc261(), END, new int[] {20});
+        assertEveryStructureCanBeLocated(mc261(), END, new int[] {END_CITY});
         assertEveryStructureCanBeLocated(mc262(), OVERWORLD, MODERN_OVERWORLD_STRUCTURES);
         assertEveryStructureCanBeLocated(mc262(), NETHER, MODERN_NETHER_STRUCTURES);
-        assertEveryStructureCanBeLocated(mc262(), END, new int[] {20});
+        assertEveryStructureCanBeLocated(mc262(), END, new int[] {END_CITY});
     }
 
     private static void assertEveryStructureCanBeLocated(

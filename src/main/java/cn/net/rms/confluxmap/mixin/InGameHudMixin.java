@@ -103,7 +103,8 @@ public abstract class InGameHudMixin {
             app.gameBridge().session().active(),
             screen instanceof FullscreenMapScreen,
             MinecraftAccess.isContainerScreen(screen),
-            MinecraftAccess.isFullDebugOverlayVisible(client)
+            MinecraftAccess.isFullDebugOverlayVisible(client),
+            MinecraftAccess.isHudHidden(client)
         )) {
             return HudTransform.IDENTITY;
         }

@@ -3,10 +3,13 @@ package cn.net.rms.confluxmap.core.config;
 import cn.net.rms.confluxmap.core.color.MapColorStyle;
 import cn.net.rms.confluxmap.core.loadstate.ChunkLoadDetailMode;
 import cn.net.rms.confluxmap.core.loadstate.FullscreenDisplayMode;
+import cn.net.rms.confluxmap.core.portal.PortalKind;
 import cn.net.rms.confluxmap.core.predict.PredictionViewMode;
 import cn.net.rms.confluxmap.core.survey.SurveyReminderSchedule;
 import cn.net.rms.confluxmap.core.util.TileMath;
+import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
+import java.util.Map;
 import java.util.Set;
 import java.util.UUID;
 
@@ -16,8 +19,8 @@ import java.util.UUID;
  * {@link #SCHEMA_VERSION} and adding a migration in {@link ConfigIo}.
  */
 public final class ConfluxConfig {
-    public static final int SCHEMA_VERSION = 9;
-    public static final String DEFAULT_TELEPORT_COMMAND = "tp {x} {y} {z}";
+    public static final int SCHEMA_VERSION = 11;
+    public static final String DEFAULT_TELEPORT_COMMAND = "execute in {dimension} run tp @s {x} {y} {z}";
     public static final int DEFAULT_MINIMAP_SIZE = 90;
     public static final int MINIMAP_ZOOM_LEVEL_COUNT = 4;
     public static final int MIN_ANNOTATION_ERASER_SIZE = 4;
@@ -42,7 +45,7 @@ public final class ConfluxConfig {
     public static final int DEFAULT_WAYPOINT_HIGHLIGHT_DIM_OPACITY = 28;
     public static final int MIN_PLAYER_TRAIL_DURATION_SECONDS = 1;
     public static final int MAX_PLAYER_TRAIL_DURATION_SECONDS = 120;
-    public static final int DEFAULT_PLAYER_TRAIL_DURATION_SECONDS = 120;
+    public static final int DEFAULT_PLAYER_TRAIL_DURATION_SECONDS = 4;
     public static final int MIN_PLAYER_TRAIL_DOT_SIZE = 1;
     public static final int MAX_PLAYER_TRAIL_DOT_SIZE = 8;
     public static final int DEFAULT_PLAYER_TRAIL_DOT_SIZE = 3;
@@ -56,10 +59,23 @@ public final class ConfluxConfig {
     public static final double MAX_PREDICTION_STRUCTURE_ICON_HIDE_ZOOM = 4.0;
     /** Preserve the old default: hide only at the furthest 0.0625x zoom. */
     public static final double DEFAULT_PREDICTION_STRUCTURE_ICON_HIDE_ZOOM = 0.0625;
+    public static final int MIN_PORTAL_ICON_SIZE = 8;
+    public static final int MAX_PORTAL_ICON_SIZE = 32;
+    public static final int DEFAULT_PORTAL_ICON_SIZE = 14;
+    public static final int MIN_PORTAL_ICON_OPACITY = 0;
+    public static final int MAX_PORTAL_ICON_OPACITY = 100;
+    public static final int DEFAULT_PORTAL_ICON_OPACITY = 90;
+    public static final double MIN_PORTAL_ICON_HIDE_ZOOM = 0.0625;
+    public static final double MAX_PORTAL_ICON_HIDE_ZOOM = 4.0;
+    public static final double DEFAULT_PORTAL_ICON_HIDE_ZOOM = 0.0625;
     /** Schema-v4 lower bound for the now-retired blocks-per-pixel setting. */
     private static final double LEGACY_MIN_PREDICTION_STRUCTURE_ICON_HIDE_SCALE = 0.25;
     /** Schema-v4 upper bound for the now-retired blocks-per-pixel setting. */
     private static final double LEGACY_MAX_PREDICTION_STRUCTURE_ICON_HIDE_SCALE = 16.0;
+    /** Schema-v9 default for the trail retention window, retired as far too long. */
+    private static final int LEGACY_PLAYER_TRAIL_DURATION_SECONDS = 120;
+    /** Schema-v10 default teleport command; could not switch dimensions. */
+    private static final String LEGACY_TELEPORT_COMMAND = "tp {x} {y} {z}";
 
     public int schemaVersion = SCHEMA_VERSION;
 
@@ -72,6 +88,25 @@ public final class ConfluxConfig {
     public enum PlayerMarkerStyle { TRADITIONAL, MODERN }
 
     public enum RadarDisplayMode { DOTS, PORTRAITS }
+
+    /** Preset portal chunk-highlight fills; the alpha is baked in so a fill stays translucent. */
+    public enum PortalHighlightColor {
+        PURPLE(0x508036C9),
+        GOLD(0x50E5A02B),
+        CYAN(0x5037B7C9),
+        RED(0x50D0483C),
+        GREEN(0x505FA83C);
+
+        private final int argb;
+
+        PortalHighlightColor(final int argb) {
+            this.argb = argb;
+        }
+
+        public int argb() {
+            return argb;
+        }
+    }
 
     /**
      * Manual layer override cycled by {@code key.confluxmap.cycle_layer}; see
@@ -149,6 +184,13 @@ public final class ConfluxConfig {
     /** Dropped items, vehicles, projectiles, and defensive fallback targets. */
     public boolean radarShowOther = true;
     public boolean radarShowPlayerNames = true;
+    /**
+     * Show player name labels on the minimap without holding the player-list key. The
+     * fullscreen map always honors {@link #radarShowPlayerNames}; this only lifts the
+     * minimap's key-held requirement, and {@link #radarShowPlayerNames} stays the master
+     * switch. Ships off to keep the default minimap uncluttered.
+     */
+    public boolean radarAlwaysShowPlayerNames;
     public int radarMaxEntities = 100;
     /** Draw an outline around radar portraits; retained name keeps older config files compatible. */
     public boolean radarPlayerIconOutlineEnabled = true;
@@ -167,6 +209,20 @@ public final class ConfluxConfig {
     public boolean sharedWaypointsVisible = true;
     /** Public waypoint IDs allowed to render from the portal-linked dimension on this client. */
     public Set<String> sharedWaypointCrossDimensionVisibleIds = new LinkedHashSet<>();
+    /**
+     * Per-public-waypoint Y shown when that waypoint renders from the portal-linked dimension
+     * on this client; absent ids keep the waypoint's own Y. Keyed by id string like the
+     * cross-dimension allowlist because the override is the same kind of viewer preference.
+     */
+    public Map<String, Double> sharedWaypointCrossDimensionYById = new LinkedHashMap<>();
+    /**
+     * Show this world's seed-sibling sub-world waypoints on every rendering surface. Siblings are
+     * other world namespaces under the same server address whose observed hashed seed matches; the
+     * toggle ships off so nothing appears until the player opts in.
+     */
+    public boolean crossWorldWaypointsVisible;
+    /** Latest hashed seed observed per multiplayer world identity; powers sibling grouping. */
+    public CrossWorldSeedObservations crossWorldSeedObservations = new CrossWorldSeedObservations();
     public boolean waypointEdgeIndicatorsEnabled = true;
     /** Death points kept per dimension, oldest auto-pruned; 0 disables creating new ones. */
     public int deathPointsKept = 5;
@@ -174,10 +230,16 @@ public final class ConfluxConfig {
     public boolean waypointBeamsEnabled = true;
     /** In-world floating name/distance label above each visible waypoint. */
     public boolean waypointLabelsEnabled = true;
-    /** Opacity percentage for the waypoint icon in the in-world label; map icons are unchanged. */
+    /** Opacity percentage for the whole in-world waypoint label (icon, expanded panel background and text); map icons are unchanged. */
     public int waypointIconOpacity = DEFAULT_WAYPOINT_ICON_OPACITY;
     /** Opacity retained by non-highlighted waypoints while a highlight is active. */
     public int waypointHighlightDimOpacity = DEFAULT_WAYPOINT_HIGHLIGHT_DIM_OPACITY;
+    /**
+     * Show the temporary highlighted map location from the portal-linked dimension with
+     * converted coordinates, and keep that highlight alive across same-world dimension
+     * changes (see {@link cn.net.rms.confluxmap.core.waypoint.DimensionScale}).
+     */
+    public boolean highlightCrossDimensionVisible = true;
     /** Command template used by the fullscreen map's teleport action. */
     public String teleportCommand = DEFAULT_TELEPORT_COMMAND;
     /**
@@ -185,6 +247,27 @@ public final class ConfluxConfig {
      * default. Scales the icon plate, background panel, and both text lines together.
      */
     public int waypointLabelScalePercent = DEFAULT_WAYPOINT_LABEL_SCALE_PERCENT;
+
+    /** Master toggle for activated-portal markers (nether/end portals, end gateways) on both map surfaces. */
+    public boolean portalMarkersEnabled = true;
+    /** Draw the portal icon plate at each marker's anchor; the chunk highlight is a separate option. */
+    public boolean portalIconsEnabled = true;
+    /** Custom nether-portal icon texture (resource location); empty keeps the built-in vanilla stand-in. */
+    public String portalIconTextureNether = "";
+    /** Custom end-portal icon texture (resource location); empty keeps the built-in vanilla stand-in. */
+    public String portalIconTextureEnd = "";
+    /** Custom end-gateway icon texture (resource location); empty keeps the built-in vanilla stand-in. */
+    public String portalIconTextureGateway = "";
+    /** Portal icon plate size in screen pixels, shared by minimap and fullscreen map. */
+    public int portalIconSize = DEFAULT_PORTAL_ICON_SIZE;
+    /** Portal icon opacity percentage, applied to plate and texture together. */
+    public int portalIconOpacity = DEFAULT_PORTAL_ICON_OPACITY;
+    /** Fill the chunk containing each portal marker with a translucent color. */
+    public boolean portalChunkHighlightEnabled = true;
+    /** Preset fill color for the chunk highlight. */
+    public PortalHighlightColor portalHighlightColor = PortalHighlightColor.PURPLE;
+    /** Hide portal icons at or below this fullscreen-map zoom multiplier. */
+    public double portalIconHideZoom = DEFAULT_PORTAL_ICON_HIDE_ZOOM;
 
     /** Master toggle for the seed-predicted fullscreen-map underlay. */
     public boolean predictionEnabled = true;
@@ -257,6 +340,16 @@ public final class ConfluxConfig {
         c.mapColorStyle = mapColorStyle;
         c.snapshotBudgetPerTick = snapshotBudgetPerTick;
         c.gpuTileCacheLimit = gpuTileCacheLimit;
+        c.portalMarkersEnabled = portalMarkersEnabled;
+        c.portalIconsEnabled = portalIconsEnabled;
+        c.portalIconTextureNether = portalIconTextureNether;
+        c.portalIconTextureEnd = portalIconTextureEnd;
+        c.portalIconTextureGateway = portalIconTextureGateway;
+        c.portalIconSize = portalIconSize;
+        c.portalIconOpacity = portalIconOpacity;
+        c.portalChunkHighlightEnabled = portalChunkHighlightEnabled;
+        c.portalHighlightColor = portalHighlightColor;
+        c.portalIconHideZoom = portalIconHideZoom;
         c.radarEnabled = radarEnabled;
         c.radarDisplayMode = radarDisplayMode;
         c.radarShowPlayers = radarShowPlayers;
@@ -264,6 +357,7 @@ public final class ConfluxConfig {
         c.radarShowPassive = radarShowPassive;
         c.radarShowOther = radarShowOther;
         c.radarShowPlayerNames = radarShowPlayerNames;
+        c.radarAlwaysShowPlayerNames = radarAlwaysShowPlayerNames;
         c.radarMaxEntities = radarMaxEntities;
         c.radarPlayerIconOutlineEnabled = radarPlayerIconOutlineEnabled;
         c.radarIconOutlineThickness = radarIconOutlineThickness;
@@ -276,12 +370,21 @@ public final class ConfluxConfig {
             sharedWaypointCrossDimensionVisibleIds == null
                 ? new LinkedHashSet<>()
                 : new LinkedHashSet<>(sharedWaypointCrossDimensionVisibleIds);
+        c.sharedWaypointCrossDimensionYById =
+            sharedWaypointCrossDimensionYById == null
+                ? new LinkedHashMap<>()
+                : new LinkedHashMap<>(sharedWaypointCrossDimensionYById);
+        c.crossWorldWaypointsVisible = crossWorldWaypointsVisible;
+        c.crossWorldSeedObservations = crossWorldSeedObservations == null
+            ? new CrossWorldSeedObservations()
+            : crossWorldSeedObservations.copy();
         c.waypointEdgeIndicatorsEnabled = waypointEdgeIndicatorsEnabled;
         c.deathPointsKept = deathPointsKept;
         c.waypointBeamsEnabled = waypointBeamsEnabled;
         c.waypointLabelsEnabled = waypointLabelsEnabled;
         c.waypointIconOpacity = waypointIconOpacity;
         c.waypointHighlightDimOpacity = waypointHighlightDimOpacity;
+        c.highlightCrossDimensionVisible = highlightCrossDimensionVisible;
         c.teleportCommand = teleportCommand;
         c.waypointLabelScalePercent = waypointLabelScalePercent;
         c.predictionEnabled = predictionEnabled;
@@ -323,9 +426,48 @@ public final class ConfluxConfig {
         }
     }
 
+    /** This client's Y override for the public waypoint, or null to keep its own Y. */
+    public Double sharedWaypointCrossDimensionY(final UUID waypointId) {
+        if (waypointId == null) {
+            return null;
+        }
+        return sharedWaypointCrossDimensionYById.get(waypointId.toString());
+    }
+
+    /** Stores (or clears with null) this client's Y override for the public waypoint. */
+    public void setSharedWaypointCrossDimensionY(final UUID waypointId, final Double y) {
+        if (waypointId == null) {
+            return;
+        }
+        if (y == null || !Double.isFinite(y)) {
+            sharedWaypointCrossDimensionYById.remove(waypointId.toString());
+        } else {
+            sharedWaypointCrossDimensionYById.put(waypointId.toString(), y);
+        }
+    }
+
     /** Advances to the next minimap zoom level, wrapping after the final level. */
     public void cycleMinimapZoom() {
         minimapZoomIndex = (minimapZoomIndex + 1) % MINIMAP_ZOOM_LEVEL_COUNT;
+    }
+
+    /** Custom icon texture resource location for the portal kind; empty keeps the built-in default. */
+    public String portalIconTexture(final PortalKind kind) {
+        return switch (kind) {
+            case NETHER_PORTAL -> portalIconTextureNether;
+            case END_PORTAL -> portalIconTextureEnd;
+            case END_GATEWAY -> portalIconTextureGateway;
+        };
+    }
+
+    /** Stores (or clears with empty/null) the custom icon texture for the portal kind. */
+    public void setPortalIconTexture(final PortalKind kind, final String texture) {
+        final String trimmed = texture == null ? "" : texture.trim();
+        switch (kind) {
+            case NETHER_PORTAL -> portalIconTextureNether = trimmed;
+            case END_PORTAL -> portalIconTextureEnd = trimmed;
+            case END_GATEWAY -> portalIconTextureGateway = trimmed;
+        }
     }
 
     /** Clamp out-of-range values loaded from a hand-edited file. */
@@ -363,6 +505,12 @@ public final class ConfluxConfig {
         if (sharedWaypointCrossDimensionVisibleIds == null) {
             sharedWaypointCrossDimensionVisibleIds = new LinkedHashSet<>();
         }
+        if (sharedWaypointCrossDimensionYById == null) {
+            sharedWaypointCrossDimensionYById = new LinkedHashMap<>();
+        }
+        sharedWaypointCrossDimensionYById.values().removeIf(
+            y -> y == null || !Double.isFinite(y)
+        );
         if (schemaVersion < 3 && playerTrailDurationMinutes != null) {
             final long legacyDurationSeconds = playerTrailDurationMinutes.longValue() * 60L;
             playerTrailDurationSeconds = (int) Math.max(
@@ -371,6 +519,11 @@ public final class ConfluxConfig {
             );
         }
         playerTrailDurationMinutes = null;
+        if (schemaVersion < 10 && playerTrailDurationSeconds == LEGACY_PLAYER_TRAIL_DURATION_SECONDS) {
+            // Schema v9 shipped 120 s as the default; only that exact value collapses.
+            // The clamp below still maps out-of-range values to the 120 s maximum.
+            playerTrailDurationSeconds = DEFAULT_PLAYER_TRAIL_DURATION_SECONDS;
+        }
         minimapSize = clamp(minimapSize, 64, 256);
         minimapZoomIndex = clamp(minimapZoomIndex, 0, MINIMAP_ZOOM_LEVEL_COUNT - 1);
         playerTrailDurationSeconds = clamp(
@@ -407,6 +560,11 @@ public final class ConfluxConfig {
             waypointLabelScalePercent,
             MIN_WAYPOINT_LABEL_SCALE_PERCENT, MAX_WAYPOINT_LABEL_SCALE_PERCENT
         );
+        if (schemaVersion < 11 && LEGACY_TELEPORT_COMMAND.equals(teleportCommand)) {
+            // Schema v10 shipped "tp {x} {y} {z}" as the default; only that exact value
+            // upgrades to the cross-dimension default, so a deliberate copy stays put.
+            teleportCommand = DEFAULT_TELEPORT_COMMAND;
+        }
         if (!TeleportCommandTemplate.valid(teleportCommand)) {
             teleportCommand = DEFAULT_TELEPORT_COMMAND;
         }
@@ -419,6 +577,19 @@ public final class ConfluxConfig {
             MIN_WAYPOINT_HIGHLIGHT_DIM_OPACITY,
             MAX_WAYPOINT_HIGHLIGHT_DIM_OPACITY
         );
+        portalIconSize = clamp(portalIconSize, MIN_PORTAL_ICON_SIZE, MAX_PORTAL_ICON_SIZE);
+        portalIconOpacity = clamp(portalIconOpacity, MIN_PORTAL_ICON_OPACITY, MAX_PORTAL_ICON_OPACITY);
+        portalIconHideZoom = clamp(
+            portalIconHideZoom,
+            MIN_PORTAL_ICON_HIDE_ZOOM,
+            MAX_PORTAL_ICON_HIDE_ZOOM
+        );
+        if (portalHighlightColor == null) {
+            portalHighlightColor = PortalHighlightColor.PURPLE;
+        }
+        portalIconTextureNether = normalizeIconTexture(portalIconTextureNether);
+        portalIconTextureEnd = normalizeIconTexture(portalIconTextureEnd);
+        portalIconTextureGateway = normalizeIconTexture(portalIconTextureGateway);
         if (predictionViewMode == null) {
             predictionViewMode = PredictionViewMode.EVERYWHERE;
         }
@@ -454,6 +625,11 @@ public final class ConfluxConfig {
         } else {
             predictionManualSeeds.normalize();
         }
+        if (crossWorldSeedObservations == null) {
+            crossWorldSeedObservations = new CrossWorldSeedObservations();
+        } else {
+            crossWorldSeedObservations.normalize();
+        }
         predictionDebounceMs = clamp(predictionDebounceMs, 100, 2000);
         surveyReminderGameOpenMillis = Math.max(0L, surveyReminderGameOpenMillis);
         if (surveyReminderNextPromptAtMillis <= 0L) {
@@ -466,5 +642,10 @@ public final class ConfluxConfig {
     }
     private static double clamp(final double value, final double min, final double max) {
         return Double.isFinite(value) ? Math.max(min, Math.min(max, value)) : min;
+    }
+
+    /** Null-safe trim for hand-edited icon texture fields; empty means the built-in default. */
+    private static String normalizeIconTexture(final String texture) {
+        return texture == null ? "" : texture.trim();
     }
 }

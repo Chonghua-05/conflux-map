@@ -159,6 +159,223 @@ class PredictedTileComposerTest {
     }
 
     @Test
+    void correctedTranslucentSurfaceMaterialKeepsItsOwnAlpha() {
+        final BaselineGrid grid = flatGrid(1);
+        final DerivedGrid derived = flatDerived(ShadingPipeline.REFERENCE_HEIGHT);
+        final int pixel = 10 * 256 + 10;
+        final CorrectionTile corrections = new CorrectionTile();
+        corrections.applyPatch(
+            1L,
+            new byte[Proto.PATCH_PRESENCE_BYTES],
+            new PatchCodec.Patch(java.util.List.of(new PatchCodec.Sample(
+                pixel, 1, ShadingPipeline.REFERENCE_HEIGHT, SurfaceKind.LAND.ordinal(),
+                8, 0, 255, "minecraft:white_stained_glass", ""
+            ))),
+            Proto.PATCH_MODE_ABSOLUTE,
+            "",
+            1_000L
+        );
+        final SyncedMaterialPalette materials = new SyncedMaterialPalette();
+        // The live sampler averages white stained glass to white RGB at alpha 117. A glass
+        // floor promoted to the visible surface keeps that translucency - it tints the map
+        // background instead of painting an opaque plate - like the authoritative capture.
+        materials.put("minecraft:white_stained_glass", new SyncedMaterialPalette.Sample(
+            0x75FFFFFF,
+            MaterialDetailProfile.flat(),
+            SyncedMaterialPalette.Tint.NONE,
+            0xFFFFFFFF,
+            1
+        ));
+
+        final int[] composed = PredictedTileComposer.compose(
+            derived, grid, PredictionPalette.defaults(), corrections,
+            PredictionViewMode.EVERYWHERE, 0, Proto.MAP_COLOR_NONE,
+            derived, grid, Proto.MAP_COLOR_NONE, true, 0xFFFFFFFF, materials
+        );
+
+        assertEquals(0x75FFFFFF, composed[pixel]);
+    }
+
+    @Test
+    void flatTopMaterialPaintsItsOwnSampleWithoutACorrection() {
+        // Origin (-16, -16) puts local (5, 5) at world (-11, -11) in the -- quadrant and local
+        // (20, 20) at world (4, 4) in the ++ quadrant, so one tile spans both.
+        final BaselineGrid grid = new BaselineGrid(0, -16, -16);
+        Arrays.fill(grid.biomeId, 1);
+        final DerivedGrid derived = flatDerived(ShadingPipeline.REFERENCE_HEIGHT);
+        final int materialPixel = 20 * 256 + 20;
+        final int tablePixel = 5 * 256 + 5;
+        final int[] mapColorOverride = new int[256 * 256];
+        Arrays.fill(mapColorOverride, Proto.MAP_COLOR_NONE);
+        mapColorOverride[materialPixel] = 8;
+        mapColorOverride[tablePixel] = 8;
+        final SyncedMaterialPalette materials = new SyncedMaterialPalette();
+        materials.put("minecraft:white_stained_glass", new SyncedMaterialPalette.Sample(
+            0x75FFFFFF,
+            MaterialDetailProfile.flat(),
+            SyncedMaterialPalette.Tint.NONE,
+            0xFFFFFFFF,
+            1
+        ));
+        final String[] flatTopMaterials = new String[] {
+            "minecraft:white_stained_glass", null, null, null
+        };
+
+        final int[] composed = PredictedTileComposer.compose(
+            derived, grid, PredictionPalette.defaults(), null,
+            PredictionViewMode.EVERYWHERE, 0, Proto.MAP_COLOR_NONE,
+            derived, grid, Proto.MAP_COLOR_NONE, true, 0xFFFFFFFF, materials,
+            MapColorStyle.CONFLUX, XaeroMapStyle.Shadow.OVERWORLD,
+            mapColorOverride, flatTopMaterials
+        );
+
+        // The ++ quadrant paints the glass's own translucent sample, not the opaque map colour.
+        assertEquals(0x75FFFFFF, composed[materialPixel]);
+        // A quadrant with no declared material still paints the opaque map colour.
+        assertEquals(0xFFFFFFFF, composed[tablePixel]);
+    }
+
+    @Test
+    void overlayMaterialCompositesOverTheCorrectedSurface() {
+        final BaselineGrid grid = flatGrid(1);
+        final DerivedGrid derived = flatDerived(ShadingPipeline.REFERENCE_HEIGHT);
+        final int tinted = 10 * 256 + 10;
+        final int unresolved = 20 * 256 + 20;
+        final CorrectionTile corrections = new CorrectionTile();
+        corrections.applyPatch(
+            1L,
+            new byte[Proto.PATCH_PRESENCE_BYTES],
+            new PatchCodec.Patch(java.util.List.of(
+                new PatchCodec.Sample(
+                    tinted, 1, ShadingPipeline.REFERENCE_HEIGHT, SurfaceKind.LAND.ordinal(),
+                    4, 0, 255, "minecraft:glowstone", "", "minecraft:black_stained_glass"
+                ),
+                new PatchCodec.Sample(
+                    unresolved, 1, ShadingPipeline.REFERENCE_HEIGHT, SurfaceKind.LAND.ordinal(),
+                    4, 0, 255, "minecraft:glowstone", "", "minecraft:wither_rose"
+                )
+            )),
+            Proto.PATCH_MODE_ABSOLUTE,
+            "",
+            1_000L
+        );
+        final SyncedMaterialPalette materials = new SyncedMaterialPalette();
+        final int sampledGlowstone = 0xFFFFD95A;
+        materials.put("minecraft:glowstone", new SyncedMaterialPalette.Sample(
+            sampledGlowstone,
+            MaterialDetailProfile.flat(),
+            SyncedMaterialPalette.Tint.NONE,
+            0xFFFFFFFF,
+            1
+        ));
+        final int sampledGlass = 0xAA202020;
+        materials.put("minecraft:black_stained_glass", new SyncedMaterialPalette.Sample(
+            sampledGlass,
+            MaterialDetailProfile.flat(),
+            SyncedMaterialPalette.Tint.NONE,
+            0xFFFFFFFF,
+            2
+        ));
+
+        final int[] composed = PredictedTileComposer.compose(
+            derived, grid, PredictionPalette.defaults(), corrections,
+            PredictionViewMode.EVERYWHERE, 0, Proto.MAP_COLOR_NONE,
+            derived, grid, Proto.MAP_COLOR_NONE, true, 0xFFFFFFFF, materials
+        );
+
+        assertEquals(Argb.over(sampledGlass, sampledGlowstone), composed[tinted]);
+        assertEquals(sampledGlowstone, composed[unresolved]);
+    }
+
+    @Test
+    void xaeroStyleHidesGlassOverlaysButKeepsDecorations() {
+        final BaselineGrid grid = flatGrid(1);
+        final DerivedGrid derived = flatDerived(ShadingPipeline.REFERENCE_HEIGHT);
+        final int glassPixel = 10 * 256 + 10;
+        final int rosePixel = 20 * 256 + 20;
+        final CorrectionTile corrections = new CorrectionTile();
+        corrections.applyPatch(
+            1L,
+            new byte[Proto.PATCH_PRESENCE_BYTES],
+            new PatchCodec.Patch(java.util.List.of(
+                new PatchCodec.Sample(
+                    glassPixel, 1, ShadingPipeline.REFERENCE_HEIGHT, SurfaceKind.LAND.ordinal(),
+                    4, 0, 255, "minecraft:glowstone", "", "minecraft:black_stained_glass"
+                ),
+                new PatchCodec.Sample(
+                    rosePixel, 1, ShadingPipeline.REFERENCE_HEIGHT, SurfaceKind.LAND.ordinal(),
+                    4, 0, 255, "minecraft:glowstone", "", "minecraft:wither_rose"
+                )
+            )),
+            Proto.PATCH_MODE_ABSOLUTE,
+            "",
+            1_000L
+        );
+        final SyncedMaterialPalette materials = new SyncedMaterialPalette();
+        final int sampledGlowstone = 0xFFFFD95A;
+        materials.put("minecraft:glowstone", new SyncedMaterialPalette.Sample(
+            sampledGlowstone,
+            MaterialDetailProfile.flat(),
+            SyncedMaterialPalette.Tint.NONE,
+            0xFFFFFFFF,
+            1
+        ));
+        final int sampledGlass = 0xAA202020;
+        materials.put("minecraft:black_stained_glass", new SyncedMaterialPalette.Sample(
+            sampledGlass,
+            MaterialDetailProfile.flat(),
+            SyncedMaterialPalette.Tint.NONE,
+            0xFFFFFFFF,
+            2
+        ));
+        final int sampledRose = 0xFF2B2B2B;
+        materials.put("minecraft:wither_rose", new SyncedMaterialPalette.Sample(
+            sampledRose,
+            MaterialDetailProfile.flat(),
+            SyncedMaterialPalette.Tint.NONE,
+            0xFFFFFFFF,
+            3
+        ));
+
+        final int[] composed = PredictedTileComposer.compose(
+            derived, grid, PredictionPalette.defaults(), corrections,
+            PredictionViewMode.EVERYWHERE, 0, Proto.MAP_COLOR_NONE,
+            derived, grid, Proto.MAP_COLOR_NONE, true, 0xFFFFFFFF, materials,
+            MapColorStyle.XAERO, XaeroMapStyle.Shadow.OVERWORLD
+        );
+
+        // Xaero renders flat terrain through its own shading, so compare against the same
+        // tile recomposed without the overlays instead of raw palette colours.
+        final CorrectionTile withoutOverlays = new CorrectionTile();
+        withoutOverlays.applyPatch(
+            1L,
+            new byte[Proto.PATCH_PRESENCE_BYTES],
+            new PatchCodec.Patch(java.util.List.of(
+                new PatchCodec.Sample(
+                    glassPixel, 1, ShadingPipeline.REFERENCE_HEIGHT, SurfaceKind.LAND.ordinal(),
+                    4, 0, 255, "minecraft:glowstone", ""
+                ),
+                new PatchCodec.Sample(
+                    rosePixel, 1, ShadingPipeline.REFERENCE_HEIGHT, SurfaceKind.LAND.ordinal(),
+                    4, 0, 255, "minecraft:glowstone", ""
+                )
+            )),
+            Proto.PATCH_MODE_ABSOLUTE,
+            "",
+            1_000L
+        );
+        final int[] bare = PredictedTileComposer.compose(
+            derived, grid, PredictionPalette.defaults(), withoutOverlays,
+            PredictionViewMode.EVERYWHERE, 0, Proto.MAP_COLOR_NONE,
+            derived, grid, Proto.MAP_COLOR_NONE, true, 0xFFFFFFFF, materials,
+            MapColorStyle.XAERO, XaeroMapStyle.Shadow.OVERWORLD
+        );
+
+        assertEquals(bare[glassPixel], composed[glassPixel]);
+        assertNotEquals(bare[rosePixel], composed[rosePixel]);
+    }
+
+    @Test
     void producesAFullyOpaqueTileForOrdinaryTerrain() {
         // The fake sampler never returns a VOID/UNKNOWN kind, and even a translucent water pixel
         // composites to fully opaque here since its synthesized seafloor base is itself opaque
@@ -228,6 +445,39 @@ class PredictedTileComposerTest {
             Argb.multiply(sampledBedrock, LightTint.multiplier(0, 0, true)),
             pixels[10 * 256 + 10],
             "the predicted roof must apply the unlit Nether ambient tint used by captured tiles"
+        );
+    }
+
+    @Test
+    void xaeroNetherRoofBakesTheUnlitAmbientTintLikeCapturedTiles() {
+        final BaselineGrid grid = flatGrid(CubiomesBiomeIds.NETHER_WASTES);
+        final DerivedGrid derived = new DerivedGrid();
+        Arrays.fill(derived.surfaceY, PredictionDimensions.NETHER_ROOF_Y);
+        Arrays.fill(derived.kind, (byte) SurfaceKind.BEDROCK_CEILING.ordinal());
+        final int sampledBedrock = 0xFF383838;
+        final PredictionPalette palette = PredictionPalette.fromSamples(
+            Map.of(),
+            Map.of(SurfaceKind.BEDROCK_CEILING, MaterialDetailProfile.flat()),
+            Map.of(),
+            Map.of(SurfaceKind.BEDROCK_CEILING, sampledBedrock)
+        );
+
+        final int[] pixels = PredictedTileComposer.compose(
+            derived, grid, palette, null, PredictionViewMode.EVERYWHERE, 0,
+            PredictionDimensions.NETHER_ROOF_MAP_COLOR_ID, derived, grid,
+            PredictionDimensions.NETHER_ROOF_MAP_COLOR_ID, false,
+            LightTint.multiplier(0, 0, true), null,
+            MapColorStyle.XAERO, XaeroMapStyle.Shadow.NETHER
+        );
+
+        assertEquals(
+            XaeroMapStyle.applyTerrain(
+                Argb.multiply(sampledBedrock, LightTint.multiplier(0, 0, true)),
+                PredictionDimensions.NETHER_ROOF_Y, PredictionDimensions.NETHER_ROOF_Y,
+                PredictionDimensions.NETHER_ROOF_Y, 1, true, XaeroMapStyle.Shadow.NETHER
+            ),
+            pixels[10 * 256 + 10],
+            "the predicted Xaero roof must carry the unlit Nether ambient bake captured roof tiles use"
         );
     }
 

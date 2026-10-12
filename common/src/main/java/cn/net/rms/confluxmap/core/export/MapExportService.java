@@ -276,12 +276,7 @@ public final class MapExportService implements AutoCloseable {
     }
 
     private static String failureMessage(final Throwable error) {
-        Throwable detail = error;
-        // Java 25's CompletableFuture.get wraps cancellation with "get" as its message.
-        while (detail instanceof CancellationException && detail.getCause() instanceof CancellationException) {
-            detail = detail.getCause();
-        }
-        return detail.getMessage() == null ? detail.getClass().getSimpleName() : detail.getMessage();
+        return error.getMessage() == null ? error.getClass().getSimpleName() : error.getMessage();
     }
 
     @Override

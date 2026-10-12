@@ -14,6 +14,7 @@ import cn.net.rms.confluxmap.core.net.CorrectionProfile;
 import cn.net.rms.confluxmap.core.net.MapSyncCompatibility;
 import cn.net.rms.confluxmap.core.net.PatchCodec;
 import cn.net.rms.confluxmap.core.net.Proto;
+import cn.net.rms.confluxmap.core.store.ColumnStore;
 import cn.net.rms.confluxmap.core.task.MapExecutors;
 import cn.net.rms.confluxmap.core.task.SessionGuard;
 import cn.net.rms.confluxmap.core.tile.BiomeTileKeys;
@@ -39,7 +40,8 @@ import java.util.function.LongSupplier;
 /**
  * Predicted-underlay twin of {@code core.tile.TileService}: a synchronized dirty-tile queue
  * bounded by an in-flight cap (one per worker outside a visible viewport, a small bounded cap
- * inside one that still picks tiles in top-left row-major order), session-token guarded - same discipline,
+ * inside one that still picks tiles in top-left row-major order, and user-waited menu-target
+ * tiles always first), session-token guarded - same discipline,
  * entirely separate data. Predictions never enter {@code ColumnStore}/{@code
  * RegionDiskCache}; composition here samples cubiomes directly (via {@link NativeBaselineSampler})
  * and shares {@code TileService}'s upload queue through {@link TileService#submitUpload}. Native
@@ -79,6 +81,12 @@ public final class PredictionTileService {
     private final Map<TileKey, Long> dirty = new HashMap<>();
     /** Guarded by {@code this}: tiles currently being composed on a worker. */
     private final Set<TileKey> inFlight = new HashSet<>();
+    /**
+     * Guarded by {@code this}: queued tiles a map action is actively waiting on (a right-click
+     * menu target). Dispatched before the viewport row-major order; the flag is consumed by
+     * the composition that finishes the tile.
+     */
+    private final Set<TileKey> urgent = new HashSet<>();
     /** Prediction variants requested or uploaded at least once this session. */
     private final Set<TileKey> requestedTiles = new HashSet<>();
     /** Tracked textures that were last composed under an older view mode. */
@@ -236,13 +244,31 @@ public final class PredictionTileService {
             : model.state();
         final float gamma = lighting.gamma();
         if (layer == MapLayer.Type.NETHER_CEILING) {
+            // Captured Xaero roof tiles keep their zero-light ambient bake untouched
+            // (TileService's composeXaeroColumn applies no light replacement to
+            // NETHER_CEILING), so the prediction must match instead of being re-lit.
+            if (style != MapColorStyle.XAERO) {
+                for (int pixel = 0; pixel < pixels.length; pixel++) {
+                    pixels[pixel] = LightTint.applyBlockLightOverAmbient(
+                        pixels[pixel], blockLight[pixel] & 0xFF, true, gamma
+                    );
+                }
+            }
+            return AppliedLighting.NONE;
+        }
+        if (layer == MapLayer.Type.END_SURFACE) {
+            // The End plane composes with the zero-light ambient baked in (see composeTile);
+            // the per-column block-light plane replaces it here, matching TileService's
+            // raw END_SURFACE composition. The Xaero style composes without the bake (its
+            // terrain shading adds light, which a ratio replace cannot invert) and takes the
+            // curve applied over the shaded pixel, exactly like captured Xaero End tiles.
             for (int pixel = 0; pixel < pixels.length; pixel++) {
                 pixels[pixel] = style == MapColorStyle.XAERO
-                    ? LightTint.applyGammaOverBakedLight(
-                        pixels[pixel], blockLight[pixel] & 0xFF, true, gamma
+                    ? LightTint.applyBlockLightTint(
+                        pixels[pixel], blockLight[pixel] & 0xFF, false, gamma
                     )
                     : LightTint.applyBlockLightOverAmbient(
-                        pixels[pixel], blockLight[pixel] & 0xFF, true, gamma
+                        pixels[pixel], blockLight[pixel] & 0xFF, false, gamma
                     );
             }
             return AppliedLighting.NONE;
@@ -607,6 +633,7 @@ public final class PredictionTileService {
             reloadGeneration++;
             lowerCoverageGeneration++;
             dirty.clear();
+            urgent.clear();
             requestedTiles.clear();
             staleViewModeTiles.clear();
             staleRealCoverageTiles.clear();
@@ -629,6 +656,7 @@ public final class PredictionTileService {
             reloadGeneration++;
             lowerCoverageGeneration++;
             dirty.clear();
+            urgent.clear();
             staleViewModeTiles.clear();
             staleRealCoverageTiles.clear();
             metadataTiles.clear();
@@ -705,7 +733,13 @@ public final class PredictionTileService {
         synchronized (this) {
             final boolean changed = !rect.equals(viewport);
             viewport = rect;
-            dirty.keySet().removeIf(key -> !rect.containsPadded(key));
+            dirty.keySet().removeIf(key -> {
+                if (rect.containsPadded(key)) {
+                    return false;
+                }
+                urgent.remove(key);
+                return true;
+            });
             metadataTiles.keySet().removeIf(key -> !rect.containsPadded(key));
             if (changed && session.active() && dimension.equals(session.dimension()) && lod > 0) {
                 final MapLayer predictedLayer = PredictionDimensions.layer(dimension);
@@ -800,20 +834,51 @@ public final class PredictionTileService {
         final int blockX,
         final int blockZ
     ) {
+        return surfaceLookupAt(dimension, lod, blockX, blockZ, false).surfaceY();
+    }
+
+    /**
+     * Predicted ground at one visible fullscreen-map pixel, distinguishing a composed void
+     * column ({@code known} with no surface Y) from a tile that has not composed yet. A
+     * missing tile is queued ahead of the viewport order, because a map action is waiting on
+     * it.
+     */
+    public ColumnStore.SurfaceLookup predictedSurfaceAt(
+        final DimensionId dimension,
+        final int lod,
+        final int blockX,
+        final int blockZ
+    ) {
+        return surfaceLookupAt(dimension, lod, blockX, blockZ, true);
+    }
+
+    private ColumnStore.SurfaceLookup surfaceLookupAt(
+        final DimensionId dimension,
+        final int lod,
+        final int blockX,
+        final int blockZ,
+        final boolean urgentRequest
+    ) {
         final PixelLookup lookup = visiblePixelLookup(dimension, lod, blockX, blockZ);
         if (lookup == null) {
-            return OptionalInt.empty();
+            return ColumnStore.SurfaceLookup.UNKNOWN;
         }
         final TileMetadata metadata;
         synchronized (this) {
             metadata = metadataTiles.get(lookup.key());
         }
         if (metadata == null) {
-            requestTile(lookup.key());
-            return OptionalInt.empty();
+            if (urgentRequest) {
+                requestTileUrgently(lookup.key());
+            } else {
+                requestTile(lookup.key());
+            }
+            return ColumnStore.SurfaceLookup.UNKNOWN;
         }
         final int surfaceY = metadata.surfaces()[lookup.pixel()];
-        return surfaceY == BaselineGrid.NO_SURFACE ? OptionalInt.empty() : OptionalInt.of(surfaceY);
+        return surfaceY == BaselineGrid.NO_SURFACE
+            ? new ColumnStore.SurfaceLookup(true, OptionalInt.empty())
+            : new ColumnStore.SurfaceLookup(true, OptionalInt.of(surfaceY));
     }
 
     /**
@@ -834,6 +899,28 @@ public final class PredictionTileService {
             requestedTiles.add(key);
             // The renderer retries a missing texture every frame. Keep that retry idempotent so
             // one slow native composition cannot continuously requeue itself.
+            if (dirty.containsKey(key) || inFlight.contains(key)) {
+                return;
+            }
+            dirty.put(key, session.token());
+        }
+        pump();
+    }
+
+    /**
+     * Queues one tile a map action is actively waiting on - a right-click menu target whose
+     * surface height gates teleport - ahead of the viewport and background order. Idempotent
+     * while queued or in flight, exactly like {@link #requestTile}; the urgent flag is consumed
+     * by the composition that finishes the tile.
+     */
+    public void requestTileUrgently(final TileKey key) {
+        final SessionGuard.Session session = sessionGuard.current();
+        if (!key.world().equals(session.world()) || !key.dimension().equals(session.dimension())) {
+            return;
+        }
+        synchronized (this) {
+            requestedTiles.add(key);
+            urgent.add(key);
             if (dirty.containsKey(key) || inFlight.contains(key)) {
                 return;
             }
@@ -897,33 +984,42 @@ public final class PredictionTileService {
         final int vz = viewpointZ;
         final ViewportRect activeViewport = viewport;
         TileKey best = null;
+        int bestTier = Integer.MAX_VALUE;
         long bestDist = Long.MAX_VALUE;
-        boolean bestInViewport = false;
         for (final TileKey key : dirty.keySet()) {
             if (inFlight.contains(key)) {
                 continue;
             }
-            final boolean inViewport = activeViewport != null && activeViewport.contains(key);
-            if (inViewport) {
-                if (!bestInViewport || best == null || rowMajorBefore(key, best)) {
+            // 0 = user-waited (menu target), 1 = visible viewport, 2 = background.
+            final int tier = urgent.contains(key) ? 0
+                : activeViewport != null && activeViewport.contains(key) ? 1 : 2;
+            if (best == null || tier < bestTier) {
+                best = key;
+                bestTier = tier;
+                bestDist = distanceToViewpoint(key, vx, vz);
+                continue;
+            }
+            if (tier != bestTier) {
+                continue;
+            }
+            if (tier == 2) {
+                final long dist = distanceToViewpoint(key, vx, vz);
+                if (dist < bestDist) {
+                    bestDist = dist;
                     best = key;
-                    bestInViewport = true;
                 }
-                continue;
-            }
-            if (bestInViewport) {
-                continue;
-            }
-            final long half = 128L << key.lod();
-            final long dx = key.originBlockX() + half - vx;
-            final long dz = key.originBlockZ() + half - vz;
-            final long dist = dx * dx + dz * dz;
-            if (dist < bestDist) {
-                bestDist = dist;
+            } else if (rowMajorBefore(key, best)) {
                 best = key;
             }
         }
         return best;
+    }
+
+    private static long distanceToViewpoint(final TileKey key, final int vx, final int vz) {
+        final long half = 128L << key.lod();
+        final long dx = key.originBlockX() + half - vx;
+        final long dz = key.originBlockZ() + half - vz;
+        return dx * dx + dz * dz;
     }
 
     private static boolean rowMajorBefore(final TileKey candidate, final TileKey current) {
@@ -970,9 +1066,15 @@ public final class PredictionTileService {
                     uploads.submitUpload(composition.update());
                 }
                 inFlight.remove(key);
+                urgent.remove(key);
             }
             pump();
         }
+    }
+
+    /** A whole-dimension flat surface declares the same top material in every quadrant. */
+    private static String[] uniformFlatMaterials(final String topMaterialId) {
+        return new String[] {topMaterialId, topMaterialId, topMaterialId, topMaterialId};
     }
 
     private Composition composeTile(final TileKey key, final long token) {
@@ -1071,6 +1173,8 @@ public final class PredictionTileService {
         final BaselineGrid grid;
         final DerivedGrid derived;
         final int baselineMapColorId;
+        final QuadrantLayout quadrants = state.quadrantLayout(key.dimension());
+        final QuadrantLayout.Mask quadrantMask;
         if (lowerNetherBiome) {
             final BaselineSampler sampler = new NativeBaselineSampler(
                 state.mcVersion(), state.seed(), nativeDim,
@@ -1082,8 +1186,14 @@ public final class PredictionTileService {
             if (grid == null) {
                 return null;
             }
+            // Only flat quadrants carry a configured uniform biome; cleared quadrants keep the
+            // real sampled biomes quadra-gen preserved.
+            if (quadrants != null) {
+                quadrants.applyBiomes(grid);
+            }
             derived = BaselineDeriver.derive(grid);
             baselineMapColorId = Proto.MAP_COLOR_NONE;
+            quadrantMask = null;
         } else {
             final FlatBaseline flat = state.flatBaseline(key.dimension());
             if (state.preset(key.dimension()) == WorldPreset.FLAT && flat != null) {
@@ -1091,6 +1201,8 @@ public final class PredictionTileService {
                 grid = flat.toBaselineGrid();
                 derived = flat.toDerivedGrid();
                 baselineMapColorId = flat.mapColorId();
+                quadrantMask = flat.topMaterialId().isEmpty() ? null
+                    : new QuadrantLayout.Mask(null, uniformFlatMaterials(flat.topMaterialId()));
             } else {
                 final long seed = state.seed();
                 final BaselineSampler sampler = new NativeBaselineSampler(
@@ -1104,6 +1216,10 @@ public final class PredictionTileService {
                 }
                 derived = BaselineDeriver.derive(grid);
                 CanopyStylizer.apply(derived, grid, seed, lod, tileOriginX, tileOriginZ);
+                // Quadrant layouts (quadra-gen) overwrite their columns after derivation and
+                // canopy, so synthetic trees cannot survive in a cleared or flat quadrant. The
+                // companion's PatchBuilder masks its residual baseline with the same code.
+                quadrantMask = quadrants == null ? null : quadrants.apply(grid, derived);
                 // Terrain mode owns the roof material, while the separate biome composer below owns
                 // biome identity. Treat the fixed Nether plane like a uniform bedrock superflat.
                 baselineMapColorId = key.dimension().equals(DimensionId.NETHER)
@@ -1124,8 +1240,18 @@ public final class PredictionTileService {
                 !key.dimension().equals(DimensionId.NETHER),
                 key.dimension().equals(DimensionId.NETHER)
                     ? LightTint.multiplier(0, 0, true)
-                    : 0xFFFFFFFF,
-                syncedMaterials, style, shadow
+                    : key.dimension().equals(DimensionId.END) && style == MapColorStyle.CONFLUX
+                        // The End owes the cave dark-light contract too: bake the zero-light
+                        // ambient in here (baseline and corrections alike), then the per-column
+                        // block-light plane replaces it in applyLayerLighting. The Xaero style
+                        // bakes nothing - its terrain shading adds light, which the ambient
+                        // ratio-replace cannot invert - and instead takes the curve applied
+                        // over the shaded pixel, exactly like the captured Xaero End tiles.
+                        ? LightTint.multiplier(0, 0, false)
+                        : 0xFFFFFFFF,
+                syncedMaterials, style, shadow,
+                quadrantMask == null ? null : quadrantMask.mapColorOverrides(),
+                quadrantMask == null ? null : quadrantMask.topMaterials()
             );
         final byte[] syncEvaluated = directCorrections == null
             ? new byte[PatchCodec.MASK_BYTES] : directCorrections.copyEvaluated();

@@ -8,11 +8,13 @@ import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import cn.net.rms.confluxmap.core.predict.FlatBaseline;
+import cn.net.rms.confluxmap.core.predict.QuadrantLayout;
 import cn.net.rms.confluxmap.core.predict.WorldPreset;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
+import java.util.Map;
 import java.util.Random;
 import java.util.UUID;
 import org.junit.jupiter.api.Test;
@@ -236,11 +238,82 @@ class MsgCodecTest {
     void flatBaselineRoundTrips() throws ProtoException {
         final FlatBaselineS2C original = new FlatBaselineS2C(List.of(
             new FlatBaselineS2C.Entry(0, new FlatBaseline(1, 3, 1, 11, 0)),
-            new FlatBaselineS2C.Entry(2, new FlatBaseline(7, 63, 2, 12, 40))
+            new FlatBaselineS2C.Entry(2, new FlatBaseline(7, 63, 2, 12, 40, "minecraft:white_stained_glass"))
         ));
         final FlatBaselineS2C decoded = (FlatBaselineS2C) MsgCodec.decode(MsgCodec.encode(original));
         assertIterableEquals(original.entries(), decoded.entries());
         assertEquals(Proto.MSG_FLAT_BASELINE_S2C, decoded.typeId());
+    }
+
+    @Test
+    void flatBaselineLegacyShapeOmitsTheTopMaterial() throws ProtoException {
+        final FlatBaselineS2C original = new FlatBaselineS2C(List.of(
+            new FlatBaselineS2C.Entry(0, new FlatBaseline(1, 3, 1, 11, 0, "minecraft:glass"))
+        ));
+        final Map<MapSyncCapability, Integer> legacy = Map.of(MapSyncCapability.FLAT_BASELINE, 1);
+
+        final byte[] payload = MsgCodec.encode(original, legacy);
+        final FlatBaselineS2C decoded = (FlatBaselineS2C) MsgCodec.decode(payload, legacy);
+
+        assertEquals("", decoded.entries().get(0).baseline().topMaterialId());
+        // The version 2 shape decodes the same bytes only with the material appended, so a v1
+        // payload must fail the trailing-bytes check rather than misparse.
+        assertThrows(ProtoException.class, () -> MsgCodec.decode(payload));
+    }
+
+    @Test
+    void quadraLayoutRoundTrips() throws ProtoException {
+        final QuadrantLayout layout = new QuadrantLayout(
+            QuadrantLayout.Style.FLAT, new FlatBaseline(1, -60, 1, 2, 0, "minecraft:white_stained_glass"),
+            QuadrantLayout.Style.CLEARED, null,
+            QuadrantLayout.Style.FLAT, new FlatBaseline(47, 0, 9, 255, 0),
+            QuadrantLayout.Style.NOISE, null
+        );
+        final QuadraLayoutS2C original = new QuadraLayoutS2C(List.of(
+            new QuadraLayoutS2C.Entry(0, layout)
+        ));
+
+        final QuadraLayoutS2C decoded = (QuadraLayoutS2C) MsgCodec.decode(MsgCodec.encode(original));
+
+        assertEquals(Proto.MSG_QUADRA_LAYOUT_S2C, decoded.typeId());
+        assertEquals(1, decoded.entries().size());
+        final QuadrantLayout decodedLayout = decoded.entries().get(0).layout();
+        for (int quadrant = 0; quadrant < 4; quadrant++) {
+            assertEquals(layout.style(quadrant), decodedLayout.style(quadrant));
+            assertEquals(layout.flat(quadrant), decodedLayout.flat(quadrant));
+        }
+        assertEquals(layout.predictsTerrainAt(-1, -1), decodedLayout.predictsTerrainAt(-1, -1));
+    }
+
+    @Test
+    void quadraLayoutLegacyShapeOmitsTheTopMaterial() throws ProtoException {
+        final QuadrantLayout layout = new QuadrantLayout(
+            QuadrantLayout.Style.FLAT, new FlatBaseline(1, -60, 1, 2, 0, "minecraft:white_stained_glass"),
+            QuadrantLayout.Style.NOISE, null,
+            QuadrantLayout.Style.NOISE, null,
+            QuadrantLayout.Style.NOISE, null
+        );
+        final QuadraLayoutS2C original = new QuadraLayoutS2C(List.of(
+            new QuadraLayoutS2C.Entry(0, layout)
+        ));
+        final Map<MapSyncCapability, Integer> legacy = Map.of(MapSyncCapability.QUADRA_LAYOUT, 1);
+
+        final byte[] payload = MsgCodec.encode(original, legacy);
+        final QuadraLayoutS2C decoded = (QuadraLayoutS2C) MsgCodec.decode(payload, legacy);
+
+        assertEquals("", decoded.entries().get(0).layout().flat(0).topMaterialId());
+        assertThrows(ProtoException.class, () -> MsgCodec.decode(payload));
+    }
+
+    @Test
+    void quadraLayoutRejectsUnknownStyles() {
+        final byte[] framed = new byte[] {
+            (byte) Proto.MSG_QUADRA_LAYOUT_S2C,
+            1,      // entries
+            0,      // dimIndex
+            9, 1, 0, 0 // hostile style ordinal
+        };
+        assertThrows(ProtoException.class, () -> MsgCodec.decode(framed));
     }
 
     @Test
@@ -762,6 +835,33 @@ class MsgCodecTest {
             tiles[i] = new MapViewReqC2S.TileReq(rng.nextInt(), rng.nextInt(), rng.nextLong());
         }
         return Arrays.asList(tiles);
+    }
+
+
+    @Test
+    void biomeLangRoundTrips() throws ProtoException {
+        final BiomeLangReqC2S request = new BiomeLangReqC2S("zh_cn");
+        final BiomeLangReqC2S decodedRequest =
+            (BiomeLangReqC2S) MsgCodec.decode(MsgCodec.encode(request));
+        assertEquals(Proto.MSG_BIOME_LANG_REQ_C2S, decodedRequest.typeId());
+        assertEquals("zh_cn", decodedRequest.locale());
+
+        final Map<String, String> names = new java.util.LinkedHashMap<>();
+        names.put("biome.custom.crystal_forest", "Crystal Forest");
+        names.put("biome.custom.火山", "Volcano");
+        final BiomeLangS2C reply = new BiomeLangS2C(names);
+        final BiomeLangS2C decodedReply = (BiomeLangS2C) MsgCodec.decode(MsgCodec.encode(reply));
+        assertEquals(Proto.MSG_BIOME_LANG_S2C, decodedReply.typeId());
+        assertEquals(names, decodedReply.names());
+    }
+
+    @Test
+    void biomeLangReplyEnforcesItsEntryCap() throws ProtoException {
+        final Map<String, String> names = new java.util.LinkedHashMap<>();
+        for (int i = 0; i <= Proto.MAX_BIOME_LANG_ENTRIES; i++) {
+            names.put("biome.big.b" + i, "B" + i);
+        }
+        assertThrows(ProtoException.class, () -> MsgCodec.encode(new BiomeLangS2C(names)));
     }
 
     private static List<HelloPolicyS2C.DimDescriptor> randomDims(final Random rng) {

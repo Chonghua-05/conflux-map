@@ -246,7 +246,7 @@ public final class TileService {
         }
         final CompletableFuture<int[]> composed = loaded.thenApplyAsync(ignored -> {
             final TileUpdate update = composeTile(
-                key, token, dynamicLighting, daylightFactor, 0f
+                key, token, dynamicLighting, daylightFactor, daylightModel.state().gamma()
             );
             if (update == null) {
                 throw new CancellationException("Map session changed");
@@ -1249,6 +1249,14 @@ public final class TileService {
                     composed = LightTint.applyBlockLightOverAmbient(
                         composed, light[idx] & 0xFF, true, gamma
                     );
+                } else if (layerType == MapLayer.Type.END_SURFACE) {
+                    // END_SURFACE snapshots keep raw colours (no daylight model covers the End),
+                    // so the zero-sky-light curve - readability floor, warm tint, gamma - is
+                    // multiplied in here. Applying it at composition, not capture, also relights
+                    // every already-cached region the moment the fix ships.
+                    composed = LightTint.applyBlockLightTint(
+                        composed, light[idx] & 0xFF, false, gamma
+                    );
                 } else if (usesBakedLight(layerType)) {
                     composed = LightTint.applyGammaOverBakedLight(
                         composed,
@@ -1316,6 +1324,11 @@ public final class TileService {
                 )
             );
         }
+        if (layerType == MapLayer.Type.END_SURFACE) {
+            // Same raw-colour contract as the Conflux branch above: the curve is applied here,
+            // never baked into the snapshot, so the Xaero style darkens the End identically.
+            return LightTint.applyBlockLightTint(composed, blockLight & 0xFF, false, gamma);
+        }
         return usesBakedLight(layerType)
             ? LightTint.applyGammaOverBakedLight(
                 composed,
@@ -1330,8 +1343,7 @@ public final class TileService {
         return layerType == MapLayer.Type.CAVE_AUTO
             || layerType == MapLayer.Type.CAVE_SLICE
             || layerType == MapLayer.Type.NETHER_CURRENT
-            || layerType == MapLayer.Type.NETHER_SLICE
-            || layerType == MapLayer.Type.END_SURFACE;
+            || layerType == MapLayer.Type.NETHER_SLICE;
     }
 
     private static double reliefMultiplier(
@@ -1366,12 +1378,18 @@ public final class TileService {
         if (x >= 0 && x < RegionColumns.SIZE && z >= 0 && z < RegionColumns.SIZE) {
             final int index = z * RegionColumns.SIZE + x;
             final short value = localSurfaceY[index];
-            if (value == ChunkSnapshot.NO_SURFACE) {
+            // Void/unknown columns never provide relief height, matching RegionColumns.reliefYAt
+            // and surfaceYAt: legacy cached void columns still carry a fabricated pivot-relative
+            // Y, which must shade as an absent neighbor rather than a fake cliff.
+            final byte k = localKind[index];
+            if (value == ChunkSnapshot.NO_SURFACE
+                || k == SurfaceKind.UNKNOWN.ordinal()
+                || k == SurfaceKind.VOID.ordinal()) {
                 return null;
             }
             if (!bathymetry
-                || (localKind[index] != SurfaceKind.WATER.ordinal()
-                    && localKind[index] != SurfaceKind.ICE.ordinal())) {
+                || (k != SurfaceKind.WATER.ordinal()
+                    && k != SurfaceKind.ICE.ordinal())) {
                 return (int) value;
             }
             return (int) value - (localFluidDepth[index] & 0xFF);

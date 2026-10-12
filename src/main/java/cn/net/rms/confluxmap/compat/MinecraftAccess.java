@@ -63,6 +63,11 @@ public final class MinecraftAccess {
         return client.debugEntries.isOverlayVisible();
     }
 
+    /** Whether the player hid the vanilla HUD with F1. */
+    public static boolean isHudHidden(final Minecraft client) {
+        return client.options.hideGui;
+    }
+
     public static void sendChatMessage(final Minecraft client, final String message) {
         if (client.getConnection() != null) {
             client.getConnection().sendChat(message);

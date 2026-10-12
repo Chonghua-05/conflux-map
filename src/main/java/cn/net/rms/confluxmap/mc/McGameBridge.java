@@ -71,6 +71,11 @@ public final class McGameBridge implements GameBridge {
     }
 
     @Override
+    public boolean isOnRenderThread() {
+        return client.isSameThread();
+    }
+
+    @Override
     public void runOnRenderThread(final Runnable task) {
         client.execute(task);
     }

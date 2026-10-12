@@ -185,6 +185,73 @@ public final class PredictedTileComposer {
         final MapColorStyle mapColorStyle,
         final XaeroMapStyle.Shadow xaeroShadow
     ) {
+        return compose(
+            derived, grid, palette, corrections, viewMode, lod, baselineMapColorId,
+            correctionDerived, correctionGrid, correctionBaselineMapColorId,
+            applyAbsoluteHeight, ambientLightTint, syncedMaterials,
+            mapColorStyle, xaeroShadow, null
+        );
+    }
+
+    /**
+     * Full form with per-output-pixel baseline map colours. {@code baselineMapColorOverride} is
+     * indexed like the output ({@code z * 256 + x}) and holds {@link Proto#MAP_COLOR_NONE}
+     * wherever the scalar {@code baselineMapColorId} still applies; it carries a quadrant layout's
+     * flat-quadrant top blocks, whose colour differs per quadrant inside one mixed tile.
+     */
+    public static int[] compose(
+        final DerivedGrid derived,
+        final BaselineGrid grid,
+        final PredictionPalette palette,
+        final CorrectionTile corrections,
+        final PredictionViewMode viewMode,
+        final int lod,
+        final int baselineMapColorId,
+        final DerivedGrid correctionDerived,
+        final BaselineGrid correctionGrid,
+        final int correctionBaselineMapColorId,
+        final boolean applyAbsoluteHeight,
+        final int ambientLightTint,
+        final SyncedMaterialPalette syncedMaterials,
+        final MapColorStyle mapColorStyle,
+        final XaeroMapStyle.Shadow xaeroShadow,
+        final int[] baselineMapColorOverride
+    ) {
+        return compose(
+            derived, grid, palette, corrections, viewMode, lod, baselineMapColorId,
+            correctionDerived, correctionGrid, correctionBaselineMapColorId,
+            applyAbsoluteHeight, ambientLightTint, syncedMaterials,
+            mapColorStyle, xaeroShadow, baselineMapColorOverride, null
+        );
+    }
+
+    /**
+     * Full form with a flat surface's own material identity. {@code flatTopMaterials} is indexed
+     * by {@link QuadrantLayout#quadrantIndex(int, int)} of each pixel's world block (or every slot
+     * for a whole-dimension superflat) and names the uniform top block a quadrant layout or flat
+     * baseline declares; a pixel the palette knows the material for paints that material's own
+     * sampled colour - translucency included, like the authoritative capture of the same column -
+     * instead of the opaque map colour.
+     */
+    public static int[] compose(
+        final DerivedGrid derived,
+        final BaselineGrid grid,
+        final PredictionPalette palette,
+        final CorrectionTile corrections,
+        final PredictionViewMode viewMode,
+        final int lod,
+        final int baselineMapColorId,
+        final DerivedGrid correctionDerived,
+        final BaselineGrid correctionGrid,
+        final int correctionBaselineMapColorId,
+        final boolean applyAbsoluteHeight,
+        final int ambientLightTint,
+        final SyncedMaterialPalette syncedMaterials,
+        final MapColorStyle mapColorStyle,
+        final XaeroMapStyle.Shadow xaeroShadow,
+        final int[] baselineMapColorOverride,
+        final String[] flatTopMaterials
+    ) {
         final int size = BaselineGrid.PIXELS;
         final int[] out = new int[size * size];
         final int[] surface = derived.surfaceY.clone();
@@ -195,8 +262,10 @@ public final class PredictedTileComposer {
         final int[] floorColors = new int[size * size];
         final String[] materials = new String[size * size];
         final String[] floorMaterials = new String[size * size];
+        final String[] overlayMaterials = new String[size * size];
         Arrays.fill(materials, "");
         Arrays.fill(floorMaterials, "");
+        Arrays.fill(overlayMaterials, "");
         Arrays.fill(floorColors, MapPixel.MAP_COLOR_NONE);
         final boolean[] corrected = new boolean[size * size];
         if (corrections != null) {
@@ -241,6 +310,7 @@ public final class PredictedTileComposer {
                     floorColors[pixel] = MapPixel.MAP_COLOR_NONE;
                     materials[pixel] = "";
                     floorMaterials[pixel] = "";
+                    overlayMaterials[pixel] = "";
                     corrected[pixel] = false;
                     continue;
                 }
@@ -253,6 +323,7 @@ public final class PredictedTileComposer {
                 floorColors[pixel] = sample.floorMapColorId();
                 materials[pixel] = sample.materialId();
                 floorMaterials[pixel] = sample.floorMaterialId();
+                overlayMaterials[pixel] = sample.overlayMaterialId();
                 corrected[pixel] = true;
             }
         }
@@ -279,9 +350,12 @@ public final class PredictedTileComposer {
                 if (mapColorStyle == MapColorStyle.XAERO) {
                     out[outIdx] = xaeroColor(
                         kind, biomes[idx], fluids[idx], palette, syncedMaterials,
-                        corrected[outIdx], colors[outIdx], floorColors[outIdx], baselineMapColorId,
-                        materials[outIdx], floorMaterials[outIdx], grid.blockX(x), grid.blockZ(z),
-                        surface, floorSurface, kinds, x, z, lod, xaeroShadow
+                        corrected[outIdx], colors[outIdx], floorColors[outIdx],
+                        effectiveBaseline(baselineMapColorId, baselineMapColorOverride, outIdx),
+                        materials[outIdx], floorMaterials[outIdx], overlayMaterials[outIdx],
+                        flatTopMaterial(flatTopMaterials, grid.blockX(x), grid.blockZ(z)),
+                        grid.blockX(x), grid.blockZ(z),
+                        surface, floorSurface, kinds, x, z, lod, xaeroShadow, ambientLightTint
                     );
                     continue;
                 }
@@ -305,23 +379,69 @@ public final class PredictedTileComposer {
                     : 0.0;
                 final int composed = corrected[outIdx] || !grid.supersampled()
                     ? baseColor(kind, biomes[idx], fluids[idx], palette, syncedMaterials,
-                        corrected[outIdx], colors[outIdx], floorColors[outIdx], baselineMapColorId,
+                        corrected[outIdx], colors[outIdx], floorColors[outIdx],
+                        effectiveBaseline(baselineMapColorId, baselineMapColorOverride, outIdx),
                         floorReliefMultiplier, materials[outIdx], floorMaterials[outIdx],
+                        flatTopMaterial(flatTopMaterials, grid.blockX(x), grid.blockZ(z)),
                         grid.blockX(x), grid.blockZ(z))
-                    : averagedSubColor(derived, grid, palette, idx, baselineMapColorId);
-                final boolean synchronizedMaterial = corrected[outIdx]
-                    && syncedMaterials != null
-                    && syncedMaterials.contains(materials[outIdx]);
+                    : averagedSubColor(
+                        derived, grid, palette, idx,
+                        effectiveBaseline(baselineMapColorId, baselineMapColorOverride, outIdx),
+                        flatTopMaterial(flatTopMaterials, grid.blockX(x), grid.blockZ(z)),
+                        syncedMaterials, grid.blockX(x), grid.blockZ(z)
+                    );
+                final boolean synchronizedMaterial = syncedMaterials != null && (
+                    corrected[outIdx] && syncedMaterials.contains(materials[outIdx])
+                        || flatPaintsSyncedMaterial(
+                            flatTopMaterials, grid.blockX(x), grid.blockZ(z), syncedMaterials));
                 final int materialDetailed = synchronizedMaterial ? composed
                     : palette.applyMaterialDetail(
                         kind, biomes[idx], composed, grid.blockX(x), grid.blockZ(z)
                     );
-                final int ambientLit = Argb.multiply(materialDetailed, ambientLightTint);
+                final int overlaid = applyOverlay(
+                    materialDetailed, overlayMaterials[outIdx], biomes[idx], syncedMaterials,
+                    corrected[outIdx], grid.blockX(x), grid.blockZ(z), palette
+                );
+                final int ambientLit = Argb.multiply(overlaid, ambientLightTint);
                 final int heightShaded = ShadingPipeline.applyShade(ambientLit, heightShade);
                 out[outIdx] = ShadingPipeline.applyBrightnessMultiplier(heightShaded, reliefMultiplier);
             }
         }
         return out;
+    }
+
+    /**
+     * The baseline map colour one output pixel should paint from: the quadrant-layout override
+     * when it declares one, otherwise the compose-wide scalar.
+     */
+    private static int effectiveBaseline(
+        final int baselineMapColorId,
+        final int[] override,
+        final int outIdx
+    ) {
+        if (override != null && override[outIdx] != Proto.MAP_COLOR_NONE) {
+            return override[outIdx];
+        }
+        return baselineMapColorId;
+    }
+
+    /** The flat-quadrant top material one block column declares, or {@code null}. */
+    private static String flatTopMaterial(final String[] flatTopMaterials, final int worldX, final int worldZ) {
+        if (flatTopMaterials == null) {
+            return null;
+        }
+        return flatTopMaterials[QuadrantLayout.quadrantIndex(worldX, worldZ)];
+    }
+
+    /** Whether the uncorrected flat-top material path paints this pixel from the synced palette. */
+    private static boolean flatPaintsSyncedMaterial(
+        final String[] flatTopMaterials,
+        final int worldX,
+        final int worldZ,
+        final SyncedMaterialPalette syncedMaterials
+    ) {
+        final String material = flatTopMaterial(flatTopMaterials, worldX, worldZ);
+        return material != null && syncedMaterials.contains(material);
     }
 
     private static int xaeroColor(
@@ -336,6 +456,8 @@ public final class PredictedTileComposer {
         final int baselineMapColorId,
         final String materialId,
         final String floorMaterialId,
+        final String overlayMaterialId,
+        final String flatTopMaterial,
         final int worldX,
         final int worldZ,
         final int[] surface,
@@ -344,7 +466,8 @@ public final class PredictedTileComposer {
         final int x,
         final int z,
         final int lod,
-        final XaeroMapStyle.Shadow shadow
+        final XaeroMapStyle.Shadow shadow,
+        final int ambientLightTint
     ) {
         final int idx = BaselineGrid.index(x, z);
         final int blocksPerPixel = TileMath.blocksPerPixel(lod);
@@ -369,8 +492,14 @@ public final class PredictedTileComposer {
                 slopeSampleHeight(floorSurface, kinds, x - 1, z - 1),
                 blocksPerPixel, true, shadow
             );
+            final int waterTop = xaeroHidesOverlay(overlayMaterialId)
+                ? water
+                : applyOverlay(
+                    water, overlayMaterialId, biomeId, syncedMaterials, corrected,
+                    worldX, worldZ, palette
+                );
             return ShadingPipeline.compositeOver(
-                water,
+                waterTop,
                 ShadingPipeline.applyBrightnessMultiplier(
                     shadedFloor, XaeroMapStyle.transparentFloorBrightness(fluidDepth)
                 )
@@ -379,14 +508,60 @@ public final class PredictedTileComposer {
         final int base = baseColor(
             kind, biomeId, fluidDepth, palette, syncedMaterials, corrected,
             correctedMapColorId, correctedFloorMapColorId, baselineMapColorId,
-            1.0, materialId, floorMaterialId, worldX, worldZ
+            1.0, materialId, floorMaterialId, flatTopMaterial, worldX, worldZ
         );
+        final int overlaid = xaeroHidesOverlay(overlayMaterialId)
+            ? base
+            : applyOverlay(
+                base, overlayMaterialId, biomeId, syncedMaterials, corrected,
+                worldX, worldZ, palette
+            );
+        // The ambient bake is part of the deferred-light pixel representation, not a style
+        // choice: captured roof tiles carry it, and the light pipeline replaces it later.
         return XaeroMapStyle.applyTerrain(
-            base, surface[idx],
+            Argb.multiply(overlaid, ambientLightTint), surface[idx],
             slopeSampleHeight(surface, kinds, x, z - 1),
             slopeSampleHeight(surface, kinds, x - 1, z - 1),
             blocksPerPixel, true, shadow
         );
+    }
+
+    /**
+     * Composites the synced overlay material's own resource-pack colour over {@code base},
+     * mirroring the authoritative snapshot's transparent-overlay layer (glass tint over the
+     * descended-to surface, decoration over the surface). A correction without a palette
+     * sample for the overlay leaves the base untouched.
+     */
+    private static int applyOverlay(
+        final int base,
+        final String overlayMaterialId,
+        final int biomeId,
+        final SyncedMaterialPalette syncedMaterials,
+        final boolean corrected,
+        final int worldX,
+        final int worldZ,
+        final PredictionPalette palette
+    ) {
+        if (!corrected || overlayMaterialId == null || overlayMaterialId.isEmpty()
+            || syncedMaterials == null || !syncedMaterials.contains(overlayMaterialId)) {
+            return base;
+        }
+        return Argb.over(
+            syncedMaterials.color(
+                overlayMaterialId, biomeId, Argb.TRANSPARENT, worldX, worldZ, palette
+            ),
+            base
+        );
+    }
+
+    /** Mirrors the client snapshot's {@code isXaeroInvisible}: torches and glass vanish from
+     *  the Xaero-style overlay, so that style shows the surface beneath them. */
+    private static boolean xaeroHidesOverlay(final String overlayMaterialId) {
+        if (overlayMaterialId == null || overlayMaterialId.isEmpty()) {
+            return false;
+        }
+        return overlayMaterialId.endsWith("torch") || overlayMaterialId.endsWith("glass")
+            || overlayMaterialId.endsWith("glass_pane");
     }
 
     /** One column's colour before height shading and relief. */
@@ -403,6 +578,7 @@ public final class PredictedTileComposer {
         final double floorReliefMultiplier,
         final String materialId,
         final String floorMaterialId,
+        final String flatTopMaterial,
         final int worldX,
         final int worldZ
     ) {
@@ -436,11 +612,25 @@ public final class PredictedTileComposer {
             final int fallback = palette.materialBaseColor(
                 kind, MapColorTable.argb(correctedMapColorId)
             );
-            return syncedMaterials == null ? fallback : syncedMaterials.color(
-                materialId, biomeId, fallback, worldX, worldZ, palette
-            );
+            if (syncedMaterials == null) {
+                return fallback;
+            }
+            // The material's own sampled colour, translucency included: a promoted translucent
+            // cover (a glass floor over the void) keeps its texture alpha instead of an opaque
+            // plate, matching the authoritative capture of the same column.
+            return syncedMaterials.color(materialId, biomeId, fallback, worldX, worldZ, palette);
         }
         if (!corrected && paintsFromMapColor(baselineMapColorId)) {
+            // A flat baseline's declared top material paints its own sampled colour for the same
+            // reason, so uncorrected and corrected pixels of the same surface agree exactly.
+            if (flatTopMaterial != null && syncedMaterials != null
+                && syncedMaterials.contains(flatTopMaterial)) {
+                return syncedMaterials.color(
+                    flatTopMaterial, biomeId,
+                    palette.materialBaseColor(kind, MapColorTable.argb(baselineMapColorId)),
+                    worldX, worldZ, palette
+                );
+            }
             return palette.materialBaseColor(kind, MapColorTable.argb(baselineMapColorId));
         }
         return colorFor(kind, biomeId, palette);
@@ -460,7 +650,11 @@ public final class PredictedTileComposer {
         final BaselineGrid grid,
         final PredictionPalette palette,
         final int idx,
-        final int baselineMapColorId
+        final int baselineMapColorId,
+        final String flatTopMaterial,
+        final SyncedMaterialPalette syncedMaterials,
+        final int worldX,
+        final int worldZ
     ) {
         int a = 0;
         int r = 0;
@@ -472,9 +666,9 @@ public final class PredictedTileComposer {
                 final int s = grid.subIndex(idx, sx, sz);
                 final int color = baseColor(
                     SurfaceKind.byOrdinal(derived.subKind[s]), grid.subBiomeId[s],
-                    derived.subFluidDepth[s], palette, null, false,
+                    derived.subFluidDepth[s], palette, syncedMaterials, false,
                     Proto.MAP_COLOR_NONE, MapPixel.MAP_COLOR_NONE,
-                    baselineMapColorId, 1.0, "", "", 0, 0
+                    baselineMapColorId, 1.0, "", "", flatTopMaterial, worldX, worldZ
                 );
                 a += Argb.alpha(color);
                 r += Argb.red(color);

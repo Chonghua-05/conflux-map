@@ -11,6 +11,7 @@ plugins {
 }
 
 rootProject.name = 'confluxmap-neoforge'
+include ':api'
 include ':common'
 
 file('versions').eachDir { final File dir ->

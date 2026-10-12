@@ -96,11 +96,11 @@ public final class NegotiatedMapSync {
             throw new ProtoException("message direction does not match negotiated endpoint");
         }
         requireCapability(message.typeId());
-        return MsgCodec.encode(correctionProfile.prepareOutbound(message));
+        return MsgCodec.encode(correctionProfile.prepareOutbound(message), capabilities);
     }
 
     public Message decodeInbound(final byte[] payload) throws ProtoException {
-        final Message message = MsgCodec.decode(payload);
+        final Message message = MsgCodec.decode(payload, capabilities);
         final boolean clientbound = MapSyncProtocol.isClientbound(message.typeId());
         if ((endpoint == Endpoint.SERVER && clientbound)
             || (endpoint == Endpoint.CLIENT && !clientbound)) {
@@ -124,6 +124,9 @@ public final class NegotiatedMapSync {
             case Proto.MSG_SERVER_VIEW_DISTANCE_S2C -> MapSyncCapability.SERVER_VIEW_DISTANCE;
             case Proto.MSG_SERVER_INSTANCE_S2C -> MapSyncCapability.SERVER_INSTANCE;
             case Proto.MSG_PLAYER_POSITIONS_S2C -> MapSyncCapability.PLAYER_POSITIONS;
+            case Proto.MSG_QUADRA_LAYOUT_S2C -> MapSyncCapability.QUADRA_LAYOUT;
+            case Proto.MSG_BIOME_LANG_REQ_C2S, Proto.MSG_BIOME_LANG_S2C ->
+                MapSyncCapability.DATAPACK_BIOME_LANGS;
             default -> null;
         };
         if (required != null && !supports(required)) {

@@ -18,7 +18,7 @@ public final class Proto {
     private Proto() {
     }
 
-    /** Channel identifier registered with NeoForge's networking API on both sides. */
+    /** Channel identifier registered with Fabric's networking API on both sides. */
     public static final String CHANNEL_ID = "confluxmap:map_sync";
 
     /**
@@ -82,23 +82,29 @@ public final class Proto {
     public static final int MSG_SERVER_INSTANCE_S2C = 0x13;
     /** S2C: complete online-player position snapshot for the companion radar. */
     public static final int MSG_PLAYER_POSITIONS_S2C = 0x14;
+    /** S2C: quadra-gen quadrant layouts per managed dimension; sent just before {@link #MSG_HELLO_POLICY_S2C}. */
+    public static final int MSG_QUADRA_LAYOUT_S2C = 0x15;
+    /** C2S: client asks for the datapack-provided {@code biome.*} translations in its locale. */
+    public static final int MSG_BIOME_LANG_REQ_C2S = 0x16;
+    /** S2C: merged datapack biome display names; empty when the world's packs ship none. */
+    public static final int MSG_BIOME_LANG_S2C = 0x17;
 
     /** First valid message id; used to range-check the type byte. */
     public static final int MSG_MIN = MSG_HELLO_C2S;
     /** Last valid message id for this proto major version. */
-    public static final int MSG_MAX = MSG_PLAYER_POSITIONS_S2C;
+    public static final int MSG_MAX = MSG_BIOME_LANG_S2C;
 
     // ---- Hard caps (enforced everywhere untrusted bytes cross a boundary) ----
 
     /**
-     * Vanilla/loader custom payload limit ({@code CustomPayloadS2CPacket.MAX_PAYLOAD_SIZE}
+     * Fabric 1.17.1 S2C custom payload limit ({@code CustomPayloadS2CPacket.MAX_PAYLOAD_SIZE}
      * verified in the research report). Messages above this cannot reach the client intact, so
      * the codec rejects them before a half-sent packet can be observed.
      */
     public static final int MAX_S2C_PAYLOAD = 1 << 20; // 1 MiB
 
     /**
-     * Practical C2S cap. The loader's hard limit is 32767 bytes for the whole custom-payload
+     * Practical C2S cap. Fabric's hard limit is 32767 bytes for the whole custom-payload
      * packet; 8 KiB is well below that and large enough for any HELLO / MAP_VIEW_REQ the
      * client legitimately sends (tiles-per-req is itself capped at {@value #MAX_TILES_PER_REQ}).
      */
@@ -121,6 +127,8 @@ public final class Proto {
     public static final int MAX_MAP_SYNC_VIEW_TILES = 256;
     /** Maximum invalidated tiles carried in one server notification. */
     public static final int MAX_MAP_INVALIDATION_TILES = 256;
+    /** Maximum {@code biome.*} entries one BIOME_LANG reply may carry; each is two capped UTF-8 strings. */
+    public static final int MAX_BIOME_LANG_ENTRIES = 1024;
     /** Maximum cropped summary-region pages carried by one request. */
     public static final int MAX_REGION_PAGES_PER_REQ = 32;
     /** Maximum changed summary regions carried by one invalidation. */

@@ -1,6 +1,7 @@
 package cn.net.rms.confluxmap.core.net;
 
 import cn.net.rms.confluxmap.core.predict.FlatBaseline;
+import cn.net.rms.confluxmap.core.predict.QuadrantLayout;
 import cn.net.rms.confluxmap.core.predict.WorldPreset;
 import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
@@ -12,7 +13,9 @@ import java.nio.charset.CharacterCodingException;
 import java.nio.charset.CodingErrorAction;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.UUID;
 
 /**
@@ -35,7 +38,7 @@ import java.util.UUID;
  *       unknown type byte throws.</li>
  * </ul>
  *
- * <p>This class is deliberately Minecraft-free (pure {@code byte[]}). The NeoForge wiring in
+ * <p>This class is deliberately Minecraft-free (pure {@code byte[]}). The Fabric wiring in
  * {@code mc.net.ClientNetworking} / {@code server.ServerNetworking} is a thin {@link
  * java.io.DataOutput} bridge on top of {@code PacketByteBuf}.
  */
@@ -47,6 +50,18 @@ public final class MsgCodec {
 
     /** Serializes {@code msg} to its wire form, including the leading type byte. */
     public static byte[] encode(final Message msg) throws ProtoException {
+        return encode(msg, null);
+    }
+
+    /**
+     * Negotiated form: capability version 1 layout messages omit the flat top material id a
+     * version 2 peer carries, so a server never writes a shape the client's decoder rejects.
+     * {@code negotiated == null} encodes the current (highest) shapes.
+     */
+    public static byte[] encode(
+        final Message msg,
+        final Map<MapSyncCapability, Integer> negotiated
+    ) throws ProtoException {
         final ByteArrayOutputStream rawOut = new ByteArrayOutputStream();
         final DataOutputStream out = new DataOutputStream(rawOut);
         try {
@@ -64,7 +79,7 @@ public final class MsgCodec {
             } else if (msg instanceof final ErrorS2C m) {
                 encodeErrorS2C(out, m);
             } else if (msg instanceof final FlatBaselineS2C m) {
-                encodeFlatBaselineS2C(out, m);
+                encodeFlatBaselineS2C(out, m, carriesTopMaterial(negotiated, MapSyncCapability.FLAT_BASELINE));
             } else if (msg instanceof final LoadStateSubscribeC2S m) {
                 encodeLoadStateSubscribeC2S(out, m);
             } else if (msg instanceof final LoadStateDeltaS2C m) {
@@ -91,6 +106,12 @@ public final class MsgCodec {
                 writeUtf(out, m.instanceId());
             } else if (msg instanceof final PlayerPositionsS2C m) {
                 encodePlayerPositionsS2C(out, m);
+            } else if (msg instanceof final QuadraLayoutS2C m) {
+                encodeQuadraLayoutS2C(out, m, carriesTopMaterial(negotiated, MapSyncCapability.QUADRA_LAYOUT));
+            } else if (msg instanceof final BiomeLangReqC2S m) {
+                writeUtf(out, m.locale());
+            } else if (msg instanceof final BiomeLangS2C m) {
+                encodeBiomeLangS2C(out, m);
             } else {
                 throw new ProtoException("unknown message type: " + msg.getClass().getName());
             }
@@ -130,12 +151,42 @@ public final class MsgCodec {
             || typeId == Proto.MSG_SERVER_VIEW_DISTANCE_S2C
             || typeId == Proto.MSG_MAP_CAPABILITIES_S2C
             || typeId == Proto.MSG_SERVER_INSTANCE_S2C
-            || typeId == Proto.MSG_PLAYER_POSITIONS_S2C;
+            || typeId == Proto.MSG_PLAYER_POSITIONS_S2C
+            || typeId == Proto.MSG_QUADRA_LAYOUT_S2C
+            || typeId == Proto.MSG_BIOME_LANG_S2C;
     }
 
     private static void encodeHelloC2S(final DataOutputStream out, final HelloC2S m) throws IOException, ProtoException {
         writeUtf(out, m.modVersion());
         writeUtf(out, m.predictorVersion());
+    }
+
+    private static void encodeBiomeLangS2C(final DataOutputStream out, final BiomeLangS2C m)
+        throws IOException, ProtoException {
+        if (m.names().size() > Proto.MAX_BIOME_LANG_ENTRIES) {
+            throw new ProtoException(
+                "biome-lang entry count " + m.names().size() + " above cap " + Proto.MAX_BIOME_LANG_ENTRIES
+            );
+        }
+        out.writeShort(m.names().size());
+        for (final Map.Entry<String, String> entry : m.names().entrySet()) {
+            writeUtf(out, entry.getKey());
+            writeUtf(out, entry.getValue());
+        }
+    }
+
+    private static BiomeLangS2C decodeBiomeLangS2C(final DataInputStream in) throws IOException, ProtoException {
+        final int count = in.readUnsignedShort();
+        if (count > Proto.MAX_BIOME_LANG_ENTRIES) {
+            throw new ProtoException(
+                "biome-lang entry count " + count + " above cap " + Proto.MAX_BIOME_LANG_ENTRIES
+            );
+        }
+        final Map<String, String> names = new LinkedHashMap<>();
+        for (int i = 0; i < count; i++) {
+            names.put(readUtf(in), readUtf(in));
+        }
+        return new BiomeLangS2C(names);
     }
 
     private static void encodePlayerPositionsS2C(
@@ -364,7 +415,19 @@ public final class MsgCodec {
         writeUtf(out, m.detail());
     }
 
-    private static void encodeFlatBaselineS2C(final DataOutputStream out, final FlatBaselineS2C m) throws IOException, ProtoException {
+    /** Whether the negotiated shape of one layout message carries the flat top material id. */
+    private static boolean carriesTopMaterial(
+        final Map<MapSyncCapability, Integer> negotiated,
+        final MapSyncCapability capability
+    ) {
+        return negotiated == null || negotiated.getOrDefault(capability, 0) >= 2;
+    }
+
+    private static void encodeFlatBaselineS2C(
+        final DataOutputStream out,
+        final FlatBaselineS2C m,
+        final boolean topMaterial
+    ) throws IOException, ProtoException {
         final List<FlatBaselineS2C.Entry> entries = m.entries();
         if (entries.isEmpty() || entries.size() > Proto.MAX_DIM_ENTRIES) {
             throw new ProtoException("flat baseline entry count out of range: " + entries.size());
@@ -378,6 +441,42 @@ public final class MsgCodec {
             out.writeByte(b.kind());
             out.writeByte(b.mapColorId());
             out.writeByte(b.fluidDepth());
+            if (topMaterial) {
+                writeUtf(out, b.topMaterialId());
+            }
+        }
+    }
+
+    private static void encodeQuadraLayoutS2C(
+        final DataOutputStream out,
+        final QuadraLayoutS2C m,
+        final boolean topMaterial
+    ) throws IOException, ProtoException {
+        final List<QuadraLayoutS2C.Entry> entries = m.entries();
+        if (entries.isEmpty() || entries.size() > Proto.MAX_DIM_ENTRIES) {
+            throw new ProtoException("quadra layout entry count out of range: " + entries.size());
+        }
+        out.writeByte(entries.size());
+        for (final QuadraLayoutS2C.Entry entry : entries) {
+            out.writeByte(entry.dimIndex());
+            final QuadrantLayout layout = entry.layout();
+            for (int quadrant = 0; quadrant < 4; quadrant++) {
+                out.writeByte(layout.style(quadrant).ordinal());
+            }
+            for (int quadrant = 0; quadrant < 4; quadrant++) {
+                final FlatBaseline flat = layout.flat(quadrant);
+                if (layout.style(quadrant) != QuadrantLayout.Style.FLAT) {
+                    continue;
+                }
+                out.writeByte(flat.biomeId());
+                out.writeShort(flat.surfaceY());
+                out.writeByte(flat.kind());
+                out.writeByte(flat.mapColorId());
+                out.writeByte(flat.fluidDepth());
+                if (topMaterial) {
+                    writeUtf(out, flat.topMaterialId());
+                }
+            }
         }
     }
 
@@ -543,6 +642,18 @@ public final class MsgCodec {
 
     /** Parses exactly one {@link Message} from {@code payload}; throws on any violation. */
     public static Message decode(final byte[] payload) throws ProtoException {
+        return decode(payload, null);
+    }
+
+    /**
+     * Negotiated form: the decoder mirrors {@link #encode(Message, Map)} and only reads the flat
+     * top material id when the peer's capability version carries it. {@code negotiated == null}
+     * decodes the current (highest) shapes.
+     */
+    public static Message decode(
+        final byte[] payload,
+        final Map<MapSyncCapability, Integer> negotiated
+    ) throws ProtoException {
         if (payload.length == 0) {
             throw new ProtoException("empty payload");
         }
@@ -560,7 +671,8 @@ public final class MsgCodec {
                 case Proto.MSG_MAP_PATCH_S2C -> decodeMapPatchS2C(in);
                 case Proto.MSG_POLICY_UPDATE_S2C -> decodePolicyUpdateS2C(in);
                 case Proto.MSG_ERROR_S2C -> decodeErrorS2C(in);
-                case Proto.MSG_FLAT_BASELINE_S2C -> decodeFlatBaselineS2C(in);
+                case Proto.MSG_FLAT_BASELINE_S2C -> decodeFlatBaselineS2C(
+                    in, carriesTopMaterial(negotiated, MapSyncCapability.FLAT_BASELINE));
                 case Proto.MSG_LOAD_STATE_SUBSCRIBE_C2S -> decodeLoadStateSubscribeC2S(in);
                 case Proto.MSG_LOAD_STATE_DELTA_S2C -> decodeLoadStateDeltaS2C(in);
                 case Proto.MSG_MAP_SYNC_SUBSCRIBE_C2S -> decodeMapSyncSubscribeC2S(in);
@@ -574,6 +686,10 @@ public final class MsgCodec {
                 case Proto.MSG_MAP_CAPABILITIES_S2C -> decodeMapCapabilitiesS2C(in);
                 case Proto.MSG_SERVER_INSTANCE_S2C -> new ServerInstanceS2C(readUtf(in));
                 case Proto.MSG_PLAYER_POSITIONS_S2C -> decodePlayerPositionsS2C(in);
+                case Proto.MSG_QUADRA_LAYOUT_S2C -> decodeQuadraLayoutS2C(
+                    in, carriesTopMaterial(negotiated, MapSyncCapability.QUADRA_LAYOUT));
+                case Proto.MSG_BIOME_LANG_REQ_C2S -> new BiomeLangReqC2S(readUtf(in));
+                case Proto.MSG_BIOME_LANG_S2C -> decodeBiomeLangS2C(in);
                 default -> throw new ProtoException("unhandled message type id: 0x" + Integer.toHexString(typeId));
             };
             if (in.available() != 0) {
@@ -816,7 +932,10 @@ public final class MsgCodec {
         return new ErrorS2C(code, detail);
     }
 
-    private static FlatBaselineS2C decodeFlatBaselineS2C(final DataInputStream in) throws IOException, ProtoException {
+    private static FlatBaselineS2C decodeFlatBaselineS2C(
+        final DataInputStream in,
+        final boolean topMaterial
+    ) throws IOException, ProtoException {
         final int count = in.readUnsignedByte();
         if (count == 0 || count > Proto.MAX_DIM_ENTRIES) {
             throw new ProtoException("flat baseline entry count out of range: " + count);
@@ -829,11 +948,52 @@ public final class MsgCodec {
             final int kind = in.readUnsignedByte();
             final int mapColorId = in.readUnsignedByte();
             final int fluidDepth = in.readUnsignedByte();
+            final String topMaterialId = topMaterial ? readUtf(in) : "";
             entries.add(new FlatBaselineS2C.Entry(
-                dimIndex, new FlatBaseline(biomeId, surfaceY, kind, mapColorId, fluidDepth)
+                dimIndex, new FlatBaseline(biomeId, surfaceY, kind, mapColorId, fluidDepth, topMaterialId)
             ));
         }
         return new FlatBaselineS2C(entries);
+    }
+
+    private static QuadraLayoutS2C decodeQuadraLayoutS2C(
+        final DataInputStream in,
+        final boolean topMaterial
+    ) throws IOException, ProtoException {
+        final int count = in.readUnsignedByte();
+        if (count == 0 || count > Proto.MAX_DIM_ENTRIES) {
+            throw new ProtoException("quadra layout entry count out of range: " + count);
+        }
+        final List<QuadraLayoutS2C.Entry> entries = new ArrayList<>(count);
+        for (int i = 0; i < count; i++) {
+            final int dimIndex = in.readUnsignedByte();
+            final QuadrantLayout.Style[] styles = new QuadrantLayout.Style[4];
+            for (int quadrant = 0; quadrant < 4; quadrant++) {
+                final int ordinal = in.readUnsignedByte();
+                if (ordinal >= QuadrantLayout.Style.values().length) {
+                    throw new ProtoException("invalid quadrant style: " + ordinal);
+                }
+                styles[quadrant] = QuadrantLayout.Style.values()[ordinal];
+            }
+            final FlatBaseline[] flats = new FlatBaseline[4];
+            for (int quadrant = 0; quadrant < 4; quadrant++) {
+                if (styles[quadrant] != QuadrantLayout.Style.FLAT) {
+                    continue;
+                }
+                flats[quadrant] = new FlatBaseline(
+                    in.readUnsignedByte(),
+                    in.readShort(),
+                    in.readUnsignedByte(),
+                    in.readUnsignedByte(),
+                    in.readUnsignedByte(),
+                    topMaterial ? readUtf(in) : ""
+                );
+            }
+            entries.add(new QuadraLayoutS2C.Entry(dimIndex, new QuadrantLayout(
+                styles[0], flats[0], styles[1], flats[1], styles[2], flats[2], styles[3], flats[3]
+            )));
+        }
+        return new QuadraLayoutS2C(entries);
     }
 
     private static LoadStateSubscribeC2S decodeLoadStateSubscribeC2S(
