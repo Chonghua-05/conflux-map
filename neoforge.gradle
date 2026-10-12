@@ -9,6 +9,7 @@ base {
 }
 
 final File repositoryRoot = rootProject.projectDir
+evaluationDependsOn(':api')
 evaluationDependsOn(':common')
 
 sourceSets {
@@ -55,6 +56,7 @@ neoForge {
     mods {
         "${mod_id}" {
             sourceSet sourceSets.main
+            sourceSet project(':api').sourceSets.main
             sourceSet project(':common').sourceSets.main
         }
     }
@@ -67,6 +69,7 @@ processResources {
 }
 
 jar {
+    from project(':api').sourceSets.main.output
     from project(':common').sourceSets.main.output
     from(new File(repositoryRoot, 'LICENSE'))
 }
