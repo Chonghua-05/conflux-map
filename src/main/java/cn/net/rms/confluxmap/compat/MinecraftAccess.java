@@ -129,7 +129,7 @@ public final class MinecraftAccess {
         //$$ return client.debugEntries.isOverlayVisible();
         //#elseif MC>=12109
         //$$ return client.debugHudEntryList.isF3Enabled();
-        //#elseif MC>=12100
+        //#elseif MC>=12002
         //$$ return client.getDebugHud().shouldShowDebugHud();
         //#else
         return client.options.debugEnabled;
@@ -190,7 +190,7 @@ public final class MinecraftAccess {
     }
 
     public static String playerName(final ServerPlayerEntity player) {
-        //#if MC>=12100
+        //#if MC>=12003
         //$$ return player.getName().getString();
         //#else
         return player.getEntityName();

@@ -198,7 +198,7 @@ public final class EntityIconManager implements AutoCloseable {
         }
         //#if MC>=12109
         //$$ final Identifier skin = player.getSkinTextures().body().texturePath();
-        //#elseif MC>=12100
+        //#elseif MC>=12002
         //$$ final Identifier skin = player.getSkinTextures().texture();
         //#else
         final Identifier skin = player.getSkinTexture();
@@ -728,7 +728,7 @@ public final class EntityIconManager implements AutoCloseable {
     private static FaceIcon playerIcon(final AbstractClientPlayerEntity player) {
         //#if MC>=12109
         //$$ final Identifier skin = player.getSkin().body().texturePath();
-        //#elseif MC>=12100
+        //#elseif MC>=12002
         //$$ final Identifier skin = player.getSkinTextures().texture();
         //#else
         final Identifier skin = player.getSkinTexture();

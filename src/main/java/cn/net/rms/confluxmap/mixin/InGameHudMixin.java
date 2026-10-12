@@ -319,7 +319,7 @@ public abstract class InGameHudMixin {
     //$$ }
     //#elseif MC>=12000
     //$$ @Redirect(
-        //#if MC>=12101 && MC<12103
+        //#if MC>=12003 && MC<12103
         //$$ method = "method_55440([Lnet/minecraft/client/gui/hud/InGameHud$SidebarEntry;"
         //$$     + "Lnet/minecraft/client/gui/DrawContext;ILnet/minecraft/text/Text;I)V",
         //#else

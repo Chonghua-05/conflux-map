@@ -563,7 +563,7 @@ public final class ClientMultiworldService {
         final Map<String, String> observed = new LinkedHashMap<>();
         //#if MC>=260100
         //$$ final String brand = client.getConnection().serverBrand();
-        //#elseif MC>=12100
+        //#elseif MC>=12002
         //$$ final String brand = client.getNetworkHandler().getBrand();
         //#else
         final String brand = client.player.getServerBrand();
@@ -828,7 +828,7 @@ public final class ClientMultiworldService {
         //#if MC>=260100
         //$$ final String brand = client.getConnection().serverBrand();
         //$$ final boolean hasServerCommand = client.getConnection().getCommands().getRoot().getChild("server") != null;
-        //#elseif MC>=12100
+        //#elseif MC>=12002
         //$$ final String brand = client.getNetworkHandler().getBrand();
         //$$ final boolean hasServerCommand = client.getNetworkHandler()
         //$$     .getCommandDispatcher().getRoot().getChild("server") != null;

@@ -276,7 +276,7 @@ public abstract class StatusEffectHudMixin {
             if (!effect.shouldShowIcon()) {
                 continue;
             }
-            //#if MC>=12100
+            //#if MC>=12005
             //$$ final boolean beneficial = effect.getEffectType().value().isBeneficial();
             //#else
             final boolean beneficial = effect.getEffectType().isBeneficial();

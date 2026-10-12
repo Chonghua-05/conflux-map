@@ -26,6 +26,8 @@ public final class MinecraftVersion {
         //$$ return "1.21.3";
         //#elseif MC>=12101
         //$$ return "1.21.1";
+        //#elseif MC>=12006
+        //$$ return "1.20.6";
         //#elseif MC>=12001
         //$$ return "1.20.1";
         //#elseif MC>=11802

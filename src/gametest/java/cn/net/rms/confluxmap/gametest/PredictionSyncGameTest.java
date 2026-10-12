@@ -47,7 +47,7 @@ import net.minecraft.test.GameTest;
 import net.minecraft.test.TestContext;
 import net.minecraft.util.math.BlockPos;
 import net.minecraft.world.Heightmap;
-//#if MC>=12100
+//#if MC>=12002
 //$$ import net.minecraft.network.packet.c2s.common.SyncedClientOptions;
 //#endif
 
@@ -494,7 +494,7 @@ public final class PredictionSyncGameTest implements FabricGameTest {
         final ServerWorld world,
         final GameProfile profile
     ) {
-        //#if MC>=12100
+        //#if MC>=12002
         //$$ return new ServerPlayerEntity(server, world, profile, SyncedClientOptions.createDefault());
         //#else
         return new ServerPlayerEntity(server, world, profile);

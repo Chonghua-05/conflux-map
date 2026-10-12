@@ -248,7 +248,7 @@ public final class RenderUtil {
 
     /** Saves the world ModelView and normalizes only the legacy LAST-event state. */
     public static void pushWorldHudModelView() {
-        //#if MC>=12100
+        //#if MC>=12005
         //$$ RenderSystem.getModelViewStack().pushMatrix();
         //#else
         final MatrixStack modelViewStack = RenderSystem.getModelViewStack();
@@ -262,7 +262,7 @@ public final class RenderUtil {
 
     /** Restores the global model-view saved by {@link #pushWorldHudModelView()}. */
     public static void popModelView() {
-        //#if MC>=12100
+        //#if MC>=12005
         //$$ RenderSystem.getModelViewStack().popMatrix();
         //#else
         RenderSystem.getModelViewStack().pop();
