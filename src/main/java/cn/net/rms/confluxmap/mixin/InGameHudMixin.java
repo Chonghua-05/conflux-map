@@ -76,6 +76,12 @@ public abstract class InGameHudMixin {
     //$$     final net.minecraft.client.render.RenderTickCounter tickCounter,
     //$$     final CallbackInfo ci
     //$$ ) {
+    //#elseif MC>=12005
+    //$$ private void confluxmap$renderWaypointItemsBeforeCrosshair(
+    //$$     final DrawContext context,
+    //$$     final float tickDelta,
+    //$$     final CallbackInfo ci
+    //$$ ) {
     //#elseif MC>=12000
     //$$ private void confluxmap$renderWaypointItemsBeforeCrosshair(
     //$$     final DrawContext context,

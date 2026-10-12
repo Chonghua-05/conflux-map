@@ -134,6 +134,12 @@ public abstract class StatusEffectHudMixin {
     //$$     final RenderTickCounter tickCounter,
     //$$     final CallbackInfo ci
     //$$ ) {
+    //#elseif MC>=12005
+    //$$ private void confluxmap$beforeStatusEffects(
+    //$$     final DrawContext context,
+    //$$     final float tickDelta,
+    //$$     final CallbackInfo ci
+    //$$ ) {
     //#elseif MC>=12000
     //$$ private void confluxmap$beforeStatusEffects(
     //$$     final DrawContext context,
@@ -198,6 +204,12 @@ public abstract class StatusEffectHudMixin {
     //$$ private void confluxmap$afterStatusEffects(
     //$$     final DrawContext context,
     //$$     final RenderTickCounter tickCounter,
+    //$$     final CallbackInfo ci
+    //$$ ) {
+    //#elseif MC>=12005
+    //$$ private void confluxmap$afterStatusEffects(
+    //$$     final DrawContext context,
+    //$$     final float tickDelta,
     //$$     final CallbackInfo ci
     //$$ ) {
     //#elseif MC>=12000

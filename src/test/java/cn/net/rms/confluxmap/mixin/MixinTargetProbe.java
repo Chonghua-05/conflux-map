@@ -2,6 +2,8 @@ package cn.net.rms.confluxmap.mixin;
 
 import java.io.IOException;
 import java.io.InputStream;
+import java.util.ArrayList;
+import java.util.List;
 import java.util.concurrent.atomic.AtomicBoolean;
 import org.objectweb.asm.ClassReader;
 import org.objectweb.asm.ClassVisitor;
@@ -71,6 +73,35 @@ final class MixinTargetProbe {
             }, ClassReader.SKIP_DEBUG | ClassReader.SKIP_FRAMES);
         }
         return new Result(methodFound.get(), methodStatic.get(), invocationFound.get());
+    }
+
+    /**
+     * Collects the descriptors of every method a name-only mixin selector resolves to, so a test
+     * can prove an injector's captured parameters match the target's real parameter list.
+     */
+    static List<String> methodDescriptors(
+        final String internalClassName,
+        final String methodName
+    ) throws IOException {
+        final List<String> descriptors = new ArrayList<>();
+        try (InputStream input = minecraftClass(internalClassName)) {
+            new ClassReader(input).accept(new ClassVisitor(Opcodes.ASM9) {
+                @Override
+                public MethodVisitor visitMethod(
+                    final int access,
+                    final String name,
+                    final String descriptor,
+                    final String signature,
+                    final String[] exceptions
+                ) {
+                    if (name.equals(methodName)) {
+                        descriptors.add(descriptor);
+                    }
+                    return null;
+                }
+            }, ClassReader.SKIP_DEBUG | ClassReader.SKIP_FRAMES);
+        }
+        return descriptors;
     }
 
     private static InputStream minecraftClass(final String internalName) {
