@@ -52,8 +52,13 @@ final class PaperSharedWaypointNetworking implements PluginMessageListener {
             return;
         }
         final byte[] stable = payload.clone();
+        // A payload can only arrive on a channel the client registered, so the reply path is
+        // opened here rather than waiting for the registration event.
+        messages.confirm(messages.recipient(plugin, player), channel);
         if (!Bukkit.isPrimaryThread()) {
-            Bukkit.getScheduler().runTask(plugin, () -> receive(player.getUniqueId(), stable));
+            // Session and waypoint state live in common/ and are not thread safe, so the payload
+            // is handled on the global region, which owns the shared waypoint state.
+            PaperPlatform.global(plugin, () -> receive(player.getUniqueId(), stable));
             return;
         }
         receive(player.getUniqueId(), stable);
@@ -63,10 +68,10 @@ final class PaperSharedWaypointNetworking implements PluginMessageListener {
         if (!companion.isEnabled()) {
             return;
         }
-        for (final Player player : Bukkit.getOnlinePlayers()) {
-            final SharedWaypointSessionHandler.Peer peer = peer(player);
-            if (sessions.updateOperator(peer)) {
-                send(player, sessions.status(peer, environment()));
+        final SharedWaypointSessionHandler.Environment environment = environment();
+        for (final PaperPlayerProbe.Snapshot player : companion.players().snapshots()) {
+            if (sessions.updateOperator(peer(player))) {
+                deliver(player, sessions.status(peer(player), environment));
             }
         }
     }
@@ -83,9 +88,9 @@ final class PaperSharedWaypointNetworking implements PluginMessageListener {
             return;
         }
         final SharedWaypointSessionHandler.Environment environment = environment();
-        for (final Player player : Bukkit.getOnlinePlayers()) {
-            if (sessions.isCompatible(player.getUniqueId())) {
-                send(player, sessions.status(peer(player), environment));
+        for (final PaperPlayerProbe.Snapshot player : companion.players().snapshots()) {
+            if (sessions.isCompatible(player.id())) {
+                deliver(player, sessions.status(peer(player), environment));
             }
         }
     }
@@ -98,14 +103,16 @@ final class PaperSharedWaypointNetworking implements PluginMessageListener {
 
     /** Sends one delta to every subscriber that negotiated a wire minor able to carry it. */
     private void broadcastSubscribed(final SharedWaypointMessage message) {
-        for (final Player recipient : Bukkit.getOnlinePlayers()) {
+        // Snapshots keep the iteration off live entity state, so the global tick may run this
+        // even though each player is owned by a different region thread.
+        for (final PaperPlayerProbe.Snapshot recipient : companion.players().snapshots()) {
             // Group deltas have no minor-3 representation; older modded clients keep their
             // previous revision and resync on the next snapshot instead of failing to decode.
-            if (sessions.isSubscribed(recipient.getUniqueId())
+            if (sessions.isSubscribed(recipient.id())
                 && SharedWaypointCodec.encodableAt(
-                    message, sessions.negotiatedMinor(recipient.getUniqueId())
+                    message, sessions.negotiatedMinor(recipient.id())
                 )) {
-                send(recipient, message);
+                deliver(recipient, message);
             }
         }
     }
@@ -151,12 +158,40 @@ final class PaperSharedWaypointNetworking implements PluginMessageListener {
         );
     }
 
-    private static SharedWaypointSessionHandler.Peer peer(final Player player) {
+    private SharedWaypointSessionHandler.Peer peer(final Player player) {
+        final PaperPlayerProbe.Snapshot snapshot =
+            companion.players().snapshotOf(player.getUniqueId());
+        if (snapshot == null) {
+            // Only reachable during the first refresh interval after a join, before the player
+            // has published itself; the caller already runs on the thread that owns it.
+            return new SharedWaypointSessionHandler.Peer(
+                player.getUniqueId(),
+                player.getName(),
+                player.hasPermission("confluxmap.admin")
+            );
+        }
+        return peer(snapshot);
+    }
+
+    private static SharedWaypointSessionHandler.Peer peer(
+        final PaperPlayerProbe.Snapshot snapshot
+    ) {
         return new SharedWaypointSessionHandler.Peer(
-            player.getUniqueId(),
-            player.getName(),
-            player.hasPermission("confluxmap.admin")
+            snapshot.id(),
+            snapshot.name(),
+            snapshot.admin()
         );
+    }
+
+    /** Sends to a player identified by its snapshot, without reading any entity state. */
+    private void deliver(
+        final PaperPlayerProbe.Snapshot snapshot,
+        final SharedWaypointMessage message
+    ) {
+        final Player target = Bukkit.getPlayer(snapshot.id());
+        if (target != null) {
+            send(target, message);
+        }
     }
 
     private void malformed(final Player player, final int bytes, final String reason) {
@@ -179,7 +214,7 @@ final class PaperSharedWaypointNetworking implements PluginMessageListener {
     private void send(final Player player, final SharedWaypointMessage message) {
         try {
             messages.send(
-                PaperPluginMessageDispatcher.recipient(plugin, player),
+                messages.recipient(plugin, player),
                 CHANNEL,
                 SharedWaypointCodec.encode(
                     message,

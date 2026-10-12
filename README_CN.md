@@ -133,7 +133,7 @@ Conflux Map 是一款 Fabric 平台的小地图与世界地图模组。客户端
 安装组件后，全服共用同一份实时地图与同一份路径点列表。
 
 - Fabric 服务端：将对应版本的 JAR 放入 `mods/` 目录。
-- Paper 服务端：将 `confluxmap-paper-<version>.jar` 放入 `plugins/` 目录，支持 Paper 1.21.1 至 26.3。
+- Paper / Folia 服务端：将 `confluxmap-paper-<version>.jar` 放入 `plugins/` 目录，支持 Paper 1.21.1 至 26.3 及 Folia。
 
 客户端与服务端可以分别升级：两侧预测算法一致时采用体积较小的差分同步，不一致时回退至完整数据同步，旧协议客户端始终可以获得基础地图服务。
 
@@ -147,7 +147,7 @@ Conflux Map 是一款 Fabric 平台的小地图与世界地图模组。客户端
 - `shareSeed` 将世界种子发送至客户端，供预测群系与结构使用。默认关闭，因为共享后种子会暴露给所有玩家；`allowBiomeMap` 与 `allowStructureSearch` 分别控制群系图层与结构查找。
 - `shareCorrections` 将服务端掌握的真实地形发送至客户端，用于修正预测结果。
 - `fullSyncEnabled` 允许管理员执行 `/confluxmap fullsync`，把当前维度全部已生成区域一次性同步到自己的客户端（`/confluxmap fullsync cancel` 可中止）。该操作会暴露整张已生成地图，因此默认关闭，且需要管理员权限与 Fabric 组件。
-- `shareChunkLoadState` 公开服务端保持加载的区块，默认关闭，以减少玩家活动与农场位置的暴露。
+- `shareChunkLoadState` 公开服务端保持加载的区块，默认关闭，以减少玩家活动与农场位置的暴露。（注：Folia 暂不支持区块加载状态，即使配置开启也会保持禁用）。
 - `allowEntityRadar` 默认开启，向客户端发送所有在线玩家的实时位置；关闭后位置流停止，客户端实体雷达不可用。
 - `allowMinimap`、`allowWorldMap`、`allowWaypoints`、`allowPrediction` 可逐项关闭客户端功能：HUD 小地图、全屏世界地图（含地图导出、标注与地图标记）、本地路径点、种子预测图层。全部默认开启；功能被关闭时，兼容的客户端会隐藏该功能，设置界面也会显示"此服务器已禁用"提示。与所有客户端限制一样，这只对配合的客户端生效。
 - `restrictionMessage` 设置玩家尝试打开受限地图或切换受限小地图时显示的纯文本说明。留空时使用客户端语言对应的默认提示；消息最多保留 256 个 UTF-8 字节。第三方服务端插件无需安装 companion,按 [`docs/protocol.md`](docs/protocol.md) 文档化的协议即可直接下发以上全部限制。

@@ -24,6 +24,7 @@ import cn.net.rms.confluxmap.server.shared.SharedWaypointStore;
 import cn.net.rms.confluxmap.server.shared.SharedWaypointValidator;
 import cn.net.rms.confluxmap.server.LiveCapturePolicy;
 import cn.net.rms.confluxmap.server.ServerConfigIo;
+import io.papermc.paper.threadedregions.scheduler.ScheduledTask;
 import java.io.IOException;
 import java.nio.file.Path;
 import java.time.Clock;
@@ -57,7 +58,6 @@ import org.bukkit.event.world.ChunkLoadEvent;
 import org.bukkit.event.world.ChunkUnloadEvent;
 import org.bukkit.event.world.WorldLoadEvent;
 import org.bukkit.plugin.IllegalPluginAccessException;
-import org.bukkit.scheduler.BukkitTask;
 
 /** Owns one Paper server's companion lifecycle and platform adapters. */
 final class PaperCompanion implements Listener {
@@ -88,7 +88,9 @@ final class PaperCompanion implements Listener {
     private final ConfluxMapPaperPlugin plugin;
     private final ServerConfigIo configIo;
     private final PaperWorldDirectory worlds = new PaperWorldDirectory();
-    private final Map<ChunkKey, Chunk> liveChunks = new LinkedHashMap<>();
+    // Chunk handles are owned by their region, so only coordinates are tracked here; the rotation
+    // is what spreads the capture budget evenly across the loaded chunks.
+    private final PaperLiveChunkRotation<ChunkKey> liveChunks = new PaperLiveChunkRotation<>();
     private final ExecutorService captureWorkers = new ThreadPoolExecutor(
         2,
         2,
@@ -102,15 +104,19 @@ final class PaperCompanion implements Listener {
         }
     );
     /**
-     * Capture bookkeeping, main-thread only: the tick each chunk was last handed to a worker
-     * and the captures still being summarized. Summaries are computed from immutable snapshots
-     * on the worker pool and committed back on the main thread.
+     * Capture bookkeeping, owned by the global tick, which is the only thread that adds to it:
+     * the tick each chunk was last handed to a worker and the captures still being summarized.
+     * Summaries are computed from immutable snapshots on the worker pool and committed back on
+     * the global tick; unload handlers on other regions release slots through the global
+     * scheduler and only read the counter to stamp deadlines, hence volatile.
      */
     private final Map<ChunkKey, Long> captureTicks = new LinkedHashMap<>();
     private final Set<ChunkKey> capturesInFlight = new LinkedHashSet<>();
-    private long tickCount;
+    private volatile long tickCount;
     private final Map<Integer, FlatBaseline> flatBaselines = new ConcurrentHashMap<>();
-    private final Map<Integer, Map<FlatBaseline, Integer>> flatCandidates = new LinkedHashMap<>();
+    private final Map<Integer, Map<FlatBaseline, Integer>> flatCandidates =
+        new ConcurrentHashMap<>();
+    private final PaperPlayerProbe players;
     private ServerConfig config;
     private UUID worldId;
     private UUID instanceId;
@@ -143,7 +149,7 @@ final class PaperCompanion implements Listener {
     private PaperNetworking networking;
     private PaperSharedWaypointNetworking sharedNetworking;
     private PaperPluginMessageDispatcher pluginMessages;
-    private BukkitTask tickTask;
+    private ScheduledTask tickTask;
     private WebMapServer webMap;
     private PaperWebMapBackend webMapBackend;
     private int webPlayerTicks;
@@ -157,6 +163,7 @@ final class PaperCompanion implements Listener {
     ) {
         this.plugin = plugin;
         this.configIo = configIo;
+        this.players = new PaperPlayerProbe(plugin);
     }
 
     void enable() {
@@ -199,8 +206,17 @@ final class PaperCompanion implements Listener {
             mapColors,
             plugin.getSLF4JLogger()
         );
-        chunkLoadStates = config.enabled && config.shareChunkLoadState
+        // The load-level service polls Chunk.LoadLevel for every loaded chunk, and that is region
+        // owned state on Folia: publishing it there would cost thousands of region tasks per tick.
+        // The feature therefore stays off, and clients are told during the handshake that it is
+        // unavailable rather than silently receiving nothing.
+        chunkLoadStates = config.enabled && config.shareChunkLoadState && !PaperPlatform.FOLIA
             ? new PaperChunkLoadStateService() : null;
+        if (config.shareChunkLoadState && PaperPlatform.FOLIA) {
+            plugin.getSLF4JLogger().info(
+                "Chunk load state stays disabled: regionised servers cannot poll load levels"
+            );
+        }
         if (config.enabled) {
             // Same game-directory rule as the Fabric companion: a loaded native library
             // must not live inside the world save, where save-restore tools hit its lock.
@@ -226,11 +242,20 @@ final class PaperCompanion implements Listener {
         networking.register();
         sharedNetworking.register();
         Bukkit.getPluginManager().registerEvents(this, plugin);
+        if (PaperPlatform.FOLIA) {
+            plugin.getSLF4JLogger().info(
+                "Skipping the initial loaded-chunk scan: regionised servers do not expose it, "
+                    + "so live summaries start from the chunk loads that follow"
+            );
+        }
         for (final PaperWorldDirectory.Entry entry : worlds.entries()) {
             plugin.getSLF4JLogger().info(
                 "Paper companion dimension {} index={} region={}",
                 entry.dimensionId(), entry.index(), entry.regionDirectory()
             );
+            if (PaperPlatform.FOLIA) {
+                continue;
+            }
             for (final Chunk chunk : entry.world().getLoadedChunks()) {
                 trackLoaded(
                     entry,
@@ -240,7 +265,7 @@ final class PaperCompanion implements Listener {
                 );
             }
         }
-        tickTask = Bukkit.getScheduler().runTaskTimer(plugin, this::tick, 1L, 1L);
+        tickTask = PaperPlatform.startTicking(plugin, ignored -> tick());
         if (config.enabled && config.webMap.enabled) {
             try {
                 webMapBackend = new PaperWebMapBackend(plugin, this);
@@ -307,6 +332,7 @@ final class PaperCompanion implements Listener {
         pendingRemovals.clear();
         flatBaselines.clear();
         flatCandidates.clear();
+        players.clear();
         mapColors = null;
         webMapPrivacy = null;
     }
@@ -322,6 +348,11 @@ final class PaperCompanion implements Listener {
             PaperWorldMetadata.flatBaseline(entry.world(), mapColors::mapColorId).ifPresent(
                 baseline -> flatBaselines.put(entry.index(), baseline)
             );
+        }
+        // Regionised servers do not expose the loaded-chunk set, so a world that appears after
+        // startup contributes its live summaries through the chunk loads that follow it.
+        if (PaperPlatform.FOLIA) {
+            return;
         }
         for (final Chunk chunk : event.getWorld().getLoadedChunks()) {
             trackLoaded(
@@ -353,16 +384,20 @@ final class PaperCompanion implements Listener {
         final Chunk chunk = event.getChunk();
         final ChunkKey key = new ChunkKey(entry, chunk.getX(), chunk.getZ());
         // An unload capture is the chunk's last chance to record its final in-memory state, and
-        // it is only worth the main-thread cost while somebody is watching the area: unwatched
+        // it is only worth the owning-thread cost while somebody is watching the area: unwatched
         // chunks keep their previous summary until the region mtime or the removal deadline
-        // retires it, and the saved region file is the durable source anyway.
+        // retires it, and the saved region file is the durable source anyway. The unload event
+        // is dispatched by the region that owns the chunk, so the snapshot is taken right here:
+        // scheduling it would race the unload and lose the chunk.
         if (corrections.liveSummaryDemanded(
             entry, chunk.getX(), chunk.getZ(), System.nanoTime()
         )) {
-            captureAsync(entry, chunk);
+            captureSnapshotAsync(entry, chunk);
         }
         liveChunks.remove(key);
-        captureTicks.remove(key);
+        // Capture bookkeeping belongs to the global tick, the only thread that adds to it, so
+        // the removal rides the global scheduler and the collections stay single-threaded.
+        PaperPlatform.global(plugin, () -> captureTicks.remove(key));
         pendingRemovals.onUnload(
             entry.index(),
             chunk.getX(),
@@ -381,15 +416,26 @@ final class PaperCompanion implements Listener {
     @EventHandler
     public void onPlayerQuit(final PlayerQuitEvent event) {
         final UUID playerId = event.getPlayer().getUniqueId();
-        networking.disconnect(playerId);
-        sharedNetworking.disconnect(playerId);
-        pluginMessages.disconnect(playerId);
+        // Quit is dispatched by the region that owns the player, while the session tables it
+        // clears belong to the global state, so the teardown is handed back to the global region.
+        PaperPlatform.global(plugin, () -> {
+            players.forget(playerId);
+            if (networking != null) {
+                networking.disconnect(playerId);
+            }
+            if (sharedNetworking != null) {
+                sharedNetworking.disconnect(playerId);
+            }
+            if (pluginMessages != null) {
+                pluginMessages.disconnect(playerId);
+            }
+        });
     }
 
     @EventHandler
     public void onPlayerRegisterChannel(final PlayerRegisterChannelEvent event) {
         pluginMessages.channelRegistered(
-            PaperPluginMessageDispatcher.recipient(plugin, event.getPlayer()),
+            pluginMessages.recipient(plugin, event.getPlayer()),
             event.getChannel()
         );
     }
@@ -432,6 +478,16 @@ final class PaperCompanion implements Listener {
 
     PaperWorldDirectory worlds() {
         return worlds;
+    }
+
+    /**
+     * Player state captured on each player's own scheduler.
+     *
+     * <p>Positions, names and permissions belong to the entity, so the global tick may not read
+     * them directly; every consumer works from these snapshots instead.
+     */
+    PaperPlayerProbe players() {
+        return players;
     }
 
     DatapackLangService datapackLangs() {
@@ -517,6 +573,7 @@ final class PaperCompanion implements Listener {
         if (!isEnabled()) {
             return;
         }
+        players.refresh();
         refreshLiveChunks();
         pendingRemovals.tick(tickCount, pendingRemovalSink);
         corrections.tick();
@@ -543,13 +600,15 @@ final class PaperCompanion implements Listener {
             return;
         }
         final ChunkKey key = new ChunkKey(entry, chunk.getX(), chunk.getZ());
-        liveChunks.put(key, chunk);
+        liveChunks.add(key);
         pendingRemovals.onChunkReload(entry.index(), chunk.getX(), chunk.getZ());
         if (chunkLoadStates != null) {
             chunkLoadStates.onChunkLoad(entry, chunk);
         }
         if (captureNow && isEnabled()) {
-            captureAsync(entry, chunk);
+            // Load events fire on the region that owns the chunk, so the snapshot is taken
+            // right here and the bookkeeping rides the global tick.
+            captureSnapshotAsync(entry, chunk);
         }
     }
 
@@ -564,27 +623,25 @@ final class PaperCompanion implements Listener {
         for (int inspected = 0;
              inspected < inspectionBudget && captured < captureBudget;
              inspected++) {
-            final Iterator<Map.Entry<ChunkKey, Chunk>> iterator = liveChunks.entrySet().iterator();
-            final Map.Entry<ChunkKey, Chunk> entry = iterator.next();
-            iterator.remove();
-            liveChunks.put(entry.getKey(), entry.getValue());
+            final ChunkKey key = liveChunks.next();
+            if (key == null) {
+                break;
+            }
             if (!corrections.liveSummaryDemanded(
-                entry.getKey().world(),
-                entry.getKey().chunkX(),
-                entry.getKey().chunkZ(),
+                key.world(),
+                key.chunkX(),
+                key.chunkZ(),
                 nowNanos
             )) {
                 continue;
             }
             if (!PaperLiveCapturePolicy.shouldScanCapture(
-                corrections.liveSummary(
-                    entry.getKey().world(), entry.getKey().chunkX(), entry.getKey().chunkZ()
-                ) != null,
-                ticksSinceCaptured(entry.getKey())
+                corrections.liveSummary(key.world(), key.chunkX(), key.chunkZ()) != null,
+                ticksSinceCaptured(key)
             )) {
                 continue;
             }
-            if (!captureAsync(entry.getKey().world(), entry.getValue())) {
+            if (!captureAsync(key)) {
                 continue;
             }
             captured++;
@@ -600,43 +657,112 @@ final class PaperCompanion implements Listener {
     }
 
     /**
-     * Takes the chunk snapshot on the main thread (the only part of a capture that must happen
-     * while the chunk is still loaded) and hands the immutable snapshot to a worker for
-     * summarization; the commit lands back on the main thread.
+     * Schedules a live capture from the global tick. The world-wide time and height limits are
+     * read here; the snapshot itself is taken by the region that owns the chunk and handed
+     * straight to a worker, and the commit lands back on the global tick.
      *
-     * @return whether a capture was scheduled
+     * @return whether the capture passed the budget and a region task was scheduled
      */
-    private boolean captureAsync(final PaperWorldDirectory.Entry entry, final Chunk chunk) {
-        if (!isEnabled() || !chunk.isLoaded()) {
+    private boolean captureAsync(final ChunkKey key) {
+        if (!isEnabled()) {
             return false;
         }
-        final ChunkKey key = new ChunkKey(entry, chunk.getX(), chunk.getZ());
-        if (capturesInFlight.contains(key)
-            || capturesInFlight.size() >= PaperLiveCapturePolicy.MAX_IN_FLIGHT_CAPTURES) {
+        if (capturesInFlight.size() >= PaperLiveCapturePolicy.MAX_IN_FLIGHT_CAPTURES) {
             return false;
         }
-        try {
-            final ChunkSnapshot snapshot = chunk.getChunkSnapshot(true, true, false);
-            final long revision = Math.max(1L, entry.world().getFullTime());
-            final int minHeight = entry.world().getMinHeight();
-            final int maxHeight = entry.world().getMaxHeight();
-            captureTicks.put(key, tickCount);
-            capturesInFlight.add(key);
-            try {
-                captureWorkers.execute(
-                    () -> summarizeCapture(entry, key, snapshot, revision, minHeight, maxHeight)
-                );
-            } catch (final RejectedExecutionException e) {
-                capturesInFlight.remove(key);
-                return false;
+        final PaperWorldDirectory.Entry entry = key.world();
+        final World world = entry.world();
+        final long revision = Math.max(1L, world.getFullTime());
+        final int minHeight = world.getMinHeight();
+        final int maxHeight = world.getMaxHeight();
+        // Stamping the rotation here also keeps the key from being re-nominated before the
+        // region task runs; the in-flight slot itself is claimed by dispatchSnapshot, which
+        // runs on the global tick and is the only thread that touches the capture sets.
+        captureTicks.put(key, tickCount);
+        PaperPlatform.onChunk(plugin, world, key.chunkX(), key.chunkZ(), () -> {
+            if (!world.isChunkLoaded(key.chunkX(), key.chunkZ())) {
+                return;
             }
-            return true;
+            final ChunkSnapshot snapshot;
+            try {
+                snapshot = world.getChunkAt(key.chunkX(), key.chunkZ())
+                    .getChunkSnapshot(true, true, false);
+            } catch (final RuntimeException e) {
+                plugin.getSLF4JLogger().warn(
+                    "Could not capture loaded chunk {},{} in {}",
+                    key.chunkX(), key.chunkZ(), entry.dimensionId(), e
+                );
+                return;
+            }
+            PaperPlatform.global(plugin, () -> dispatchSnapshot(
+                entry, key, snapshot, revision, minHeight, maxHeight
+            ));
+        });
+        return true;
+    }
+
+    /**
+     * Takes a snapshot of a chunk the calling thread already owns — a load or unload event
+     * handler on the owning region — and hands it to the global tick, which claims the capture
+     * slot and starts the off-thread summarization.
+     */
+    private void captureSnapshotAsync(
+        final PaperWorldDirectory.Entry entry,
+        final Chunk chunk
+    ) {
+        if (!isEnabled() || !chunk.isLoaded()) {
+            return;
+        }
+        final int chunkX = chunk.getX();
+        final int chunkZ = chunk.getZ();
+        final ChunkSnapshot snapshot;
+        try {
+            snapshot = chunk.getChunkSnapshot(true, true, false);
         } catch (final RuntimeException e) {
             plugin.getSLF4JLogger().warn(
                 "Could not capture loaded chunk {},{} in {}",
-                chunk.getX(), chunk.getZ(), entry.dimensionId(), e
+                chunkX, chunkZ, entry.dimensionId(), e
             );
-            return false;
+            return;
+        }
+        try {
+            PaperPlatform.global(plugin, () -> dispatchSnapshot(
+                entry,
+                new ChunkKey(entry, chunkX, chunkZ),
+                snapshot,
+                Math.max(1L, entry.world().getFullTime()),
+                entry.world().getMinHeight(),
+                entry.world().getMaxHeight()
+            ));
+        } catch (final IllegalPluginAccessException ignored) {
+            // The plugin is disabling and disable() clears the bookkeeping wholesale.
+        }
+    }
+
+    /** Runs on the global tick: claims a free capture slot and hands the snapshot to a worker. */
+    private void dispatchSnapshot(
+        final PaperWorldDirectory.Entry entry,
+        final ChunkKey key,
+        final ChunkSnapshot snapshot,
+        final long revision,
+        final int minHeight,
+        final int maxHeight
+    ) {
+        if (!isEnabled()) {
+            return;
+        }
+        if (capturesInFlight.contains(key)
+            || capturesInFlight.size() >= PaperLiveCapturePolicy.MAX_IN_FLIGHT_CAPTURES) {
+            return;
+        }
+        captureTicks.put(key, tickCount);
+        capturesInFlight.add(key);
+        try {
+            captureWorkers.execute(
+                () -> summarizeCapture(entry, key, snapshot, revision, minHeight, maxHeight)
+            );
+        } catch (final RejectedExecutionException e) {
+            capturesInFlight.remove(key);
         }
     }
 
@@ -660,7 +786,7 @@ final class PaperCompanion implements Listener {
             return;
         }
         try {
-            Bukkit.getScheduler().runTask(plugin, () -> {
+            PaperPlatform.global(plugin, () -> {
                 capturesInFlight.remove(key);
                 commitCapture(entry, key, summary);
             });

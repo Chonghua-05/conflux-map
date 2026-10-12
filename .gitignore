@@ -39,6 +39,7 @@ artifacts/
 # worktrees
 
 .worktrees/
+.workbuddy/
 
 # local publishing credentials
 

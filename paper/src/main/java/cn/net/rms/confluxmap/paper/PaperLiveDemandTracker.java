@@ -11,7 +11,14 @@ import java.util.List;
 import java.util.Map;
 import java.util.UUID;
 
-/** Tracks the same short-lived request and persistent viewport demand as Fabric live summaries. */
+/**
+ * Tracks the same short-lived request and persistent viewport demand as Fabric live summaries.
+ *
+ * <p>Mutated on the global tick, but read by chunk load and unload handlers that run on region
+ * threads, so every entry point synchronizes on this instance: the sections are tiny and the
+ * global tick is the only writer, which keeps the cross-region reads safe without giving up the
+ * plain collections.
+ */
 final class PaperLiveDemandTracker {
     private static final long REQUEST_TTL_NANOS = 2_000_000_000L;
 
@@ -38,7 +45,7 @@ final class PaperLiveDemandTracker {
     private final List<Demand> requests = new ArrayList<>();
     private final Map<UUID, Demand> watched = new HashMap<>();
 
-    void nominate(final MapViewReqC2S request, final long nowNanos) {
+    synchronized void nominate(final MapViewReqC2S request, final long nowNanos) {
         final long chunksPerTile = 16L << request.lod();
         final long expiresAt = nowNanos + REQUEST_TTL_NANOS;
         for (final MapViewReqC2S.TileReq tile : request.tiles()) {
@@ -56,7 +63,7 @@ final class PaperLiveDemandTracker {
         }
     }
 
-    void nominate(final MapRegionViewReqC2S request, final long nowNanos) {
+    synchronized void nominate(final MapRegionViewReqC2S request, final long nowNanos) {
         final long expiresAt = nowNanos + REQUEST_TTL_NANOS;
         for (final MapRegionViewReqC2S.RegionReq region : request.regions()) {
             final ChunkRegionSlice slice = region.slice();
@@ -71,7 +78,7 @@ final class PaperLiveDemandTracker {
         }
     }
 
-    boolean watch(final UUID playerId, final MapSyncSubscribeC2S request) {
+    synchronized boolean watch(final UUID playerId, final MapSyncSubscribeC2S request) {
         if (!request.active()) {
             watched.remove(playerId);
             return true;
@@ -91,7 +98,7 @@ final class PaperLiveDemandTracker {
         return true;
     }
 
-    boolean watch(final UUID playerId, final MapRegionSyncSubscribeC2S request) {
+    synchronized boolean watch(final UUID playerId, final MapRegionSyncSubscribeC2S request) {
         if (!request.active()) {
             watched.remove(playerId);
             return true;
@@ -107,7 +114,7 @@ final class PaperLiveDemandTracker {
         return true;
     }
 
-    boolean contains(
+    synchronized boolean contains(
         final int dimension,
         final int chunkX,
         final int chunkZ,
@@ -127,19 +134,19 @@ final class PaperLiveDemandTracker {
         return false;
     }
 
-    void tick(final long nowNanos) {
+    synchronized void tick(final long nowNanos) {
         requests.removeIf(demand -> nowNanos >= demand.expiresAtNanos());
     }
 
-    int pendingRequests() {
+    synchronized int pendingRequests() {
         return requests.size();
     }
 
-    void remove(final UUID playerId) {
+    synchronized void remove(final UUID playerId) {
         watched.remove(playerId);
     }
 
-    void clear() {
+    synchronized void clear() {
         requests.clear();
         watched.clear();
     }

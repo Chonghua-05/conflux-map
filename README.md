@@ -133,7 +133,7 @@ Chat coordinate sharing requires no server companion and works on any server.
 With the companion installed, the whole server shares one live map and one waypoint list.
 
 - Fabric server: place the matching JAR into `mods/`.
-- Paper server: place `confluxmap-paper-<version>.jar` into `plugins/` (Paper 1.21.1 through 26.3).
+- Paper / Folia server: place `confluxmap-paper-<version>.jar` into `plugins/` (Paper 1.21.1 through 26.3, Folia supported).
 
 Client and server versions can be upgraded independently: matching prediction algorithms use compact differential updates, differing algorithms fall back to full-data updates, and older-protocol clients always retain the basic map service.
 
@@ -147,7 +147,7 @@ All companion-shared content is controlled in `config/confluxmap/server.json`:
 - `shareSeed` sends the world seed to clients so they can predict biomes and structures. It is disabled by default because sharing the seed exposes it to every player; `allowBiomeMap` and `allowStructureSearch` control the biome layer and the structure finder separately.
 - `shareCorrections` sends real-terrain data from the server to correct predicted maps.
 - `fullSyncEnabled` allows operators to run `/confluxmap fullsync`, which bulk-syncs every generated region of the current dimension to their own client (cancel with `/confluxmap fullsync cancel`). It discloses the entire generated map, so it is disabled by default and additionally requires operator permission and the Fabric companion.
-- `shareChunkLoadState` exposes the chunks the server keeps loaded. It is disabled by default to reduce exposure of player activity and farm locations.
+- `shareChunkLoadState` exposes the chunks the server keeps loaded. It is disabled by default to reduce exposure of player activity and farm locations. (Note: chunk load state is not available on Folia and remains disabled).
 - `allowEntityRadar` defaults to `true` and shares every online player's live position with compatible clients; disabling it stops the position stream and turns the client radar off.
 - `allowMinimap`, `allowWorldMap`, `allowWaypoints`, and `allowPrediction` let a server turn off individual client features - the HUD minimap, the fullscreen world map (including map export, annotations, and map markers), local waypoints, and the seed-prediction underlay. They all default to `true`; when a feature is off, compatible clients hide it and its settings show a "disabled by this server" notice. Like every client-side restriction this only binds cooperating clients.
 - `restrictionMessage` sets the plain-text explanation shown when a player tries to open a disabled map or toggle the disabled minimap. Leave it empty to use the client's translated default; messages are limited to 256 UTF-8 bytes. Third-party server plugins can deliver all of these restrictions without the companion by speaking the protocol documented in [`docs/protocol.md`](docs/protocol.md).
