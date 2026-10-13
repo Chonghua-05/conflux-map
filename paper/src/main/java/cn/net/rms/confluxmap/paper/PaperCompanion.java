@@ -13,6 +13,7 @@ import cn.net.rms.confluxmap.core.update.UpdateCheckService;
 import cn.net.rms.confluxmap.nativepredict.NativeLib;
 import cn.net.rms.confluxmap.server.ServerConfig;
 import cn.net.rms.confluxmap.server.DatapackLangService;
+import cn.net.rms.confluxmap.server.PendingLiveRemovals;
 import cn.net.rms.confluxmap.server.PlayerPositionBroadcastGate;
 import cn.net.rms.confluxmap.server.web.WebMapServer;
 import cn.net.rms.confluxmap.server.web.WebMapPrivacyStore;
@@ -52,6 +53,14 @@ import org.bukkit.scheduler.BukkitTask;
 final class PaperCompanion implements Listener {
     private static final int MAX_LIVE_SUMMARIES_PER_TICK = 2;
     private static final int MAX_LIVE_INSPECTIONS_PER_TICK = 128;
+    /**
+     * Unloaded-chunk overlays are rechecked once a second and dropped 30s after unload even if
+     * the region file never moves: a chunk that unloads clean is never written, so its mtime
+     * stays frozen and only the deadline reclaims the entry (and the summary it pins).
+     */
+    private static final int PENDING_SCAN_INTERVAL_TICKS = 20;
+    private static final int PENDING_EXPIRY_TICKS = 600;
+    private static final int PENDING_MAX_REGIONS_PER_SCAN = 512;
     enum WaypointToggleResult {
         ENABLED,
         DISABLED,
@@ -66,9 +75,6 @@ final class PaperCompanion implements Listener {
     private record ChunkKey(PaperWorldDirectory.Entry world, int chunkX, int chunkZ) {
     }
 
-    private record PendingRemoval(boolean awaitMcaWrite, long observedMcaMtime) {
-    }
-
     private static final Logger SHARED_LOGGER = LogManager.getLogger("ConfluxMap-Paper");
 
     private final ConfluxMapPaperPlugin plugin;
@@ -77,7 +83,7 @@ final class PaperCompanion implements Listener {
     // Chunk handles are owned by their region, so only coordinates are tracked here; the rotation
     // is what spreads the capture budget evenly across the loaded chunks.
     private final PaperLiveChunkRotation<ChunkKey> liveChunks = new PaperLiveChunkRotation<>();
-    private final Map<ChunkKey, PendingRemoval> pendingRemovals = new ConcurrentHashMap<>();
+    private long tickCount;
     private final Map<Integer, FlatBaseline> flatBaselines = new ConcurrentHashMap<>();
     private final Map<Integer, Map<FlatBaseline, Integer>> flatCandidates =
         new ConcurrentHashMap<>();
@@ -88,6 +94,25 @@ final class PaperCompanion implements Listener {
     private long worldSeed;
     private Path primaryWorldRoot;
     private PaperCorrectionService corrections;
+    // Field initializers may not forward-reference the fields above, so these two adapters
+    // are declared after worlds and corrections even though they only read them at call time.
+    private final PendingLiveRemovals pendingRemovals = new PendingLiveRemovals(
+        (worldIndex, mcaX, mcaZ) -> {
+            final PaperWorldDirectory.Entry entry = worlds.at(worldIndex);
+            return entry == null
+                ? 0L
+                : PaperAnvilReader.mcaMtime(entry.regionDirectory(), mcaX, mcaZ);
+        },
+        PENDING_SCAN_INTERVAL_TICKS,
+        PENDING_EXPIRY_TICKS,
+        PENDING_MAX_REGIONS_PER_SCAN
+    );
+    private final PendingLiveRemovals.RemovalSink pendingRemovalSink = (worldIndex, chunkX, chunkZ) -> {
+        final PaperWorldDirectory.Entry entry = worlds.at(worldIndex);
+        if (entry != null) {
+            corrections.removeLive(entry, chunkX, chunkZ);
+        }
+    };
     private DatapackLangService datapackLangs;
     private PaperMapColors mapColors;
     private PaperChunkLoadStateService chunkLoadStates;
@@ -324,12 +349,16 @@ final class PaperCompanion implements Listener {
         summarize(entry, chunk);
         final ChunkKey key = new ChunkKey(entry, chunk.getX(), chunk.getZ());
         liveChunks.remove(key);
-        pendingRemovals.put(key, new PendingRemoval(
-            event.isSaveChunk(),
+        pendingRemovals.onUnload(
+            entry.index(),
+            chunk.getX(),
+            chunk.getZ(),
             PaperAnvilReader.regionMtime(
                 entry.regionDirectory(), chunk.getX(), chunk.getZ()
-            )
-        ));
+            ),
+            event.isSaveChunk(),
+            tickCount
+        );
         if (chunkLoadStates != null) {
             chunkLoadStates.onChunkUnload(entry, chunk);
         }
@@ -491,12 +520,13 @@ final class PaperCompanion implements Listener {
     }
 
     private void tick() {
+        tickCount++;
         if (!isEnabled()) {
             return;
         }
         players.refresh();
         refreshLiveChunks();
-        removeExpiredLiveSummaries();
+        pendingRemovals.tick(tickCount, pendingRemovalSink);
         corrections.tick();
         if (chunkLoadStates != null) {
             chunkLoadStates.tick();
@@ -522,7 +552,7 @@ final class PaperCompanion implements Listener {
         }
         final ChunkKey key = new ChunkKey(entry, chunk.getX(), chunk.getZ());
         liveChunks.add(key);
-        pendingRemovals.remove(key);
+        pendingRemovals.onChunkReload(entry.index(), chunk.getX(), chunk.getZ());
         // Null on regionised servers by construction, so reaching this call means the handler is
         // already running on the thread that owns the chunk.
         if (chunkLoadStates != null) {
@@ -668,25 +698,6 @@ final class PaperCompanion implements Listener {
             PaperWorldMetadata.flatBaseline(entry.world(), mapColors::mapColorId).ifPresent(
                 baseline -> flatBaselines.put(entry.index(), baseline)
             );
-        }
-    }
-
-    private void removeExpiredLiveSummaries() {
-        final Iterator<Map.Entry<ChunkKey, PendingRemoval>> iterator =
-            pendingRemovals.entrySet().iterator();
-        while (iterator.hasNext()) {
-            final Map.Entry<ChunkKey, PendingRemoval> entry = iterator.next();
-            final ChunkKey key = entry.getKey();
-            final PendingRemoval pending = entry.getValue();
-            final long currentMtime = PaperAnvilReader.regionMtime(
-                key.world().regionDirectory(), key.chunkX(), key.chunkZ()
-            );
-            if (pending.awaitMcaWrite()
-                && (currentMtime <= 0L || currentMtime == pending.observedMcaMtime())) {
-                continue;
-            }
-            corrections.removeLive(key.world(), key.chunkX(), key.chunkZ());
-            iterator.remove();
         }
     }
 
