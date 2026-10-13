@@ -475,17 +475,7 @@ final class BiomeCandidateScreen extends ConfluxScreen {
             final BiomeCandidateSearch.Candidate candidate = results.get(index);
             draw.drawTextWithShadow(
                 this.textRenderer,
-                this.textRenderer.trimToWidth(
-                    CandidateListUi.coordinateText(candidate.blockX(), candidate.blockZ())
-                        + " · "
-                        + Texts.translatable(
-                            "confluxmap.value.blocks",
-                            CandidateListUi.distanceInBlocks(
-                                candidate.blockX(), candidate.blockZ(), centerX, centerZ
-                            )
-                        ).getString(),
-                    listUi.textWidth()
-                ),
+                fitToWidth(candidateLine(candidate), listUi.textWidth()),
                 rowX(),
                 listUi.rowY(index) + 6,
                 0xFFFFFFFF
@@ -510,12 +500,36 @@ final class BiomeCandidateScreen extends ConfluxScreen {
         final float tickDelta
     ) {
         mapPane.drawMenuHotkeys(draw, this.textRenderer);
-        candidateListUi().drawOverflowCues(draw);
+        final CandidateListUi listUi = candidateListUi();
+        listUi.drawOverflowCues(draw);
+        final int hovered = listUi.candidateAt(mouseX, mouseY);
+        if (hovered >= 0) {
+            listUi.drawRowTooltip(
+                draw,
+                this,
+                this.textRenderer,
+                candidateLine(results.get(hovered)),
+                listUi.textWidth(),
+                mouseX,
+                mouseY
+            );
+        }
     }
 
     @Override
     protected boolean embeddedMenuHotkeyPressed(final int keyCode) {
         return mapPane.menuHotkeyPressed(this, keyCode);
+    }
+
+    private String candidateLine(final BiomeCandidateSearch.Candidate candidate) {
+        return CandidateListUi.coordinateText(candidate.blockX(), candidate.blockZ())
+            + " · "
+            + Texts.translatable(
+                "confluxmap.value.blocks",
+                CandidateListUi.distanceInBlocks(
+                    candidate.blockX(), candidate.blockZ(), centerX, centerZ
+                )
+            ).getString();
     }
 
     private void drawCentered(final GuiDraw draw, final String text, final int y, final int color) {

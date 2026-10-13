@@ -31,6 +31,7 @@ final class StructureCandidateScreen extends ConfluxScreen {
     private static final int FIELD_WIDTH = 92;
     private static final int FIELD_HEIGHT = 20;
     private static final int GAP = 4;
+    private static final int ICON_SIZE = 16;
 
     private final StructureSearchScreen picker;
     private final FullscreenMapScreen map;
@@ -471,21 +472,19 @@ final class StructureCandidateScreen extends ConfluxScreen {
         final int end = Math.min(results.size(), scrollOffset + listUi.visibleRows());
         for (int index = scrollOffset; index < end; index++) {
             final StructureIndex.Marker marker = results.get(index);
-            final int iconSize = 16;
-            final int textWidth = Math.max(8, listUi.textWidth() - iconSize - GAP);
             StructureIconCatalog.draw(
                 draw,
                 marker.type(),
                 marker.variant(),
                 rowX(),
                 listUi.rowY(index) + 2,
-                iconSize,
+                ICON_SIZE,
                 0xFFFFFFFF
             );
             draw.drawTextWithShadow(
                 this.textRenderer,
-                fitToWidth(candidateLine(marker), textWidth),
-                rowX() + iconSize + GAP,
+                fitToWidth(candidateLine(marker), rowTextWidth(listUi)),
+                rowX() + ICON_SIZE + GAP,
                 listUi.rowY(index) + 6,
                 0xFFFFFFFF
             );
@@ -504,13 +503,16 @@ final class StructureCandidateScreen extends ConfluxScreen {
         final float tickDelta
     ) {
         mapPane.drawMenuHotkeys(draw, this.textRenderer);
-        candidateListUi().drawOverflowCues(draw);
-        final int hovered = candidateListUi().candidateAt(mouseX, mouseY);
+        final CandidateListUi listUi = candidateListUi();
+        listUi.drawOverflowCues(draw);
+        final int hovered = listUi.candidateAt(mouseX, mouseY);
         if (hovered >= 0) {
-            draw.drawTooltip(
+            listUi.drawRowTooltip(
+                draw,
                 this,
                 this.textRenderer,
-                Texts.literal(candidateLine(results.get(hovered))),
+                candidateLine(results.get(hovered)),
+                rowTextWidth(listUi),
                 mouseX,
                 mouseY
             );
@@ -533,6 +535,10 @@ final class StructureCandidateScreen extends ConfluxScreen {
                     marker.blockX(), marker.blockZ(), centerX, centerZ
                 )
             ).getString();
+    }
+
+    private int rowTextWidth(final CandidateListUi listUi) {
+        return Math.max(8, listUi.textWidth() - ICON_SIZE - GAP);
     }
 
     private void drawCentered(final GuiDraw draw, final String text, final int y, final int color) {

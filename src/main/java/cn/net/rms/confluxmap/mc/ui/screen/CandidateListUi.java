@@ -1,7 +1,10 @@
 package cn.net.rms.confluxmap.mc.ui.screen;
 
+import cn.net.rms.confluxmap.compat.Texts;
 import cn.net.rms.confluxmap.compat.Widgets;
 import cn.net.rms.confluxmap.mc.ui.GuiDraw;
+import net.minecraft.client.font.TextRenderer;
+import net.minecraft.client.gui.screen.Screen;
 import net.minecraft.client.gui.widget.ButtonWidget;
 
 /** Shared single-line candidate list layout, controls, separators, and scrolling. */
@@ -112,6 +115,24 @@ final class CandidateListUi {
         }
         final int index = scrollOffset + (int) ((mouseY - LIST_TOP) / ROW_HEIGHT);
         return index < totalRows ? index : -1;
+    }
+
+    /**
+     * Draws the full row line as a tooltip, but only when it is wider than the width the
+     * row was trimmed to, so the tooltip always means content the row is hiding.
+     */
+    void drawRowTooltip(
+        final GuiDraw draw,
+        final Screen screen,
+        final TextRenderer renderer,
+        final String line,
+        final int fittedWidth,
+        final int mouseX,
+        final int mouseY
+    ) {
+        if (renderer.getWidth(line) > fittedWidth) {
+            draw.drawTooltip(screen, renderer, Texts.literal(line), mouseX, mouseY);
+        }
     }
 
     ScrollBarModel scrollBar() {
