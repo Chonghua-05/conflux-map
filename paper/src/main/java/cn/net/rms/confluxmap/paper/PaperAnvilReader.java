@@ -8,6 +8,7 @@ import java.io.IOException;
 import java.io.InputStream;
 import java.nio.ByteBuffer;
 import java.nio.channels.FileChannel;
+import java.nio.file.attribute.BasicFileAttributes;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.StandardOpenOption;
@@ -44,10 +45,11 @@ final class PaperAnvilReader {
         );
     }
 
-    private static long mcaMtime(final Path regionDirectory, final int mcaX, final int mcaZ) {
+    static long mcaMtime(final Path regionDirectory, final int mcaX, final int mcaZ) {
         final Path path = regionDirectory.resolve("r." + mcaX + "." + mcaZ + ".mca");
         try {
-            return Files.isRegularFile(path) ? Files.getLastModifiedTime(path).toMillis() : 0L;
+            final BasicFileAttributes attrs = Files.readAttributes(path, BasicFileAttributes.class);
+            return attrs.isRegularFile() ? attrs.lastModifiedTime().toMillis() : 0L;
         } catch (final IOException e) {
             return 0L;
         }
