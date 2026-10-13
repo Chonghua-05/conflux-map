@@ -141,6 +141,22 @@ class PendingLiveRemovalsTest {
     }
 
     @Test
+    void reinsertedRegionDoesNotBreakTheScanIterator() {
+        final ProbedMtime mtime = new ProbedMtime();
+        // Two stalled regions; the first one survives its scan, so the scan must keep going
+        // into the second region after requeueing the first.
+        mtime.set(0, 0, 0, 5_000L);
+        mtime.set(0, 1, 0, 5_000L);
+        final PendingLiveRemovals tracker = tracker(mtime);
+        final Sink sink = new Sink();
+        tracker.onUnload(0, 1, 1, 5_000L, true, 1L);
+        tracker.onUnload(0, 40, 1, 5_000L, true, 1L);
+        tracker.tick(SCAN_INTERVAL, sink);
+        assertEquals(2, mtime.probes);
+        assertTrue(sink.removed.isEmpty());
+    }
+
+    @Test
     void scanCapRotatesRetainedRegionsWithoutStarvation() {
         final ProbedMtime mtime = new ProbedMtime();
         // Two stalled regions beyond a per-scan cap of one.

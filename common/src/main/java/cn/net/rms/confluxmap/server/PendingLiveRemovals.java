@@ -110,6 +110,10 @@ public final class PendingLiveRemovals {
         if (pendingRegions.isEmpty() || tick % scanIntervalTicks != 0) {
             return;
         }
+        // Survivors are collected and reinserted after the loop: putting a region back while
+        // the iterator is live is a structural modification and throws
+        // ConcurrentModificationException on the next step.
+        final Map<RegionKey, Map<Long, ChunkEntry>> retained = new LinkedHashMap<>();
         final Iterator<Map.Entry<RegionKey, Map<Long, ChunkEntry>>> iterator =
             pendingRegions.entrySet().iterator();
         int scanned = 0;
@@ -131,9 +135,10 @@ public final class PendingLiveRemovals {
             scanned++;
             if (!chunks.isEmpty()) {
                 // Reinsertion at the tail keeps scans fair when regions exceed the per-scan cap.
-                pendingRegions.put(key, chunks);
+                retained.put(key, chunks);
             }
         }
+        pendingRegions.putAll(retained);
     }
 
     private boolean expired(final long tick, final ChunkEntry pending, final long currentMtime) {
