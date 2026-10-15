@@ -60,7 +60,7 @@ public final class PendingLiveRemovals {
     }
 
     /** Records the unload of {@code chunkX},{@code chunkZ} with the region mtime seen at unload. */
-    public void onUnload(
+    public synchronized void onUnload(
         final int worldIndex,
         final int chunkX,
         final int chunkZ,
@@ -81,7 +81,7 @@ public final class PendingLiveRemovals {
     }
 
     /** Drops the pending entry of a chunk that loaded again; its overlay goes back to live use. */
-    public void onChunkReload(final int worldIndex, final int chunkX, final int chunkZ) {
+    public synchronized void onChunkReload(final int worldIndex, final int chunkX, final int chunkZ) {
         final RegionKey key = new RegionKey(
             worldIndex,
             Math.floorDiv(chunkX, CHUNKS_PER_REGION_SIDE),
@@ -97,16 +97,16 @@ public final class PendingLiveRemovals {
         }
     }
 
-    public boolean isEmpty() {
+    public synchronized boolean isEmpty() {
         return pendingRegions.isEmpty();
     }
 
-    public void clear() {
+    public synchronized void clear() {
         pendingRegions.clear();
     }
 
     /** Runs the expiry scan, but only on ticks that are multiples of the scan interval. */
-    public void tick(final long tick, final RemovalSink sink) {
+    public synchronized void tick(final long tick, final RemovalSink sink) {
         if (pendingRegions.isEmpty() || tick % scanIntervalTicks != 0) {
             return;
         }
