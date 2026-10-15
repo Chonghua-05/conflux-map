@@ -2,6 +2,7 @@ package cn.net.rms.confluxmap.mc.ui.screen;
 
 import cn.net.rms.confluxmap.mc.ui.GuiDraw;
 import cn.net.rms.confluxmap.compat.Texts;
+import cn.net.rms.confluxmap.compat.Widgets;
 import java.util.IdentityHashMap;
 import java.util.Map;
 import java.util.function.BooleanSupplier;
@@ -167,11 +168,17 @@ public abstract class ConfluxScreen extends Screen {
         disabledTooltipKeys.put(widget, translationKey);
     }
 
+    private static boolean pointerOver(final AbstractWidget widget, final int mouseX, final int mouseY) {
+        return mouseX >= Widgets.x(widget) && mouseY >= Widgets.y(widget)
+                && mouseX < Widgets.x(widget) + widget.getWidth()
+                && mouseY < Widgets.y(widget) + widget.getHeight();
+    }
+
     private void renderDisabledTooltip(final GuiDraw draw, final int mouseX, final int mouseY) {
         disabledTooltipKeys.entrySet().removeIf(entry -> !children().contains(entry.getKey()));
         for (final Map.Entry<AbstractWidget, String> entry : disabledTooltipKeys.entrySet()) {
             final AbstractWidget widget = entry.getKey();
-            if (widget.visible && !widget.active && widget.isHoveredOrFocused()) {
+            if (widget.visible && !widget.active && pointerOver(widget, mouseX, mouseY)) {
                 draw.drawTooltip(
                     this,
                     this.font,

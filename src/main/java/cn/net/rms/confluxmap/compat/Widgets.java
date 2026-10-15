@@ -56,4 +56,8 @@ public final class Widgets {
     ) {
         field.setResponder(listener);
     }
+
+    public static void unfocus(final EditBox field) {
+        field.setFocused(false);
+    }
 }

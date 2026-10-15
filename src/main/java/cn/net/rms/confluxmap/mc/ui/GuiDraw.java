@@ -2,6 +2,7 @@ package cn.net.rms.confluxmap.mc.ui;
 
 import cn.net.rms.confluxmap.mc.render.RenderUtil;
 import com.mojang.blaze3d.systems.RenderSystem;
+import java.util.List;
 import org.joml.Matrix3x2fStack;
 import org.joml.Matrix4f;
 import net.minecraft.client.Minecraft;
@@ -91,7 +92,8 @@ public final class GuiDraw {
         final int mouseX,
         final int mouseY
     ) {
-        context.setTooltipForNextFrame(renderer, text, mouseX, mouseY);
+        final List<FormattedCharSequence> lines = renderer.split(text, Math.max(200, screen.width / 2));
+        context.setTooltipForNextFrame(renderer, lines, mouseX, mouseY);
     }
 
     public void fill(final int x1, final int y1, final int x2, final int y2, final int color) {
