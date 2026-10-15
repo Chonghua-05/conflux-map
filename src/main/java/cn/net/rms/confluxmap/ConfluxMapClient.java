@@ -15,6 +15,7 @@ import cn.net.rms.confluxmap.core.export.MapExportService;
 import cn.net.rms.confluxmap.core.export.ServiceMapExportTileSource;
 import cn.net.rms.confluxmap.core.loadstate.FullscreenDisplayMode;
 import cn.net.rms.confluxmap.core.measure.MeasureState;
+import cn.net.rms.confluxmap.core.model.DimensionId;
 import cn.net.rms.confluxmap.core.multiworld.ClientWorldProfileIo;
 import cn.net.rms.confluxmap.core.multiworld.ClientWorldProfileRegistry;
 import cn.net.rms.confluxmap.core.multiworld.ClientWorldProfileResolver;
@@ -28,6 +29,7 @@ import cn.net.rms.confluxmap.core.predict.PredictionTileService;
 import cn.net.rms.confluxmap.core.predict.CorrectionStore;
 import cn.net.rms.confluxmap.core.radar.RadarViewRange;
 import cn.net.rms.confluxmap.core.radar.ServerPlayerRadarState;
+import cn.net.rms.confluxmap.core.shared.SharedWaypoint;
 import cn.net.rms.confluxmap.core.store.MapWorldService;
 import cn.net.rms.confluxmap.core.store.NamespaceAdoption;
 import cn.net.rms.confluxmap.core.task.MapExecutors;
@@ -94,6 +96,7 @@ import net.minecraft.resource.ResourceType;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.List;
+import java.util.OptionalInt;
 import java.util.UUID;
 
 /** Composition root: builds and wires every client-side service. */
@@ -294,7 +297,7 @@ public final class ConfluxMapClient implements ClientModInitializer {
         clientNetworking.register();
         sharedWaypoints = new SharedWaypointClient(client, config, configIo);
         sharedWaypoints.register();
-        groundTeleportService = new ClientGroundTeleportService(client, config);
+        groundTeleportService = new ClientGroundTeleportService(client, config, this::resolveUnknownLanding);
 
         predictionPaletteBuilder = new PredictionPaletteBuilder(client, predictionState, spriteColorSampler);
         tileTextureManager = new TileTextureManager(config, tileService, predictionTileService, daylightModel);
@@ -468,13 +471,21 @@ public final class ConfluxMapClient implements ClientModInitializer {
             new FabricActionApi(
                 client, gameBridge, config, configIo, keybinds, waypointService,
                 groundTeleportService, layerSelector, sessionGuard
-            )
+            ),
+            sharedWaypoints::list,
+            sharedWaypoints::availability
         );
         api.install();
         // Last in the listener chain: plugins observe a session only after the mod's own
         // listeners (notably the region-cache rotation) have applied it.
         sessionTracker.addListener(api::onSessionChanged);
         waypointService.addChangeListener(api::onWaypointsChanged);
+        sharedWaypoints.addListener(new SharedWaypointClient.Listener() {
+            @Override
+            public void onWaypointsChanged(final List<SharedWaypoint> waypoints, final long revision) {
+                api.onSharedWaypointsChanged(waypoints);
+            }
+        });
         dispatchApiPlugins(api);
 
         ClientLifecycleEvents.CLIENT_STOPPING.register(client2 -> shutdown());
@@ -731,5 +742,22 @@ public final class ConfluxMapClient implements ClientModInitializer {
     /** The public API facade; non-null once client services have started. */
     public ConfluxMapApiImpl api() {
         return api;
+    }
+
+    /**
+     * Teleport-resolver bridge: forwards the service's unknown-landing query to the API
+     * event. The service is constructed before {@code api}, so the answer stays empty
+     * until the API is installed; every real teleport happens after client startup.
+     */
+    private OptionalInt resolveUnknownLanding(
+        final int blockX,
+        final int blockZ,
+        final DimensionId dimension,
+        final boolean voidColumn
+    ) {
+        final ConfluxMapApiImpl current = api;
+        return current == null ? OptionalInt.empty() : current.resolveTeleportLanding(
+            blockX, blockZ, dimension, voidColumn
+        );
     }
 }

@@ -4,6 +4,7 @@ import cn.net.rms.confluxmap.api.ActionApi;
 import cn.net.rms.confluxmap.api.ConfluxMapApi;
 import cn.net.rms.confluxmap.api.ConfluxMapEvents;
 import cn.net.rms.confluxmap.api.MapDataApi;
+import cn.net.rms.confluxmap.api.SharedWaypointApi;
 import cn.net.rms.confluxmap.api.WaypointApi;
 import cn.net.rms.confluxmap.api.MarkerApi;
 import cn.net.rms.confluxmap.bridge.GameBridge;
@@ -16,12 +17,15 @@ import cn.net.rms.confluxmap.core.model.MapLayer;
 import cn.net.rms.confluxmap.core.model.SampleSource;
 import cn.net.rms.confluxmap.core.model.SurfaceKind;
 import cn.net.rms.confluxmap.core.model.WorldIdentity;
+import cn.net.rms.confluxmap.core.net.shared.SharedWaypointAvailability;
 import cn.net.rms.confluxmap.core.predict.PredictionState;
 import cn.net.rms.confluxmap.core.predict.PredictionTileService;
+import cn.net.rms.confluxmap.core.shared.SharedWaypoint;
 import cn.net.rms.confluxmap.core.store.MapWorldService;
 import cn.net.rms.confluxmap.core.task.MapExecutors;
 import cn.net.rms.confluxmap.core.task.SessionGuard;
 import cn.net.rms.confluxmap.core.tile.TileService;
+import cn.net.rms.confluxmap.core.waypoint.Waypoint;
 import cn.net.rms.confluxmap.core.waypoint.WaypointService;
 import java.io.IOException;
 import java.nio.file.Path;
@@ -29,6 +33,7 @@ import java.util.ArrayDeque;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Optional;
+import java.util.OptionalInt;
 import java.util.Queue;
 import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
@@ -138,6 +143,9 @@ final class ConfluxMapApiImplTest {
     private PredictionTileService prediction;
     private WaypointService waypoints;
     private CustomMarkerService markers;
+    private List<SharedWaypoint> sharedCatalog = List.of();
+    private SharedWaypointAvailability sharedAvailability =
+        new SharedWaypointAvailability(false, false, false);
     private ConfluxMapApiImpl api;
 
     @BeforeEach
@@ -152,7 +160,8 @@ final class ConfluxMapApiImplTest {
         markers = new CustomMarkerService(LogManager.getLogger());
         api = new ConfluxMapApiImpl(
             "test", bridge, waypoints, guard, mapWorlds, tiles, prediction, daylight,
-            markers, new NoopActions()
+            markers, new NoopActions(),
+            () -> sharedCatalog, () -> sharedAvailability
         );
         waypoints.addChangeListener(api::onWaypointsChanged);
         api.install();
@@ -317,6 +326,117 @@ final class ConfluxMapApiImplTest {
         })) {
             api.markers().tick();
             assertTrue(api.markers().markers().isEmpty());
+        }
+    }
+
+    @Test
+    void sharedWaypointReadsMapTheLiveCatalog() {
+        final UUID id = UUID.randomUUID();
+        sharedCatalog = List.of(new SharedWaypoint(
+            id, UUID.randomUUID(), "Trirrin", "base", OVERWORLD,
+            10.5, 64.0, -20.5, 0xFFF1C40F, Waypoint.Type.NORMAL,
+            "minecraft:lodestone", "cp", 1234567L, 3L
+        ));
+
+        final SharedWaypointApi shared = api.sharedWaypoints();
+        final SharedWaypointApi.ApiSharedWaypoint mapped = shared.list().get(0);
+        assertEquals(id, mapped.id());
+        assertEquals("Trirrin", mapped.publisherName());
+        assertEquals("base", mapped.name());
+        assertEquals("minecraft:overworld", mapped.dimensionId());
+        assertEquals(10.5, mapped.x());
+        assertEquals(64.0, mapped.y());
+        assertEquals(-20.5, mapped.z());
+        assertEquals(0xFFF1C40F, mapped.colorArgb());
+        assertEquals(WaypointApi.WaypointType.NORMAL, mapped.type());
+        assertEquals("minecraft:lodestone", mapped.iconItemId());
+        assertEquals("cp", mapped.markerLabel());
+        assertEquals(1234567L, mapped.createdAtEpochMs());
+        assertEquals(Optional.of(mapped), shared.get(id));
+        assertTrue(shared.get(UUID.randomUUID()).isEmpty());
+
+        sharedAvailability = new SharedWaypointAvailability(true, true, true);
+        final SharedWaypointApi.SharedWaypointAccess access = shared.availability();
+        assertTrue(access.supported());
+        assertTrue(access.enabled());
+        assertTrue(access.synchronizedSnapshot());
+    }
+
+    @Test
+    void sharedWaypointChangesFireTheApiEvent() {
+        final List<ConfluxMapEvents.SharedWaypointChange> fired = new ArrayList<>();
+        try (var ignored = api.events().sharedWaypointsChanged().register(fired::add)) {
+            api.onSharedWaypointsChanged(List.of(new SharedWaypoint(
+                UUID.randomUUID(), UUID.randomUUID(), "Trirrin", "base", OVERWORLD,
+                10, 64, -20, 0xFFF1C40F, Waypoint.Type.NORMAL, "", "", 1L, 1L
+            )));
+        }
+
+        assertEquals(1, fired.size());
+        assertEquals(1, fired.get(0).waypoints().size());
+        assertEquals("base", fired.get(0).waypoints().get(0).name());
+    }
+
+    @Test
+    void teleportLandingResolveQueriesListenersAndTheLastAnswerWins() {
+        assertTrue(api.resolveTeleportLanding(1, 2, OVERWORLD, true).isEmpty());
+
+        final List<Boolean> voidFlags = new ArrayList<>();
+        try (var ignored = api.events().teleportLandingResolve().register(resolve -> {
+            voidFlags.add(resolve.voidColumn());
+            assertEquals(1, resolve.blockX());
+            assertEquals(2, resolve.blockZ());
+            assertEquals("minecraft:overworld", resolve.dimensionId());
+            if (resolve.landingY().isEmpty()) {
+                resolve.setLandingY(64);
+            }
+        })) {
+            assertEquals(OptionalInt.of(64), api.resolveTeleportLanding(1, 2, OVERWORLD, true));
+        }
+
+        try (var ignored = api.events().teleportLandingResolve().register(
+            resolve -> resolve.setLandingY(100))
+        ) {
+            try (var ignored2 = api.events().teleportLandingResolve().register(
+                resolve -> resolve.setLandingY(128))
+            ) {
+                assertEquals(OptionalInt.of(128), api.resolveTeleportLanding(1, 2, OVERWORLD, false));
+            }
+        }
+
+        assertEquals(List.of(true), voidFlags);
+    }
+
+    @Test
+    void waypointListOpeningQueriesListenersAndTheLastRequestWins() {
+        final ConfluxMapEvents.WaypointListOpening plain = api.queryWaypointListOpening(true, false);
+        assertTrue(plain.openedFromHotkey());
+        assertFalse(plain.sharedWaypointsEnabled());
+        assertNull(plain.requestedTab());
+        assertFalse(plain.requestedAllDimensions());
+
+        try (var ignored = api.events().waypointListOpening().register(opening -> {
+            assertTrue(opening.openedFromHotkey());
+            assertFalse(opening.sharedWaypointsEnabled());
+            opening.requestTab(ConfluxMapEvents.WaypointListTab.PUBLIC);
+            opening.requestAllDimensions();
+        })) {
+            final ConfluxMapEvents.WaypointListOpening requested = api.queryWaypointListOpening(true, false);
+            assertEquals(ConfluxMapEvents.WaypointListTab.PUBLIC, requested.requestedTab());
+            assertTrue(requested.requestedAllDimensions());
+        }
+
+        try (var ignored = api.events().waypointListOpening().register(
+            opening -> opening.requestTab(ConfluxMapEvents.WaypointListTab.PUBLIC))
+        ) {
+            try (var ignored2 = api.events().waypointListOpening().register(
+                opening -> opening.requestTab(ConfluxMapEvents.WaypointListTab.LOCAL))
+            ) {
+                assertEquals(
+                    ConfluxMapEvents.WaypointListTab.LOCAL,
+                    api.queryWaypointListOpening(false, true).requestedTab()
+                );
+            }
         }
     }
 

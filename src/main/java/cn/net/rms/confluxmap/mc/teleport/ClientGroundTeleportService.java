@@ -38,23 +38,37 @@ public final class ClientGroundTeleportService {
     private final MinecraftClient client;
     private final ConfluxConfig config;
     private final Consumer<String> feedback;
+    private final UnknownLandingResolver unknownLandingResolver;
     private Pending pending;
 
     public ClientGroundTeleportService(
         final MinecraftClient client,
-        final ConfluxConfig config
+        final ConfluxConfig config,
+        final UnknownLandingResolver unknownLandingResolver
     ) {
-        this(client, config, key -> sendChatFeedback(client, key));
+        this(client, config, key -> sendChatFeedback(client, key), unknownLandingResolver);
     }
 
     ClientGroundTeleportService(
         final MinecraftClient client,
         final ConfluxConfig config,
-        final Consumer<String> feedback
+        final Consumer<String> feedback,
+        final UnknownLandingResolver unknownLandingResolver
     ) {
         this.client = client;
         this.config = config;
         this.feedback = feedback;
+        this.unknownLandingResolver = unknownLandingResolver;
+    }
+
+    /**
+     * Supplies a landing height for columns the policy has no answer for (void columns).
+     * Consulted only at the pre-teleport-Y decision point, never when a captured surface,
+     * a sampled chunk, or the staged two-stage path can resolve real ground.
+     */
+    @FunctionalInterface
+    public interface UnknownLandingResolver {
+        OptionalInt resolve(int blockX, int blockZ, DimensionId dimension, boolean voidColumn);
     }
 
     public void register() {
@@ -119,8 +133,11 @@ public final class ClientGroundTeleportService {
                 worldIdentity
             );
             case PLAYER_Y -> sendCommand(
-                centered(blockX), client.player.getY(), centered(blockZ),
-                dimension, worldIdentity
+                centered(blockX),
+                playerYStageLanding(unknownLandingResolver, blockX, blockZ, dimension, client.player.getY()),
+                centered(blockZ),
+                dimension,
+                worldIdentity
             );
             case STAGED -> {
                 pending = new Pending(
@@ -322,6 +339,25 @@ public final class ClientGroundTeleportService {
         return motionBlockingHeight > bottomY && motionBlockingHeight < topY
             ? OptionalInt.of(motionBlockingHeight + 1)
             : OptionalInt.empty();
+    }
+
+    /**
+     * PLAYER_Y-stage landing: the unknown-landing resolver's answer when it has one,
+     * otherwise the fallback (pre-teleport) Y. Consulted as a void column; kept free of
+     * Minecraft state so the consult contract is unit-testable.
+     */
+    static double playerYStageLanding(
+        final UnknownLandingResolver resolver,
+        final int blockX,
+        final int blockZ,
+        final DimensionId dimension,
+        final double fallbackY
+    ) {
+        if (resolver == null) {
+            return fallbackY;
+        }
+        final OptionalInt override = resolver.resolve(blockX, blockZ, dimension, true);
+        return override.isPresent() ? override.getAsInt() : fallbackY;
     }
 
     private void sendCommand(

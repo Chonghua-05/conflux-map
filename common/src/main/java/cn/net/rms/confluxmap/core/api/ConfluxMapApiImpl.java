@@ -5,11 +5,14 @@ import cn.net.rms.confluxmap.api.ConfluxMapApi;
 import cn.net.rms.confluxmap.api.ConfluxMapEvents;
 import cn.net.rms.confluxmap.api.Event;
 import cn.net.rms.confluxmap.api.MapDataApi;
+import cn.net.rms.confluxmap.api.SharedWaypointApi;
 import cn.net.rms.confluxmap.api.WaypointApi;
 import cn.net.rms.confluxmap.bridge.GameBridge;
 import cn.net.rms.confluxmap.core.color.DaylightModel;
 import cn.net.rms.confluxmap.core.model.DimensionId;
+import cn.net.rms.confluxmap.core.net.shared.SharedWaypointAvailability;
 import cn.net.rms.confluxmap.core.predict.PredictionTileService;
+import cn.net.rms.confluxmap.core.shared.SharedWaypoint;
 import cn.net.rms.confluxmap.core.store.MapWorldService;
 import cn.net.rms.confluxmap.core.task.SessionGuard;
 import cn.net.rms.confluxmap.core.tile.TileService;
@@ -17,6 +20,7 @@ import cn.net.rms.confluxmap.core.waypoint.Waypoint;
 import cn.net.rms.confluxmap.core.waypoint.WaypointService;
 import cn.net.rms.confluxmap.core.waypoint.WaypointStore;
 import java.util.List;
+import java.util.OptionalInt;
 import java.util.concurrent.CompletableFuture;
 import java.util.function.Supplier;
 
@@ -30,6 +34,7 @@ public final class ConfluxMapApiImpl implements ConfluxMapApi {
     private final String version;
     private final WaypointService waypointService;
     private final WaypointApi waypoints;
+    private final SharedWaypointApi sharedWaypoints;
     private final MapDataApi mapData;
     private final CustomMarkerService markers;
     private final ActionApi actions;
@@ -46,11 +51,14 @@ public final class ConfluxMapApiImpl implements ConfluxMapApi {
         final PredictionTileService prediction,
         final DaylightModel daylight,
         final CustomMarkerService markers,
-        final ActionApi actions
+        final ActionApi actions,
+        final Supplier<List<SharedWaypoint>> sharedWaypointList,
+        final Supplier<SharedWaypointAvailability> sharedWaypointAvailability
     ) {
         this.version = version;
         this.waypointService = waypointService;
         this.waypoints = new ApiWaypoints(bridge, waypointService);
+        this.sharedWaypoints = new ApiSharedWaypoints(sharedWaypointList, sharedWaypointAvailability);
         this.mapData = new ApiMapData(guard, mapWorlds, tiles, prediction, daylight);
         this.markers = markers;
         this.actions = actions;
@@ -69,6 +77,11 @@ public final class ConfluxMapApiImpl implements ConfluxMapApi {
     @Override
     public WaypointApi waypoints() {
         return waypoints;
+    }
+
+    @Override
+    public SharedWaypointApi sharedWaypoints() {
+        return sharedWaypoints;
     }
 
     @Override
@@ -134,6 +147,59 @@ public final class ConfluxMapApiImpl implements ConfluxMapApi {
         );
     }
 
+    /** Shared-waypoint catalog change listener (main thread). */
+    public void onSharedWaypointsChanged(final List<SharedWaypoint> waypoints) {
+        events.sharedWaypointsChanged().fire(
+            new ConfluxMapEvents.SharedWaypointChange(ApiSharedWaypoints.toApi(waypoints))
+        );
+    }
+
+    /**
+     * Fires {@link ConfluxMapEvents#waypointListOpening()} and returns the payload so the
+     * opening screen can apply whatever the listeners requested (main thread).
+     */
+    public ConfluxMapEvents.WaypointListOpening queryWaypointListOpening(
+        final boolean openedFromHotkey,
+        final boolean sharedWaypointsEnabled
+    ) {
+        final ConfluxMapEvents.WaypointListOpening opening = new ConfluxMapEvents.WaypointListOpening(
+            openedFromHotkey, sharedWaypointsEnabled
+        );
+        events.waypointListOpening().fire(opening);
+        return opening;
+    }
+
+    /**
+     * Fires {@link ConfluxMapEvents#teleportLandingResolve()} and returns the supplied
+     * landing height, if any. Main thread only; the teleport paths consult this only
+     * when they have no landing answer of their own.
+     */
+    public OptionalInt resolveTeleportLanding(
+        final int blockX,
+        final int blockZ,
+        final DimensionId dimension,
+        final boolean voidColumn
+    ) {
+        final ConfluxMapEvents.TeleportLandingResolve resolve = new ConfluxMapEvents.TeleportLandingResolve(
+            blockX, blockZ, dimension.toString(), voidColumn
+        );
+        events.teleportLandingResolve().fire(resolve);
+        return resolve.landingY();
+    }
+
+    /** Location-menu action report hook (main thread). */
+    public void fireLocationActionPerformed(
+        final ConfluxMapEvents.LocationAction action,
+        final int blockX,
+        final int blockZ,
+        final DimensionId dimension,
+        final boolean heightKnown
+    ) {
+        events.locationActionPerformed().fire(
+            new ConfluxMapEvents.LocationActionEvent(action, blockX, blockZ, dimension.toString(), heightKnown)
+        );
+    }
+
     /** Runs {@code body} on the main thread; completes synchronously when already there. */
     public static <T> CompletableFuture<T> callOnMain(final GameBridge bridge, final Supplier<T> body) {
         if (bridge.isOnRenderThread()) {
@@ -167,6 +233,10 @@ public final class ConfluxMapApiImpl implements ConfluxMapApi {
         private final Event<MapScreenEvent> fullscreenMapOpened = new Event<>();
         private final Event<MapScreenEvent> fullscreenMapClosed = new Event<>();
         private final Event<WaypointChangeEvent> waypointsChanged = new Event<>();
+        private final Event<WaypointListOpening> waypointListOpening = new Event<>();
+        private final Event<SharedWaypointChange> sharedWaypointsChanged = new Event<>();
+        private final Event<LocationActionEvent> locationActionPerformed = new Event<>();
+        private final Event<TeleportLandingResolve> teleportLandingResolve = new Event<>();
 
         void fireSessionStarted(final SessionGuard.Session session) {
             sessionStarted.fire(eventOf(session));
@@ -204,6 +274,26 @@ public final class ConfluxMapApiImpl implements ConfluxMapApi {
         @Override
         public Event<WaypointChangeEvent> waypointsChanged() {
             return waypointsChanged;
+        }
+
+        @Override
+        public Event<WaypointListOpening> waypointListOpening() {
+            return waypointListOpening;
+        }
+
+        @Override
+        public Event<SharedWaypointChange> sharedWaypointsChanged() {
+            return sharedWaypointsChanged;
+        }
+
+        @Override
+        public Event<LocationActionEvent> locationActionPerformed() {
+            return locationActionPerformed;
+        }
+
+        @Override
+        public Event<TeleportLandingResolve> teleportLandingResolve() {
+            return teleportLandingResolve;
         }
     }
 }

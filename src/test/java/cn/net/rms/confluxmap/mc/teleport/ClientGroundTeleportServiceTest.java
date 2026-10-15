@@ -5,6 +5,7 @@ import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
+import cn.net.rms.confluxmap.core.model.DimensionId;
 import cn.net.rms.confluxmap.core.store.ColumnStore;
 import java.util.List;
 import java.util.OptionalInt;
@@ -160,6 +161,37 @@ class ClientGroundTeleportServiceTest {
                 new ColumnStore.SurfaceLookup(true, OptionalInt.empty())
             )
         );
+    }
+
+    @Test
+    void unknownLandingResolverOverridesTheVoidFallbackY() {
+        final int[] consulted = new int[3];
+        final double landing = ClientGroundTeleportService.playerYStageLanding(
+            (blockX, blockZ, dimension, voidColumn) -> {
+                consulted[0] = blockX;
+                consulted[1] = blockZ;
+                consulted[2] = voidColumn ? 1 : 0;
+                return OptionalInt.of(128);
+            },
+            -12, 34, DimensionId.parse("minecraft:overworld"), 71.0
+        );
+
+        assertEquals(128.0, landing);
+        assertEquals(-12, consulted[0]);
+        assertEquals(34, consulted[1]);
+        // The consult reports the column as void so resolvers can distinguish the cases.
+        assertEquals(1, consulted[2]);
+    }
+
+    @Test
+    void missingResolverAnswersKeepThePreTeleportY() {
+        assertEquals(71.0, ClientGroundTeleportService.playerYStageLanding(
+            (blockX, blockZ, dimension, voidColumn) -> OptionalInt.empty(),
+            0, 0, DimensionId.parse("minecraft:overworld"), 71.0
+        ));
+        assertEquals(71.0, ClientGroundTeleportService.playerYStageLanding(
+            null, 0, 0, DimensionId.parse("minecraft:overworld"), 71.0
+        ));
     }
 
     @Test

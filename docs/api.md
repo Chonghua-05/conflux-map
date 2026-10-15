@@ -1,9 +1,9 @@
 # Conflux Map client API
 
-Conflux Map ships a client-side API for third-party mods: waypoints, map-data queries,
-custom map markers, screen/teleport actions, and lifecycle events. The API is
-**experimental** while the mod is on 0.x — interfaces may change between minor versions;
-breaking changes are announced per release until the API is declared stable.
+Conflux Map ships a client-side API for third-party mods: waypoints, shared waypoints,
+map-data queries, custom map markers, screen/teleport actions, and lifecycle events. The
+API is **experimental** while the mod is on 0.x — interfaces may change between minor
+versions; breaking changes are announced per release until the API is declared stable.
 
 One published artifact covers **every supported Minecraft version** (1.17.1 through the
 26.x line). The API is deliberately Minecraft-free: positions are plain doubles/ints,
@@ -104,6 +104,31 @@ api.events().waypointsChanged().register(event ->
 The default set (group) is the empty string `""`. Mutations persist through the mod's own
 waypoint files and respect its read-only views.
 
+## Shared waypoints
+
+Read-only access to the server-published ("shared") waypoint catalog. The list mirrors
+what the companion server last synchronized; observe `sharedWaypointsChanged` to redraw.
+
+```java
+SharedWaypointApi shared = api.sharedWaypoints();
+
+SharedWaypointApi.SharedWaypointAccess access = shared.availability();
+if (access.enabled() && access.synchronizedSnapshot()) {
+    shared.list().forEach(w ->
+        System.out.println(w.name() + " by " + w.publisherName() + " @ " + w.dimensionId())
+    );
+}
+
+api.events().sharedWaypointsChanged().register(event ->
+    event.waypoints().forEach(w -> redraw(w))
+);
+```
+
+`availability()` reports the handshake: `supported` (server understands the protocol),
+`enabled` (feature turned on), `synchronizedSnapshot` (list fetched at least once).
+Creating, editing, and deleting shared waypoints is not part of the public surface yet -
+the mod's own waypoint-list screen remains the write path.
+
 ## Map data
 
 Queries are scoped to the player's current session; a dimension argument that does not
@@ -167,6 +192,47 @@ configured command template and server-side restrictions. `layerOverride` mirror
 config: `AUTO`, `SURFACE`, `UNDERGROUND`; use `activeLayer()` to read which layer the map
 shows right now (best called from the main thread).
 
+## Waypoint-list opening defaults
+
+When the mod's waypoint-list screen is created - including opens through its own hotkey -
+it fires `waypointListOpening` with a **mutable request payload**. A listener can change
+the tab and dimension filter the screen opens with:
+
+```java
+api.events().waypointListOpening().register(opening -> {
+    if (opening.openedFromHotkey()) {
+        opening.requestTab(ConfluxMapEvents.WaypointListTab.PUBLIC);  // needs sharedWaypointsEnabled()
+        opening.requestAllDimensions();
+    }
+});
+```
+
+Later listeners override earlier ones. Requesting `PUBLIC` while shared waypoints are
+unavailable keeps `LOCAL` (check `opening.sharedWaypointsEnabled()` first if you care).
+The screen applies the mod's own config defaults before the event, so a request also
+overrides those.
+
+## Teleport landing resolver
+
+The map's teleport resolves a landing height from captured/sampled ground, or stages
+high and corrects once the target chunk loads. When it has **no landing answer of its
+own** - a known void column, or an unknown column browsed from a non-live session - it
+fires `teleportLandingResolve`, another **mutable query payload**. Supply a Y and the
+teleport lands exactly there in one command:
+
+```java
+api.events().teleportLandingResolve().register(resolve -> {
+    if (resolve.voidColumn() || isBrowsedArea(resolve.dimensionId())) {
+        resolve.setLandingY(128);
+    }
+});
+```
+
+The event is never fired when the two-stage policy can still resolve real ground (a live
+session with an unknown column), so a resolver cannot override a correct landing. The
+same resolver also enables the map's teleport button for browsed unknown-height targets
+that would otherwise be gated off.
+
 ## Events
 
 | Event | Fires |
@@ -175,6 +241,13 @@ shows right now (best called from the main thread).
 | `dimensionChanged` | dimension change within the same world |
 | `fullscreenMapOpened` / `fullscreenMapClosed` | fullscreen map screen lifecycle |
 | `waypointsChanged` | after any waypoint mutation, with the full new list |
+| `waypointListOpening` | while the waypoint-list screen is created; **mutable** request payload |
+| `sharedWaypointsChanged` | after the shared-waypoint catalog changes, with the full new list |
+| `locationActionPerformed` | after a fullscreen-map location-menu action runs |
+| `teleportLandingResolve` | when a teleport target has no landing of its own; **mutable** query payload |
+
+`waypointListOpening` and `teleportLandingResolve` are the only payloads that are
+mutable by design; everything else is an immutable snapshot.
 
 ## Compatibility notes
 

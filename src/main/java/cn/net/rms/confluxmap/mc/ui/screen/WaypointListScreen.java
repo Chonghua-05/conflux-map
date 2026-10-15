@@ -6,8 +6,10 @@ import cn.net.rms.confluxmap.compat.MouseButtons;
 import cn.net.rms.confluxmap.compat.Texts;
 import cn.net.rms.confluxmap.compat.Widgets;
 import cn.net.rms.confluxmap.ConfluxMapClient;
+import cn.net.rms.confluxmap.api.ConfluxMapEvents;
 import cn.net.rms.confluxmap.bridge.GameBridge;
 import cn.net.rms.confluxmap.bridge.PlayerView;
+import cn.net.rms.confluxmap.core.api.ConfluxMapApiImpl;
 import cn.net.rms.confluxmap.core.config.ConfluxConfig;
 import cn.net.rms.confluxmap.core.model.DimensionId;
 import cn.net.rms.confluxmap.core.net.shared.SharedWaypointAvailability;
@@ -263,6 +265,22 @@ public final class WaypointListScreen extends ConfluxScreen {
         this.parent = parent;
         this.openedFromHotkey = openedFromHotkey;
         this.tab = initialTab == null ? Tab.LOCAL : initialTab;
+        // The caller's explicit tab wins; the API opening event runs after it so
+        // integrators can adjust either state; the availability guard runs last.
+        final ConfluxMapApiImpl api = app.api();
+        if (api != null) {
+            final ConfluxMapEvents.WaypointListOpening opening = api.queryWaypointListOpening(
+                openedFromHotkey, sharedWaypoints.availability().enabled()
+            );
+            if (opening.requestedTab() == ConfluxMapEvents.WaypointListTab.LOCAL) {
+                this.tab = Tab.LOCAL;
+            } else if (opening.requestedTab() == ConfluxMapEvents.WaypointListTab.PUBLIC) {
+                this.tab = Tab.PUBLIC;
+            }
+            if (opening.requestedAllDimensions()) {
+                this.dimensionFilter = WaypointDimensionFilter.all();
+            }
+        }
         if (this.tab != Tab.LOCAL && !sharedWaypoints.availability().enabled()) {
             this.tab = Tab.LOCAL;
         }

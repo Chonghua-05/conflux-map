@@ -11,6 +11,7 @@ import cn.net.rms.confluxmap.compat.Texts;
 import cn.net.rms.confluxmap.compat.Widgets;
 import cn.net.rms.confluxmap.core.annotation.Annotation;
 import cn.net.rms.confluxmap.core.annotation.AnnotationDraft;
+import cn.net.rms.confluxmap.api.ConfluxMapEvents;
 import cn.net.rms.confluxmap.core.annotation.AnnotationGeometry;
 import cn.net.rms.confluxmap.core.annotation.AnnotationPersistence;
 import cn.net.rms.confluxmap.core.annotation.AnnotationPoint;
@@ -1614,8 +1615,8 @@ public final class FullscreenMapScreen extends ConfluxScreen {
             viewed.dimension(),
             // A live session can always resolve the landing after the target chunk loads
             // (ground, or void at the pre-teleport Y); only a browsed session needs a
-            // known height up front.
-            FullscreenMapLocationMenu.teleportPositionKnown(target, viewingLiveSession())
+            // known height up front, and an API landing resolver can supply one.
+            teleportPositionKnownForMenu(target)
         );
         final boolean teleportCommandAvailable = teleportAccess.available();
         teleportLocationUnavailableKey = teleportAccess.reasonKey();
@@ -2317,12 +2318,79 @@ public final class FullscreenMapScreen extends ConfluxScreen {
                 final SessionGuard.Session viewed = viewSession();
                 groundTeleport.teleport(
                     target.blockX(), target.blockZ(),
-                    capturedGroundAt(target.blockX(), target.blockZ()),
+                    landingWithExternalOverride(target, viewed),
                     target.ground(),
                     viewed.dimension(), viewed.world()
                 );
             }
         }
+        fireLocationActionPerformed(action, target);
+    }
+
+    /**
+     * The captured ground for the teleport, upgraded by the API landing resolver when the
+     * mod has no landing answer of its own: a browsed (non-live) session whose column is
+     * unknown. A resolver answer becomes a synthesized captured surface, so the teleport
+     * lands at the supplied height in one command. Live sessions and known columns keep
+     * the two-stage policy untouched.
+     */
+    private ColumnStore.SurfaceLookup landingWithExternalOverride(
+        final FullscreenMapLocationMenu.Target target,
+        final SessionGuard.Session viewed
+    ) {
+        final ColumnStore.SurfaceLookup captured = capturedGroundAt(target.blockX(), target.blockZ());
+        if (captured.known()
+            || FullscreenMapLocationMenu.teleportPositionKnown(target, viewingLiveSession())) {
+            return captured;
+        }
+        final ConfluxMapApiImpl api = ConfluxMapClient.get().api();
+        final OptionalInt override = api == null
+            ? OptionalInt.empty()
+            : api.resolveTeleportLanding(target.blockX(), target.blockZ(), viewed.dimension(), false);
+        return override.isPresent()
+            ? new ColumnStore.SurfaceLookup(true, OptionalInt.of(override.getAsInt() - 1))
+            : captured;
+    }
+
+    /** Menu-gating variant of the teleport position answer, including API-supplied landings. */
+    private boolean teleportPositionKnownForMenu(final FullscreenMapLocationMenu.Target target) {
+        if (FullscreenMapLocationMenu.teleportPositionKnown(target, viewingLiveSession())) {
+            return true;
+        }
+        final ConfluxMapApiImpl api = ConfluxMapClient.get().api();
+        return api != null && api.resolveTeleportLanding(
+            target.blockX(), target.blockZ(), viewSession().dimension(), false
+        ).isPresent();
+    }
+
+    /** Reports an executed location action to API listeners; skips coordinate-less calls. */
+    private void fireLocationActionPerformed(
+        final FullscreenMapLocationMenu.Action action,
+        final FullscreenMapLocationMenu.Target target
+    ) {
+        if (target == null) {
+            return;
+        }
+        final ConfluxMapApiImpl api = ConfluxMapClient.get().api();
+        if (api == null) {
+            return;
+        }
+        final ConfluxMapEvents.LocationAction mapped = switch (action) {
+            case SET_WAYPOINT -> ConfluxMapEvents.LocationAction.SET_WAYPOINT;
+            case EDIT_WAYPOINT -> ConfluxMapEvents.LocationAction.EDIT_WAYPOINT;
+            case DELETE_WAYPOINT -> ConfluxMapEvents.LocationAction.DELETE_WAYPOINT;
+            case SHARE_LOCATION -> ConfluxMapEvents.LocationAction.SHARE_LOCATION;
+            case SHARE_WAYPOINT -> ConfluxMapEvents.LocationAction.SHARE_WAYPOINT;
+            case TELEPORT -> ConfluxMapEvents.LocationAction.TELEPORT;
+            case HIGHLIGHT -> ConfluxMapEvents.LocationAction.HIGHLIGHT;
+            case HIGHLIGHT_WAYPOINT -> ConfluxMapEvents.LocationAction.HIGHLIGHT_WAYPOINT;
+            case CLEAR_HIGHLIGHT -> ConfluxMapEvents.LocationAction.CLEAR_HIGHLIGHT;
+            case HIGHLIGHT_PLAYER -> ConfluxMapEvents.LocationAction.HIGHLIGHT_PLAYER;
+            case CLEAR_PLAYER_HIGHLIGHT -> ConfluxMapEvents.LocationAction.CLEAR_PLAYER_HIGHLIGHT;
+        };
+        api.fireLocationActionPerformed(
+            mapped, target.blockX(), target.blockZ(), viewSession().dimension(), target.groundKnown()
+        );
     }
 
     private void selectLocationHighlight(final FullscreenMapLocationMenu.Target target) {

@@ -11,7 +11,8 @@ import java.util.function.Consumer;
  * must not throw - one throwing listener would abort the remaining notifications of that
  * event.
  *
- * @param <T> immutable event payload type
+ * @param <T> event payload type; an immutable snapshot unless the event documents a
+ *            mutable request payload
  */
 public final class Event<T> {
     private final List<Consumer<T>> listeners = new ArrayList<>();
