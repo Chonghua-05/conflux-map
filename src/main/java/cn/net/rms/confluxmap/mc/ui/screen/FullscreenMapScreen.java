@@ -2322,6 +2322,9 @@ public final class FullscreenMapScreen extends ConfluxScreen {
                     target.ground(),
                     viewed.dimension(), viewed.world()
                 );
+                if (config.teleportCloseMap) {
+                    onClose();
+                }
             }
         }
         fireLocationActionPerformed(action, target);

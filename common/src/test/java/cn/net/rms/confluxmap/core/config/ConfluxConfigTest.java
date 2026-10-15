@@ -19,6 +19,36 @@ final class ConfluxConfigTest {
     }
 
     @Test
+    void teleportAndWaypointListDefaultsSurviveCopy() {
+        final ConfluxConfig config = new ConfluxConfig();
+
+        assertFalse(config.teleportCloseMap);
+        assertEquals(ConfluxConfig.WaypointListTab.LOCAL, config.waypointListDefaultTab);
+        assertEquals(ConfluxConfig.WaypointListDefaultDimension.CURRENT, config.waypointListDefaultDimension);
+
+        config.teleportCloseMap = true;
+        config.waypointListDefaultTab = ConfluxConfig.WaypointListTab.PUBLIC;
+        config.waypointListDefaultDimension = ConfluxConfig.WaypointListDefaultDimension.ALL;
+
+        final ConfluxConfig copy = config.copy();
+        assertTrue(copy.teleportCloseMap);
+        assertEquals(ConfluxConfig.WaypointListTab.PUBLIC, copy.waypointListDefaultTab);
+        assertEquals(ConfluxConfig.WaypointListDefaultDimension.ALL, copy.waypointListDefaultDimension);
+    }
+
+    @Test
+    void waypointListDefaultsNormalizeNullEnumsBackToDefaults() {
+        final ConfluxConfig config = new ConfluxConfig();
+        config.waypointListDefaultTab = null;
+        config.waypointListDefaultDimension = null;
+
+        config.normalize();
+
+        assertEquals(ConfluxConfig.WaypointListTab.LOCAL, config.waypointListDefaultTab);
+        assertEquals(ConfluxConfig.WaypointListDefaultDimension.CURRENT, config.waypointListDefaultDimension);
+    }
+
+    @Test
     void sharedWaypointCrossDimensionDisplayDefaultsOffAndSurvivesCopy() {
         final UUID waypointId = UUID.randomUUID();
         final ConfluxConfig config = new ConfluxConfig();

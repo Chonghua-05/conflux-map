@@ -265,8 +265,16 @@ public final class WaypointListScreen extends ConfluxScreen {
         this.parent = parent;
         this.openedFromHotkey = openedFromHotkey;
         this.tab = initialTab == null ? Tab.LOCAL : initialTab;
-        // The caller's explicit tab wins; the API opening event runs after it so
-        // integrators can adjust either state; the availability guard runs last.
+        // Opening defaults come in layers: the caller's explicit tab, then the hotkey
+        // config defaults, then the API opening event; the availability guard runs last.
+        if (openedFromHotkey) {
+            if (config.waypointListDefaultTab == ConfluxConfig.WaypointListTab.PUBLIC) {
+                this.tab = Tab.PUBLIC;
+            }
+            if (config.waypointListDefaultDimension == ConfluxConfig.WaypointListDefaultDimension.ALL) {
+                this.dimensionFilter = WaypointDimensionFilter.all();
+            }
+        }
         final ConfluxMapApiImpl api = app.api();
         if (api != null) {
             final ConfluxMapEvents.WaypointListOpening opening = api.queryWaypointListOpening(

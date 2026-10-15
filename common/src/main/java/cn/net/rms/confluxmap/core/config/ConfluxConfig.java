@@ -116,6 +116,12 @@ public final class ConfluxConfig {
      */
     public enum LayerOverride { AUTO, FORCE_SURFACE, FORCE_UNDERGROUND, FORCE_SLICE }
 
+    /** Which tab the waypoint list opens on when summoned by the mod's own hotkey. */
+    public enum WaypointListTab { LOCAL, PUBLIC }
+
+    /** Which dimensions the waypoint list shows when summoned by the mod's own hotkey. */
+    public enum WaypointListDefaultDimension { CURRENT, ALL }
+
     public boolean minimapEnabled = true;
     /** Legacy schema-v1 field. Null after migration and omitted from newly written JSON. */
     @Deprecated
@@ -242,6 +248,12 @@ public final class ConfluxConfig {
     public boolean highlightCrossDimensionVisible = true;
     /** Command template used by the fullscreen map's teleport action. */
     public String teleportCommand = DEFAULT_TELEPORT_COMMAND;
+    /** Close the fullscreen map after its teleport action sends the command. */
+    public boolean teleportCloseMap;
+    /** Which tab the waypoint list opens on when summoned by the mod's own hotkey. */
+    public WaypointListTab waypointListDefaultTab = WaypointListTab.LOCAL;
+    /** Which dimensions the waypoint list shows when summoned by the mod's own hotkey. */
+    public WaypointListDefaultDimension waypointListDefaultDimension = WaypointListDefaultDimension.CURRENT;
     /**
      * Apparent size of the in-world waypoint label, as a percentage of the distance-compensated
      * default. Scales the icon plate, background panel, and both text lines together.
@@ -386,6 +398,9 @@ public final class ConfluxConfig {
         c.waypointHighlightDimOpacity = waypointHighlightDimOpacity;
         c.highlightCrossDimensionVisible = highlightCrossDimensionVisible;
         c.teleportCommand = teleportCommand;
+        c.teleportCloseMap = teleportCloseMap;
+        c.waypointListDefaultTab = waypointListDefaultTab;
+        c.waypointListDefaultDimension = waypointListDefaultDimension;
         c.waypointLabelScalePercent = waypointLabelScalePercent;
         c.predictionEnabled = predictionEnabled;
         c.predictionNetworkSync = predictionNetworkSync;
@@ -489,6 +504,12 @@ public final class ConfluxConfig {
         }
         if (layerOverride == null) {
             layerOverride = LayerOverride.AUTO;
+        }
+        if (waypointListDefaultTab == null) {
+            waypointListDefaultTab = WaypointListTab.LOCAL;
+        }
+        if (waypointListDefaultDimension == null) {
+            waypointListDefaultDimension = WaypointListDefaultDimension.CURRENT;
         }
         if (fullscreenDisplayMode == null) {
             fullscreenDisplayMode = FullscreenDisplayMode.TERRAIN;

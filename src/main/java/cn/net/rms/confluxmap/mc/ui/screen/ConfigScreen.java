@@ -671,6 +671,10 @@ public final class ConfigScreen extends ConfluxScreen {
                     )
                 );
                 y = addToggleRow(
+                    y, "confluxmap.config.waypoints.teleport_close_map",
+                    () -> config.teleportCloseMap, v -> config.teleportCloseMap = v
+                );
+                y = addToggleRow(
                     y, "confluxmap.config.waypoints.show_local",
                     () -> config.localWaypointsVisible, v -> config.localWaypointsVisible = v
                 );
@@ -688,6 +692,19 @@ public final class ConfigScreen extends ConfluxScreen {
                             : null
                     );
                 }
+                y = addEnumRow(
+                    y, "confluxmap.config.waypoints.list_default_tab",
+                    ConfluxConfig.WaypointListTab.values(),
+                    () -> config.waypointListDefaultTab, v -> config.waypointListDefaultTab = v,
+                    ConfigScreen::waypointListTabKey
+                );
+                y = addEnumRow(
+                    y, "confluxmap.config.waypoints.list_default_dimension",
+                    ConfluxConfig.WaypointListDefaultDimension.values(),
+                    () -> config.waypointListDefaultDimension,
+                    v -> config.waypointListDefaultDimension = v,
+                    ConfigScreen::waypointListDefaultDimensionKey
+                );
                 y = addIntSliderRow(
                     y, "confluxmap.config.waypoints.render_distance", 0, 100_000,
                     () -> config.waypointRenderDistance, v -> config.waypointRenderDistance = v, ConfigScreen::renderDistanceText
@@ -1171,6 +1188,20 @@ public final class ConfigScreen extends ConfluxScreen {
         return mode == ConfluxConfig.RadarDisplayMode.DOTS
             ? "confluxmap.value.radar_display_mode.dots"
             : "confluxmap.value.radar_display_mode.portraits";
+    }
+
+    private static String waypointListTabKey(final ConfluxConfig.WaypointListTab tab) {
+        return tab == ConfluxConfig.WaypointListTab.LOCAL
+            ? "confluxmap.value.waypoint_list_tab.local"
+            : "confluxmap.value.waypoint_list_tab.public";
+    }
+
+    private static String waypointListDefaultDimensionKey(
+        final ConfluxConfig.WaypointListDefaultDimension dimension
+    ) {
+        return dimension == ConfluxConfig.WaypointListDefaultDimension.CURRENT
+            ? "confluxmap.value.waypoint_list_dimension.current"
+            : "confluxmap.value.waypoint_list_dimension.all";
     }
 
     private static String layerOverrideKey(final ConfluxConfig.LayerOverride override) {

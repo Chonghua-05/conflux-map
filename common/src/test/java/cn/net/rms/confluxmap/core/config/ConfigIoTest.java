@@ -300,6 +300,29 @@ class ConfigIoTest {
     }
 
     @Test
+    void teleportAndWaypointListDefaultsRoundTripAndSurviveStaleFiles(@TempDir final Path tmp) throws IOException {
+        final Path file = tmp.resolve("config.json");
+        final ConfigIo io = new ConfigIo(file, LOGGER);
+        final ConfluxConfig config = new ConfluxConfig();
+        config.teleportCloseMap = true;
+        config.waypointListDefaultTab = ConfluxConfig.WaypointListTab.PUBLIC;
+        config.waypointListDefaultDimension = ConfluxConfig.WaypointListDefaultDimension.ALL;
+
+        io.save(config);
+        final ConfluxConfig loaded = io.load();
+        assertTrue(loaded.teleportCloseMap);
+        assertEquals(ConfluxConfig.WaypointListTab.PUBLIC, loaded.waypointListDefaultTab);
+        assertEquals(ConfluxConfig.WaypointListDefaultDimension.ALL, loaded.waypointListDefaultDimension);
+
+        // A file from before these fields exists keeps the shipped defaults.
+        Files.writeString(file, "{\"schemaVersion\":2}", StandardCharsets.UTF_8);
+        final ConfluxConfig stale = io.load();
+        assertFalse(stale.teleportCloseMap);
+        assertEquals(ConfluxConfig.WaypointListTab.LOCAL, stale.waypointListDefaultTab);
+        assertEquals(ConfluxConfig.WaypointListDefaultDimension.CURRENT, stale.waypointListDefaultDimension);
+    }
+
+    @Test
     void waypointIconOpacityRoundTripsAndClampsInvalidValues(@TempDir final Path tmp) throws IOException {
         final Path file = tmp.resolve("config.json");
         final ConfigIo io = new ConfigIo(file, LOGGER);
