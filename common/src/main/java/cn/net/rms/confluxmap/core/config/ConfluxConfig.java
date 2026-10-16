@@ -19,7 +19,7 @@ import java.util.UUID;
  * {@link #SCHEMA_VERSION} and adding a migration in {@link ConfigIo}.
  */
 public final class ConfluxConfig {
-    public static final int SCHEMA_VERSION = 11;
+    public static final int SCHEMA_VERSION = 12;
     public static final String DEFAULT_TELEPORT_COMMAND = "execute in {dimension} run tp @s {x} {y} {z}";
     public static final int DEFAULT_MINIMAP_SIZE = 90;
     public static final int MINIMAP_ZOOM_LEVEL_COUNT = 4;
@@ -86,6 +86,29 @@ public final class ConfluxConfig {
     public enum Shape { SQUARE, CIRCLE }
 
     public enum PlayerMarkerStyle { TRADITIONAL, MODERN }
+
+    /**
+     * Map quality preset governing the slope (loadline) at which fullscreen and minimap views
+     * transition between LOD levels as scale increases.
+     * Scale <= 1.0 is strictly clamped to LOD 0 regardless of setting.
+     */
+    public enum MapQuality {
+        ULTRA_PERFORMANCE(1.60),
+        PERFORMANCE(1.30),
+        BALANCED(1.00),
+        QUALITY(0.75),
+        ULTRA_QUALITY(0.55);
+
+        private final double slope;
+
+        MapQuality(final double slope) {
+            this.slope = slope;
+        }
+
+        public double slope() {
+            return slope;
+        }
+    }
 
     public enum RadarDisplayMode { DOTS, PORTRAITS }
 
@@ -175,6 +198,8 @@ public final class ConfluxConfig {
     public boolean dynamicLighting = true;
     /** Keeps the historical Conflux renderer by default; XAERO is an explicit presentation choice. */
     public MapColorStyle mapColorStyle = MapColorStyle.CONFLUX;
+    /** Map quality level controlling LOD scale transition points. */
+    public MapQuality mapQuality = MapQuality.BALANCED;
 
     public int snapshotBudgetPerTick = 8;
     public int gpuTileCacheLimit = 256;
@@ -350,6 +375,7 @@ public final class ConfluxConfig {
         c.netherSliceY = netherSliceY;
         c.dynamicLighting = dynamicLighting;
         c.mapColorStyle = mapColorStyle;
+        c.mapQuality = mapQuality;
         c.snapshotBudgetPerTick = snapshotBudgetPerTick;
         c.gpuTileCacheLimit = gpuTileCacheLimit;
         c.portalMarkersEnabled = portalMarkersEnabled;
@@ -519,6 +545,9 @@ public final class ConfluxConfig {
         }
         if (mapColorStyle == null) {
             mapColorStyle = MapColorStyle.CONFLUX;
+        }
+        if (mapQuality == null) {
+            mapQuality = MapQuality.BALANCED;
         }
         if (radarDisplayMode == null) {
             radarDisplayMode = RadarDisplayMode.PORTRAITS;

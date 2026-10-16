@@ -3958,7 +3958,7 @@ public final class FullscreenMapScreen extends ConfluxScreen {
     }
 
     private int currentLod() {
-        return TileMath.lodForScale(scale);
+        return TileMath.lodForScale(scale, this.config.mapQuality);
     }
 
     FullscreenMapBrowseService.Target viewTarget() {

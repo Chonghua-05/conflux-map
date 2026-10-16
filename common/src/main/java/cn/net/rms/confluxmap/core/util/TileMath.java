@@ -52,11 +52,26 @@ public final class TileMath {
      * that otherwise occurs immediately after crossing an LOD boundary.
      */
     public static int lodForScale(final double blocksPerScreenPixel) {
+        return lodForScale(blocksPerScreenPixel, cn.net.rms.confluxmap.core.config.ConfluxConfig.MapQuality.BALANCED);
+    }
+
+    /**
+     * Chooses LOD for the given scale taking into account player's {@link ConfluxConfig.MapQuality}.
+     * When zoomed in (blocksPerScreenPixel <= 1.0), the result is strictly clamped to LOD 0 regardless
+     * of quality setting, ensuring pixel-perfect fidelity when zooming close.
+     * When zoomed out (blocksPerScreenPixel > 1.0), the quality setting scales the slope (loadline)
+     * of the logarithmic decay curve.
+     */
+    public static int lodForScale(
+        final double blocksPerScreenPixel,
+        final cn.net.rms.confluxmap.core.config.ConfluxConfig.MapQuality quality
+    ) {
         if (!Double.isFinite(blocksPerScreenPixel) || blocksPerScreenPixel <= 1.0) {
             return 0;
         }
+        final double slope = quality != null ? quality.slope() : 1.0;
         final double exact = Math.log(blocksPerScreenPixel) / Math.log(2.0);
-        final int lod = (int) Math.floor(exact + 1.0e-10);
+        final int lod = (int) Math.floor(exact * slope + 1.0e-10);
         return Math.max(0, Math.min(MAX_LOD, lod));
     }
 

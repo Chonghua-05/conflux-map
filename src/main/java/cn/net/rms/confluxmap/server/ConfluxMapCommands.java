@@ -99,6 +99,9 @@ final class ConfluxMapCommands {
                     .then(literal("show").executes(context -> webMapPrivacy(
                         companion, context.getSource(), false
                     ))))
+                .then(literal("fullsync")
+                    .requires(source -> source.getEntity() instanceof ServerPlayerEntity)
+                    .executes(context -> fullSync(companion, context.getSource())))
         ));
     }
 
@@ -364,6 +367,55 @@ final class ConfluxMapCommands {
             );
             default -> error(source, "Unexpected shared waypoint disable result: " + result);
         };
+    }
+
+    private static int fullSync(
+        final ConfluxMapCompanion companion,
+        final ServerCommandSource source
+    ) {
+        if (!(source.getEntity() instanceof final ServerPlayerEntity player)) {
+            return error(source, "[ConfluxMap] 全量同步只能由玩家执行。");
+        }
+        if (!companion.isEnabled() || !companion.config().shareCorrections) {
+            return error(source, "[ConfluxMap] 本服务器已禁用地图同步功能。");
+        }
+        final String dimId = player.getServerWorld().getRegistryKey().getValue().toString();
+        final java.nio.file.Path worldRoot = source.getServer().getSavePath(net.minecraft.util.WorldSavePath.ROOT);
+        final java.nio.file.Path regionDir = RegionStoragePaths.regionDirectory(worldRoot, dimId);
+        final java.util.List<cn.net.rms.confluxmap.core.net.MapFullSyncManifestS2C.RegionCoord> coords = new java.util.ArrayList<>();
+        if (java.nio.file.Files.isDirectory(regionDir)) {
+            try (java.util.stream.Stream<java.nio.file.Path> stream = java.nio.file.Files.list(regionDir)) {
+                stream.forEach(file -> {
+                    final String name = file.getFileName().toString();
+                    if (name.startsWith("r.") && name.endsWith(".mca")) {
+                        final String[] parts = name.split("\\.");
+                        if (parts.length == 4) {
+                            try {
+                                final int mcaX = Integer.parseInt(parts[1]);
+                                final int mcaZ = Integer.parseInt(parts[2]);
+                                for (int dz = 0; dz < 2; dz++) {
+                                    for (int dx = 0; dx < 2; dx++) {
+                                        coords.add(new cn.net.rms.confluxmap.core.net.MapFullSyncManifestS2C.RegionCoord(mcaX * 2 + dx, mcaZ * 2 + dz));
+                                    }
+                                }
+                            } catch (final NumberFormatException ignored) {
+                            }
+                        }
+                    }
+                });
+            } catch (final java.io.IOException e) {
+                ConfluxMapMod.LOGGER.warn("[ConfluxMap] failed to list region directory for full sync: {}", regionDir, e);
+            }
+        }
+        final int dimIndex = companion.networking().dimensionIndex(source.getServer(), dimId);
+        if (dimIndex >= 0) {
+            companion.networking().sendToPlayer(
+                player,
+                new cn.net.rms.confluxmap.core.net.MapFullSyncManifestS2C(dimIndex, 0, coords)
+            );
+            return feedback(source, "[ConfluxMap] 已启动全量同步：已将 " + coords.size() + " 个区域加入同步队列。");
+        }
+        return error(source, "[ConfluxMap] 无法解析当前维度索引：" + dimId);
     }
 
     private static int feedback(final ServerCommandSource source, final String message) {

@@ -88,11 +88,15 @@ public final class Proto {
     public static final int MSG_BIOME_LANG_REQ_C2S = 0x16;
     /** S2C: merged datapack biome display names; empty when the world's packs ship none. */
     public static final int MSG_BIOME_LANG_S2C = 0x17;
+    /** C2S: client requests full sync for one dimension. */
+    public static final int MSG_MAP_FULL_SYNC_REQ_C2S = 0x18;
+    /** S2C: server provides list of existing generated regions for full sync. */
+    public static final int MSG_MAP_FULL_SYNC_MANIFEST_S2C = 0x19;
 
     /** First valid message id; used to range-check the type byte. */
     public static final int MSG_MIN = MSG_HELLO_C2S;
     /** Last valid message id for this proto major version. */
-    public static final int MSG_MAX = MSG_BIOME_LANG_S2C;
+    public static final int MSG_MAX = MSG_MAP_FULL_SYNC_MANIFEST_S2C;
 
     // ---- Hard caps (enforced everywhere untrusted bytes cross a boundary) ----
 

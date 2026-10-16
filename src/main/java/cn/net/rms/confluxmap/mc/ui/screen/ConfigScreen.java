@@ -501,6 +501,12 @@ public final class ConfigScreen extends ConfluxScreen {
                     },
                     ConfigScreen::mapColorStyleKey
                 );
+                y = addIntSliderRow(
+                    y, "confluxmap.config.map.quality", 0, ConfluxConfig.MapQuality.values().length - 1,
+                    () -> config.mapQuality.ordinal(),
+                    v -> config.mapQuality = ConfluxConfig.MapQuality.values()[Math.max(0, Math.min(ConfluxConfig.MapQuality.values().length - 1, v))],
+                    ConfigScreen::mapQualitySliderText
+                );
                 y = addToggleRow(y, "confluxmap.config.fullmap.chunk_grid", () -> config.fullmapChunkGrid, v -> config.fullmapChunkGrid = v);
                 break;
             case MARKERS:
@@ -1221,6 +1227,28 @@ public final class ConfigScreen extends ConfluxScreen {
         return style == MapColorStyle.XAERO
             ? "confluxmap.value.map_color_style.xaero"
             : "confluxmap.value.map_color_style.conflux";
+    }
+
+    private static String mapQualityKey(final ConfluxConfig.MapQuality quality) {
+        switch (quality) {
+            case ULTRA_PERFORMANCE:
+                return "confluxmap.value.map_quality.ultra_performance";
+            case PERFORMANCE:
+                return "confluxmap.value.map_quality.performance";
+            case QUALITY:
+                return "confluxmap.value.map_quality.quality";
+            case ULTRA_QUALITY:
+                return "confluxmap.value.map_quality.ultra_quality";
+            case BALANCED:
+            default:
+                return "confluxmap.value.map_quality.balanced";
+        }
+    }
+
+    private static String mapQualitySliderText(final int index) {
+        final ConfluxConfig.MapQuality[] qualities = ConfluxConfig.MapQuality.values();
+        final int clamped = Math.max(0, Math.min(qualities.length - 1, index));
+        return Texts.translatable(mapQualityKey(qualities[clamped])).getString();
     }
 
     private static String predictionViewModeKey(final PredictionViewMode mode) {
