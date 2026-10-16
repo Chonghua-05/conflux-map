@@ -1,5 +1,6 @@
 package cn.net.rms.confluxmap.server;
 
+import cn.net.rms.confluxmap.core.config.ConfluxConfig.MapQuality;
 import cn.net.rms.confluxmap.core.net.Proto;
 import cn.net.rms.confluxmap.core.net.shared.SharedWaypointProto;
 import cn.net.rms.confluxmap.server.shared.SharedWaypointService;
@@ -14,12 +15,18 @@ import cn.net.rms.confluxmap.server.web.WebMapConfig;
  * boundaries make that safe. Settings that reveal sensitive server state still default OFF.
  */
 public final class ServerConfig {
-    public static final int SCHEMA_VERSION = 6;
+    public static final int SCHEMA_VERSION = 7;
 
     public int schemaVersion = SCHEMA_VERSION;
 
     /** Master toggle for the companion. When false, no handshake replies are sent. */
     public boolean enabled = true;
+    /**
+     * Map quality level ceiling enforced on sync:
+     * ULTRA_PERFORMANCE, PERFORMANCE, BALANCED, QUALITY, ULTRA_QUALITY.
+     */
+    public String _comment_mapQuality = "Options: ULTRA_PERFORMANCE, PERFORMANCE, BALANCED, QUALITY, ULTRA_QUALITY";
+    public MapQuality mapQuality = MapQuality.BALANCED;
     /** Dedicated-server startup GitHub release probe; a newer version is announced on the console. */
     public boolean checkForUpdates = true;
     /**

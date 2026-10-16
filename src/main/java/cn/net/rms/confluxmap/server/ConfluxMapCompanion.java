@@ -265,6 +265,10 @@ public final class ConfluxMapCompanion {
         return current;
     }
 
+    public ServerNetworking networking() {
+        return networking;
+    }
+
     public RegionSummaryService summaries() {
         return summaries;
     }

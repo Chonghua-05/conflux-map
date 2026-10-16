@@ -14,6 +14,8 @@ import cn.net.rms.confluxmap.core.net.FlatBaselineS2C;
 import cn.net.rms.confluxmap.core.net.HelloC2S;
 import cn.net.rms.confluxmap.core.net.HelloPolicyS2C;
 import cn.net.rms.confluxmap.core.net.LoadStateSubscribeC2S;
+import cn.net.rms.confluxmap.core.net.MapFullSyncReqC2S;
+import cn.net.rms.confluxmap.core.net.MapFullSyncManifestS2C;
 import cn.net.rms.confluxmap.core.net.MapSyncCapability;
 import cn.net.rms.confluxmap.core.net.MapRegionSyncSubscribeC2S;
 import cn.net.rms.confluxmap.core.net.MapRegionViewReqC2S;
@@ -136,6 +138,8 @@ public final class ServerNetworking {
                 handleMapRegionSyncSubscribe(server, player, req);
             } else if (msg instanceof final BiomeLangReqC2S req) {
                 handleBiomeLangReq(server, player, req);
+            } else if (msg instanceof final MapFullSyncReqC2S req) {
+                handleMapFullSyncReq(server, player, req);
             } else {
                 ConfluxMapMod.LOGGER.warn(
                     "[ConfluxMap] companion: unexpected {} from {} (server-side handlers expect C2S only)",
@@ -195,6 +199,55 @@ public final class ServerNetworking {
                 sendNegotiated(player, session, new BiomeLangS2C(names));
             })
         );
+    }
+
+    private void handleMapFullSyncReq(
+        final MinecraftServer server,
+        final ServerPlayerEntity player,
+        final MapFullSyncReqC2S req
+    ) {
+        final NegotiatedMapSync session = peerSession(player);
+        if (session == null || !companion.config().shareCorrections || !session.correctionsEnabled()) {
+            return;
+        }
+        if (req.cancel()) {
+            // Cancel requests are acknowledged and gracefully stopped
+            return;
+        }
+        final List<HelloPolicyS2C.DimDescriptor> dims = buildDimDescriptors(server, false);
+        if (req.dimIndex() < 0 || req.dimIndex() >= dims.size()) {
+            return;
+        }
+        final String dimId = dims.get(req.dimIndex()).dimId();
+        final java.nio.file.Path worldRoot = server.getSavePath(net.minecraft.util.WorldSavePath.ROOT);
+        final java.nio.file.Path regionDir = RegionStoragePaths.regionDirectory(worldRoot, dimId);
+        final List<MapFullSyncManifestS2C.RegionCoord> coords = new ArrayList<>();
+        if (java.nio.file.Files.isDirectory(regionDir)) {
+            try (java.util.stream.Stream<java.nio.file.Path> stream = java.nio.file.Files.list(regionDir)) {
+                stream.forEach(file -> {
+                    final String name = file.getFileName().toString();
+                    if (name.startsWith("r.") && name.endsWith(".mca")) {
+                        final String[] parts = name.split("\\.");
+                        if (parts.length == 4) {
+                            try {
+                                final int mcaX = Integer.parseInt(parts[1]);
+                                final int mcaZ = Integer.parseInt(parts[2]);
+                                // Each 32x32-chunk MCA file contains 2x2 16x16-chunk summary regions
+                                for (int dz = 0; dz < 2; dz++) {
+                                    for (int dx = 0; dx < 2; dx++) {
+                                        coords.add(new MapFullSyncManifestS2C.RegionCoord(mcaX * 2 + dx, mcaZ * 2 + dz));
+                                    }
+                                }
+                            } catch (final NumberFormatException ignored) {
+                            }
+                        }
+                    }
+                });
+            } catch (final java.io.IOException e) {
+                ConfluxMapMod.LOGGER.warn("[ConfluxMap] failed to list region directory for full sync: {}", regionDir, e);
+            }
+        }
+        sendNegotiated(player, session, new MapFullSyncManifestS2C(req.dimIndex(), req.lod(), coords));
     }
 
     private void handleHello(final MinecraftServer server, final ServerPlayerEntity player, final HelloC2S hello) {
@@ -361,6 +414,23 @@ public final class ServerNetworking {
             if (session != null && session.supports(MapSyncCapability.PLAYER_POSITIONS)) {
                 sendNegotiated(player, session, snapshot);
             }
+        }
+    }
+
+    public int dimensionIndex(final MinecraftServer server, final String dimId) {
+        final List<HelloPolicyS2C.DimDescriptor> dims = buildDimDescriptors(server, false);
+        for (int i = 0; i < dims.size(); i++) {
+            if (dims.get(i).dimId().equals(dimId)) {
+                return i;
+            }
+        }
+        return -1;
+    }
+
+    public void sendToPlayer(final ServerPlayerEntity player, final Message msg) {
+        final NegotiatedMapSync session = peerSession(player);
+        if (session != null) {
+            sendNegotiated(player, session, msg);
         }
     }
 

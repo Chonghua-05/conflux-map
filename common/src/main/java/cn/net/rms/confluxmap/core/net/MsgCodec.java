@@ -112,6 +112,10 @@ public final class MsgCodec {
                 writeUtf(out, m.locale());
             } else if (msg instanceof final BiomeLangS2C m) {
                 encodeBiomeLangS2C(out, m);
+            } else if (msg instanceof final MapFullSyncReqC2S m) {
+                encodeMapFullSyncReqC2S(out, m);
+            } else if (msg instanceof final MapFullSyncManifestS2C m) {
+                encodeMapFullSyncManifestS2C(out, m);
             } else {
                 throw new ProtoException("unknown message type: " + msg.getClass().getName());
             }
@@ -153,7 +157,8 @@ public final class MsgCodec {
             || typeId == Proto.MSG_SERVER_INSTANCE_S2C
             || typeId == Proto.MSG_PLAYER_POSITIONS_S2C
             || typeId == Proto.MSG_QUADRA_LAYOUT_S2C
-            || typeId == Proto.MSG_BIOME_LANG_S2C;
+            || typeId == Proto.MSG_BIOME_LANG_S2C
+            || typeId == Proto.MSG_MAP_FULL_SYNC_MANIFEST_S2C;
     }
 
     private static void encodeHelloC2S(final DataOutputStream out, final HelloC2S m) throws IOException, ProtoException {
@@ -690,6 +695,8 @@ public final class MsgCodec {
                     in, carriesTopMaterial(negotiated, MapSyncCapability.QUADRA_LAYOUT));
                 case Proto.MSG_BIOME_LANG_REQ_C2S -> new BiomeLangReqC2S(readUtf(in));
                 case Proto.MSG_BIOME_LANG_S2C -> decodeBiomeLangS2C(in);
+                case Proto.MSG_MAP_FULL_SYNC_REQ_C2S -> decodeMapFullSyncReqC2S(in);
+                case Proto.MSG_MAP_FULL_SYNC_MANIFEST_S2C -> decodeMapFullSyncManifestS2C(in);
                 default -> throw new ProtoException("unhandled message type id: 0x" + Integer.toHexString(typeId));
             };
             if (in.available() != 0) {
@@ -1351,6 +1358,64 @@ public final class MsgCodec {
         if (value < 0 || value > 0xFF) {
             throw new ProtoException(field + " out of range: " + value);
         }
+    }
+
+    private static void encodeMapFullSyncReqC2S(
+        final DataOutputStream out, final MapFullSyncReqC2S m
+    ) throws IOException, ProtoException {
+        if (m.dimIndex() < 0 || m.dimIndex() >= Proto.MAX_DIM_ENTRIES) {
+            throw new ProtoException("full sync dimension out of range: " + m.dimIndex());
+        }
+        if (m.lod() < 0 || m.lod() > cn.net.rms.confluxmap.core.util.TileMath.MAX_LOD) {
+            throw new ProtoException("full sync LOD out of range: " + m.lod());
+        }
+        out.writeByte(m.dimIndex());
+        out.writeByte(m.lod());
+        out.writeByte(m.cancel() ? 1 : 0);
+    }
+
+    private static MapFullSyncReqC2S decodeMapFullSyncReqC2S(final DataInputStream in) throws IOException, ProtoException {
+        final int dimIndex = in.readUnsignedByte();
+        final int lod = in.readUnsignedByte();
+        final int flags = in.readUnsignedByte();
+        return new MapFullSyncReqC2S(dimIndex, lod, (flags & 1) != 0);
+    }
+
+    private static void encodeMapFullSyncManifestS2C(
+        final DataOutputStream out, final MapFullSyncManifestS2C m
+    ) throws IOException, ProtoException {
+        if (m.dimIndex() < 0 || m.dimIndex() >= Proto.MAX_DIM_ENTRIES) {
+            throw new ProtoException("full sync manifest dimension out of range: " + m.dimIndex());
+        }
+        if (m.lod() < 0 || m.lod() > cn.net.rms.confluxmap.core.util.TileMath.MAX_LOD) {
+            throw new ProtoException("full sync manifest LOD out of range: " + m.lod());
+        }
+        out.writeByte(m.dimIndex());
+        out.writeByte(m.lod());
+        out.writeInt(m.regions().size());
+        for (final MapFullSyncManifestS2C.RegionCoord coord : m.regions()) {
+            if (coord == null) {
+                throw new ProtoException("null region coordinate in full sync manifest");
+            }
+            out.writeInt(coord.regionX());
+            out.writeInt(coord.regionZ());
+        }
+    }
+
+    private static MapFullSyncManifestS2C decodeMapFullSyncManifestS2C(
+        final DataInputStream in
+    ) throws IOException, ProtoException {
+        final int dimIndex = in.readUnsignedByte();
+        final int lod = in.readUnsignedByte();
+        final int count = in.readInt();
+        if (count < 0 || count > 100_000) {
+            throw new ProtoException("region count out of range: " + count);
+        }
+        final List<MapFullSyncManifestS2C.RegionCoord> regions = new ArrayList<>(count);
+        for (int i = 0; i < count; i++) {
+            regions.add(new MapFullSyncManifestS2C.RegionCoord(in.readInt(), in.readInt()));
+        }
+        return new MapFullSyncManifestS2C(dimIndex, lod, regions);
     }
 
     private static void requireUnsignedShort(final String field, final int value) throws ProtoException {

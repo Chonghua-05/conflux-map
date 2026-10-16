@@ -15,6 +15,8 @@ import cn.net.rms.confluxmap.core.net.HelloPolicyS2C;
 import cn.net.rms.confluxmap.core.net.LoadStateDeltaS2C;
 import cn.net.rms.confluxmap.core.net.MapCapabilitiesS2C;
 import cn.net.rms.confluxmap.core.net.MapCompatibilityS2C;
+import cn.net.rms.confluxmap.core.net.MapFullSyncReqC2S;
+import cn.net.rms.confluxmap.core.net.MapFullSyncManifestS2C;
 import cn.net.rms.confluxmap.core.net.MapInvalidateS2C;
 import cn.net.rms.confluxmap.core.net.MapPatchS2C;
 import cn.net.rms.confluxmap.core.net.MapRegionInvalidateS2C;
@@ -145,6 +147,11 @@ public final class ClientNetworking {
                 "companion: biome names synced from the level ({} entries)", biomeLangs.names().size()
             );
             BiomeLabels.acceptDatapackNames(biomeLangs.names());
+        } else if (msg instanceof final MapFullSyncManifestS2C manifest) {
+            final MapSyncClient sync = mapSync;
+            if (sync != null) {
+                sync.onFullSyncManifest(manifest);
+            }
         } else if (msg instanceof final ErrorS2C e) {
             onError(e, payloadBytes);
         } else {

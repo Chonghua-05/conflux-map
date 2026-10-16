@@ -1,6 +1,7 @@
 package cn.net.rms.confluxmap.mc.net;
 
 import cn.net.rms.confluxmap.ConfluxMapMod;
+import cn.net.rms.confluxmap.compat.Texts;
 import cn.net.rms.confluxmap.core.config.ConfluxConfig;
 import cn.net.rms.confluxmap.core.model.DimensionId;
 import cn.net.rms.confluxmap.core.net.ChunkPatchCodec;
@@ -8,6 +9,9 @@ import cn.net.rms.confluxmap.core.net.CorrectionProfile;
 import cn.net.rms.confluxmap.core.net.HelloPolicyS2C;
 import cn.net.rms.confluxmap.core.net.MapPatchS2C;
 import cn.net.rms.confluxmap.core.net.MapInvalidateS2C;
+import cn.net.rms.confluxmap.core.net.MapFullSyncReqC2S;
+import cn.net.rms.confluxmap.core.net.MapFullSyncManifestS2C;
+import cn.net.rms.confluxmap.core.net.FullSyncTracker;
 import cn.net.rms.confluxmap.core.net.MapRegionInvalidateS2C;
 import cn.net.rms.confluxmap.core.net.MapRegionPatchS2C;
 import cn.net.rms.confluxmap.core.net.MapRegionSyncSubscribeC2S;
@@ -541,6 +545,10 @@ public final class MapSyncClient {
             invalidatedRegions.remove(stamp);
             settledRegions.add(stamp);
         }
+        if (fullSyncTracker.isRunning()) {
+            fullSyncTracker.recordProgress(payloadBytes, System.nanoTime());
+            sendNextFullSyncBatch();
+        }
         progress.regionPatchReceived(patch, payloadBytes, accepted, System.nanoTime());
     }
 
@@ -915,5 +923,110 @@ public final class MapSyncClient {
 
     private static long regionKey(final int regionX, final int regionZ) {
         return ((long) regionX << 32) ^ (regionZ & 0xFFFFFFFFL);
+    }
+
+    private final FullSyncTracker fullSyncTracker = new FullSyncTracker(MapSyncClient::sendClientFeedback);
+    private int fullSyncDimIndex;
+    private int fullSyncLod;
+    private final java.util.Queue<ChunkRegionSlice> fullSyncPendingQueue = new java.util.ArrayDeque<>();
+
+    public synchronized void requestFullSync(final DimensionId dimension, final int lod) {
+        if (!companion.isActive()) {
+            return;
+        }
+        final int dimIndex = dimensionIndex(dimension);
+        if (dimIndex >= 0) {
+            sender.send(new MapFullSyncReqC2S(dimIndex, lod, false));
+        }
+    }
+
+    public synchronized void cancelFullSync() {
+        if (!companion.isActive()) {
+            return;
+        }
+        sender.send(new MapFullSyncReqC2S(0, 0, true));
+        fullSyncPendingQueue.clear();
+        fullSyncTracker.cancel();
+    }
+
+    public synchronized void onFullSyncManifest(final MapFullSyncManifestS2C manifest) {
+        fullSyncDimIndex = manifest.dimIndex();
+        fullSyncLod = manifest.lod();
+        fullSyncPendingQueue.clear();
+        fullSyncTracker.start(manifest.regions().size(), System.nanoTime());
+
+        if (manifest.regions().isEmpty()) {
+            return;
+        }
+        for (final MapFullSyncManifestS2C.RegionCoord coord : manifest.regions()) {
+            fullSyncPendingQueue.add(new ChunkRegionSlice(coord.regionX(), coord.regionZ(), 0, 0, 15, 15));
+        }
+        // Dispatch up to MAX_INFLIGHT_REQUESTS
+        while (regionInFlightRequests.size() < MAX_INFLIGHT_REQUESTS && !fullSyncPendingQueue.isEmpty()) {
+            sendNextFullSyncBatch();
+        }
+    }
+
+    private void sendNextFullSyncBatch() {
+        if (!fullSyncTracker.isRunning() || fullSyncPendingQueue.isEmpty() || regionInFlightRequests.size() >= MAX_INFLIGHT_REQUESTS) {
+            return;
+        }
+        final HelloPolicyS2C policy = companion.policy();
+        if (policy == null || fullSyncDimIndex < 0 || fullSyncDimIndex >= policy.dims().size()) {
+            return;
+        }
+        final String dimension = policy.dims().get(fullSyncDimIndex).dimId();
+        final int batchLimit = Math.min(
+            Proto.MAX_REGION_PAGES_PER_REQ,
+            policy.budgets().maxTilesPerReq()
+        );
+        final List<MapRegionViewReqC2S.RegionReq> regions = new ArrayList<>(batchLimit);
+        final int reqId = nextReqId++ & 0x7FFF;
+        final RegionInFlightRequest inFlight = new RegionInFlightRequest(
+            dimension, fullSyncDimIndex, fullSyncLod, millisClock.getAsLong()
+        );
+        while (regions.size() < batchLimit && !fullSyncPendingQueue.isEmpty()) {
+            final ChunkRegionSlice slice = fullSyncPendingQueue.poll();
+            final RegionStamp stamp = new RegionStamp(dimension, fullSyncLod, slice);
+            inFlight.pending.add(stamp);
+            regionInFlightStamps.add(stamp);
+            regions.add(new MapRegionViewReqC2S.RegionReq(
+                slice,
+                corrections.regionSliceRevision(
+                    dimension, fullSyncLod, slice, activePatchMode(), activeBaselineProfile(),
+                    activeCorrectionProfile()
+                )
+            ));
+        }
+        if (regions.isEmpty()) {
+            return;
+        }
+        final MapRegionViewReqC2S request = new MapRegionViewReqC2S(
+            reqId, fullSyncDimIndex, fullSyncLod, regions
+        );
+        final int payloadBytes = sender.send(request);
+        if (payloadBytes < 0) {
+            for (final RegionStamp stamp : inFlight.pending) {
+                regionInFlightStamps.remove(stamp);
+            }
+            return;
+        }
+        regionInFlightRequests.put(reqId, inFlight);
+        lastSent = millisClock.getAsLong();
+    }
+
+    private static void sendClientFeedback(final String text) {
+        final net.minecraft.client.MinecraftClient client = net.minecraft.client.MinecraftClient.getInstance();
+        if (client != null) {
+            client.execute(() -> {
+                if (client.player != null) {
+                    //#if MC>=260100
+                    //$$ client.player.sendSystemMessage(Texts.literal(text));
+                    //#else
+                    client.player.sendMessage(Texts.literal(text), false);
+                    //#endif
+                }
+            });
+        }
     }
 }
