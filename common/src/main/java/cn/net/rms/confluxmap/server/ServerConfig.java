@@ -1,6 +1,5 @@
 package cn.net.rms.confluxmap.server;
 
-import cn.net.rms.confluxmap.core.config.ConfluxConfig.MapQuality;
 import cn.net.rms.confluxmap.core.net.Proto;
 import cn.net.rms.confluxmap.core.net.shared.SharedWaypointProto;
 import cn.net.rms.confluxmap.server.shared.SharedWaypointService;
@@ -22,11 +21,12 @@ public final class ServerConfig {
     /** Master toggle for the companion. When false, no handshake replies are sent. */
     public boolean enabled = true;
     /**
-     * Map quality level ceiling enforced on sync:
-     * ULTRA_PERFORMANCE, PERFORMANCE, BALANCED, QUALITY, ULTRA_QUALITY.
+     * Whether operators may push the full generated-region manifest so cooperating clients can
+     * bulk-pull the entire explored map of a dimension. This discloses every generated area of
+     * the world - far beyond the viewport-scoped data {@link #shareCorrections} leaks - so it is
+     * a deliberate opt-in independent of that flag and defaults OFF.
      */
-    public String _comment_mapQuality = "Options: ULTRA_PERFORMANCE, PERFORMANCE, BALANCED, QUALITY, ULTRA_QUALITY";
-    public MapQuality mapQuality = MapQuality.BALANCED;
+    public boolean fullSyncEnabled = false;
     /** Dedicated-server startup GitHub release probe; a newer version is announced on the console. */
     public boolean checkForUpdates = true;
     /**

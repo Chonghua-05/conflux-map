@@ -864,6 +864,80 @@ class MsgCodecTest {
         assertThrows(ProtoException.class, () -> MsgCodec.encode(new BiomeLangS2C(names)));
     }
 
+    @Test
+    void fullSyncManifestRoundTrips() throws ProtoException {
+        final List<MapFullSyncManifestS2C.RegionCoord> regions = List.of(
+            new MapFullSyncManifestS2C.RegionCoord(-5, 7),
+            new MapFullSyncManifestS2C.RegionCoord(0, 0)
+        );
+        final MapFullSyncManifestS2C page =
+            new MapFullSyncManifestS2C(0xBEEF, 2, 3, 1, 4, false, regions);
+        final MapFullSyncManifestS2C decoded =
+            (MapFullSyncManifestS2C) MsgCodec.decode(MsgCodec.encode(page));
+        assertEquals(Proto.MSG_MAP_FULL_SYNC_MANIFEST_S2C, decoded.typeId());
+        assertEquals(0xBEEF, decoded.syncId());
+        assertEquals(2, decoded.dimIndex());
+        assertEquals(3, decoded.lod());
+        assertEquals(1, decoded.pageIndex());
+        assertEquals(4, decoded.pageCount());
+        assertFalse(decoded.cancel());
+        assertEquals(regions, decoded.regions());
+
+        final MapFullSyncManifestS2C cancel = MapFullSyncManifestS2C.cancel(0);
+        final MapFullSyncManifestS2C decodedCancel =
+            (MapFullSyncManifestS2C) MsgCodec.decode(MsgCodec.encode(cancel));
+        assertTrue(decodedCancel.cancel());
+        assertTrue(decodedCancel.regions().isEmpty());
+    }
+
+    @Test
+    void fullSyncManifestRejectsOutOfRangeFields() throws ProtoException {
+        final List<MapFullSyncManifestS2C.RegionCoord> regions = List.of(
+            new MapFullSyncManifestS2C.RegionCoord(1, 1)
+        );
+        assertThrows(ProtoException.class,
+            () -> MsgCodec.encode(new MapFullSyncManifestS2C(0x10000, 0, 0, 0, 1, false, regions)));
+        assertThrows(ProtoException.class,
+            () -> MsgCodec.encode(new MapFullSyncManifestS2C(0, Proto.MAX_DIM_ENTRIES, 0, 0, 1, false, regions)));
+        assertThrows(ProtoException.class,
+            () -> MsgCodec.encode(new MapFullSyncManifestS2C(0, 0, Proto.DEFAULT_MAX_PATCH_LOD + 1, 0, 1, false, regions)));
+        assertThrows(ProtoException.class,
+            () -> MsgCodec.encode(new MapFullSyncManifestS2C(0, 0, 0, 0, 0, false, regions)));
+        assertThrows(ProtoException.class,
+            () -> MsgCodec.encode(new MapFullSyncManifestS2C(0, 0, 0, 0, Proto.MAX_FULL_SYNC_PAGES + 1, false, regions)));
+        assertThrows(ProtoException.class,
+            () -> MsgCodec.encode(new MapFullSyncManifestS2C(0, 0, 0, 2, 2, false, regions)));
+        // A cancel page carrying regions is not a valid control page.
+        assertThrows(ProtoException.class,
+            () -> MsgCodec.encode(new MapFullSyncManifestS2C(0, 0, 0, 0, 1, true, regions)));
+    }
+
+    @Test
+    void fullSyncManifestPageRegionCapIsEnforcedInBothDirections() throws Exception {
+        final List<MapFullSyncManifestS2C.RegionCoord> tooMany = new ArrayList<>();
+        for (int i = 0; i <= Proto.MAX_FULL_SYNC_PAGE_REGIONS; i++) {
+            tooMany.add(new MapFullSyncManifestS2C.RegionCoord(i, 0));
+        }
+        assertThrows(ProtoException.class,
+            () -> MsgCodec.encode(new MapFullSyncManifestS2C(0, 0, 0, 0, 1, false, tooMany)));
+
+        // A forged wire page claiming more regions than the cap must be rejected on decode.
+        final java.io.ByteArrayOutputStream bytes = new java.io.ByteArrayOutputStream();
+        final java.io.DataOutputStream out = new java.io.DataOutputStream(bytes);
+        out.writeShort(1);
+        out.writeByte(0);
+        out.writeByte(0);
+        out.writeByte(0);
+        out.writeByte(1);
+        out.writeByte(0);
+        out.writeShort(Proto.MAX_FULL_SYNC_PAGE_REGIONS + 1);
+        out.flush();
+        final byte[] payload = new byte[bytes.size() + 1];
+        payload[0] = (byte) Proto.MSG_MAP_FULL_SYNC_MANIFEST_S2C;
+        System.arraycopy(bytes.toByteArray(), 0, payload, 1, bytes.size());
+        assertThrows(ProtoException.class, () -> MsgCodec.decode(payload));
+    }
+
     private static List<HelloPolicyS2C.DimDescriptor> randomDims(final Random rng) {
         final int n = rng.nextInt(Proto.MAX_DIM_ENTRIES) + 1;
         final HelloPolicyS2C.DimDescriptor[] dims = new HelloPolicyS2C.DimDescriptor[n];

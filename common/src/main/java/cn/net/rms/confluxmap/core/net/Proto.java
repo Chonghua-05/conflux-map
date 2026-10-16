@@ -88,10 +88,8 @@ public final class Proto {
     public static final int MSG_BIOME_LANG_REQ_C2S = 0x16;
     /** S2C: merged datapack biome display names; empty when the world's packs ship none. */
     public static final int MSG_BIOME_LANG_S2C = 0x17;
-    /** C2S: client requests full sync for one dimension. */
-    public static final int MSG_MAP_FULL_SYNC_REQ_C2S = 0x18;
-    /** S2C: server provides list of existing generated regions for full sync. */
-    public static final int MSG_MAP_FULL_SYNC_MANIFEST_S2C = 0x19;
+    /** S2C: one page of the generated-region manifest for a server-initiated full sync. */
+    public static final int MSG_MAP_FULL_SYNC_MANIFEST_S2C = 0x18;
 
     /** First valid message id; used to range-check the type byte. */
     public static final int MSG_MIN = MSG_HELLO_C2S;
@@ -137,6 +135,10 @@ public final class Proto {
     public static final int MAX_REGION_PAGES_PER_REQ = 32;
     /** Maximum changed summary regions carried by one invalidation. */
     public static final int MAX_REGION_INVALIDATIONS = 256;
+    /** Maximum summary regions carried by one full-sync manifest page. */
+    public static final int MAX_FULL_SYNC_PAGE_REGIONS = 4_096;
+    /** Maximum pages in one full-sync manifest (cap for the total manifest size). */
+    public static final int MAX_FULL_SYNC_PAGES = 128;
     /** Maximum exact correction viewport width or height in chunks. */
     public static final int MAX_REGION_SYNC_SPAN_CHUNKS = 4_096;
     /** Bounds client reseed work while remaining above vanilla's maximum chunk-send radius. */

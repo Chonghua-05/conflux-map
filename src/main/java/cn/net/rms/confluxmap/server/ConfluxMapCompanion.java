@@ -204,6 +204,7 @@ public final class ConfluxMapCompanion {
         if (langs != null) {
             langs.shutdown();
         }
+        networking.shutdown();
         datapackLangs = null;
         summaries = null;
         quadraLayouts = Map.of();

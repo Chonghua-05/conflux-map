@@ -14,7 +14,6 @@ import cn.net.rms.confluxmap.core.net.FlatBaselineS2C;
 import cn.net.rms.confluxmap.core.net.HelloC2S;
 import cn.net.rms.confluxmap.core.net.HelloPolicyS2C;
 import cn.net.rms.confluxmap.core.net.LoadStateSubscribeC2S;
-import cn.net.rms.confluxmap.core.net.MapFullSyncReqC2S;
 import cn.net.rms.confluxmap.core.net.MapFullSyncManifestS2C;
 import cn.net.rms.confluxmap.core.net.MapSyncCapability;
 import cn.net.rms.confluxmap.core.net.MapRegionSyncSubscribeC2S;
@@ -42,6 +41,9 @@ import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentMap;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.atomic.AtomicInteger;
 import net.fabricmc.fabric.api.networking.v1.ServerPlayConnectionEvents;
 import net.minecraft.server.MinecraftServer;
 import net.minecraft.server.network.ServerPlayerEntity;
@@ -68,6 +70,13 @@ public final class ServerNetworking {
     /** Last BIOME_LANG answer time per player; one disk scan per interval is plenty. */
     private final ConcurrentMap<UUID, Long> biomeLangRequests = new ConcurrentHashMap<>();
     private static final long BIOME_LANG_REQUEST_INTERVAL_NANOS = 5_000_000_000L;
+    /** Full-sync region scans run off the server thread; pages are sent back on it. */
+    private final ExecutorService fullSyncWorker = Executors.newSingleThreadExecutor(runnable -> {
+        final Thread thread = new Thread(runnable, "ConfluxMap Full Sync");
+        thread.setDaemon(true);
+        return thread;
+    });
+    private final AtomicInteger fullSyncSyncIds = new AtomicInteger();
     private boolean registered;
 
     public ServerNetworking(final ConfluxMapCompanion companion) {
@@ -95,6 +104,11 @@ public final class ServerNetworking {
                 loadStates.remove(uuid);
             }
         });
+    }
+
+    /** Stops the full-sync scan worker; safe to call from server stop on any thread. */
+    public void shutdown() {
+        fullSyncWorker.shutdownNow();
     }
 
     private void onReceive(
@@ -138,8 +152,6 @@ public final class ServerNetworking {
                 handleMapRegionSyncSubscribe(server, player, req);
             } else if (msg instanceof final BiomeLangReqC2S req) {
                 handleBiomeLangReq(server, player, req);
-            } else if (msg instanceof final MapFullSyncReqC2S req) {
-                handleMapFullSyncReq(server, player, req);
             } else {
                 ConfluxMapMod.LOGGER.warn(
                     "[ConfluxMap] companion: unexpected {} from {} (server-side handlers expect C2S only)",
@@ -201,53 +213,89 @@ public final class ServerNetworking {
         );
     }
 
-    private void handleMapFullSyncReq(
+    /** Whether this player negotiated a session that may receive full-sync manifests. */
+    public boolean canFullSync(final ServerPlayerEntity player) {
+        final NegotiatedMapSync session = peerSession(player);
+        return session != null && session.correctionsEnabled()
+            && session.supports(MapSyncCapability.FULL_SYNC);
+    }
+
+    /**
+     * Scans the player's current dimension off-thread and streams the manifest pages to the
+     * player, nearest regions first. Status lines are reported on the server thread through
+     * {@code onStatus} so the invoking command can address its own source.
+     */
+    public void startFullSync(
         final MinecraftServer server,
         final ServerPlayerEntity player,
-        final MapFullSyncReqC2S req
+        final java.util.function.Consumer<String> onStatus
     ) {
         final NegotiatedMapSync session = peerSession(player);
-        if (session == null || !companion.config().shareCorrections || !session.correctionsEnabled()) {
+        if (session == null || !session.correctionsEnabled()
+            || !session.supports(MapSyncCapability.FULL_SYNC)) {
             return;
         }
-        if (req.cancel()) {
-            // Cancel requests are acknowledged and gracefully stopped
+        final String dimId = player.getServerWorld().getRegistryKey().getValue().toString();
+        final int dimIndex = dimensionIndex(server, dimId);
+        if (dimIndex < 0) {
+            onStatus.accept("[ConfluxMap] Unable to resolve the dimension index for " + dimId + ".");
             return;
         }
-        final List<HelloPolicyS2C.DimDescriptor> dims = buildDimDescriptors(server, false);
-        if (req.dimIndex() < 0 || req.dimIndex() >= dims.size()) {
-            return;
-        }
-        final String dimId = dims.get(req.dimIndex()).dimId();
-        final java.nio.file.Path worldRoot = server.getSavePath(net.minecraft.util.WorldSavePath.ROOT);
-        final java.nio.file.Path regionDir = RegionStoragePaths.regionDirectory(worldRoot, dimId);
-        final List<MapFullSyncManifestS2C.RegionCoord> coords = new ArrayList<>();
-        if (java.nio.file.Files.isDirectory(regionDir)) {
-            try (java.util.stream.Stream<java.nio.file.Path> stream = java.nio.file.Files.list(regionDir)) {
-                stream.forEach(file -> {
-                    final String name = file.getFileName().toString();
-                    if (name.startsWith("r.") && name.endsWith(".mca")) {
-                        final String[] parts = name.split("\\.");
-                        if (parts.length == 4) {
-                            try {
-                                final int mcaX = Integer.parseInt(parts[1]);
-                                final int mcaZ = Integer.parseInt(parts[2]);
-                                // Each 32x32-chunk MCA file contains 2x2 16x16-chunk summary regions
-                                for (int dz = 0; dz < 2; dz++) {
-                                    for (int dx = 0; dx < 2; dx++) {
-                                        coords.add(new MapFullSyncManifestS2C.RegionCoord(mcaX * 2 + dx, mcaZ * 2 + dz));
-                                    }
-                                }
-                            } catch (final NumberFormatException ignored) {
-                            }
-                        }
+        final double playerX = player.getX();
+        final double playerZ = player.getZ();
+        final java.nio.file.Path regionDir = RegionStoragePaths.regionDirectory(
+            server.getSavePath(net.minecraft.util.WorldSavePath.ROOT), dimId
+        );
+        final int syncId = fullSyncSyncIds.incrementAndGet() & 0xFFFF;
+        fullSyncWorker.execute(() -> {
+            final RegionManifestScanner.ScanResult result;
+            try {
+                result = RegionManifestScanner.scan(regionDir);
+            } catch (final java.io.IOException e) {
+                ConfluxMapMod.LOGGER.warn(
+                    "[ConfluxMap] failed to list region directory for full sync: {}", regionDir, e
+                );
+                server.execute(() -> {
+                    if (!player.isDisconnected()) {
+                        onStatus.accept("[ConfluxMap] Full sync failed: the region directory is unreadable.");
                     }
                 });
-            } catch (final java.io.IOException e) {
-                ConfluxMapMod.LOGGER.warn("[ConfluxMap] failed to list region directory for full sync: {}", regionDir, e);
+                return;
             }
+            RegionManifestScanner.sortByDistance(result.regions(), playerX, playerZ);
+            final List<List<MapFullSyncManifestS2C.RegionCoord>> pages =
+                RegionManifestScanner.paginate(result.regions());
+            final int pageCount = Math.max(1, pages.size());
+            server.execute(() -> {
+                if (player.isDisconnected()) {
+                    return;
+                }
+                for (int i = 0; i < pageCount; i++) {
+                    final List<MapFullSyncManifestS2C.RegionCoord> page =
+                        pages.isEmpty() ? List.of() : pages.get(i);
+                    sendNegotiated(player, session, new MapFullSyncManifestS2C(
+                        syncId, dimIndex, 0, i, pageCount, false, page
+                    ));
+                }
+                if (result.truncated()) {
+                    onStatus.accept("[ConfluxMap] Full sync truncated to the " + result.regions().size()
+                        + " regions nearest to you; the world exceeds the manifest cap.");
+                } else {
+                    onStatus.accept("[ConfluxMap] Full sync started: " + result.regions().size()
+                        + " regions queued.");
+                }
+            });
+        });
+    }
+
+    /** Asks the player's client to stop the running full sync. */
+    public boolean cancelFullSync(final ServerPlayerEntity player) {
+        final NegotiatedMapSync session = peerSession(player);
+        if (session == null || !session.supports(MapSyncCapability.FULL_SYNC)) {
+            return false;
         }
-        sendNegotiated(player, session, new MapFullSyncManifestS2C(req.dimIndex(), req.lod(), coords));
+        sendNegotiated(player, session, MapFullSyncManifestS2C.cancel(0));
+        return true;
     }
 
     private void handleHello(final MinecraftServer server, final ServerPlayerEntity player, final HelloC2S hello) {
@@ -417,7 +465,7 @@ public final class ServerNetworking {
         }
     }
 
-    public int dimensionIndex(final MinecraftServer server, final String dimId) {
+    private int dimensionIndex(final MinecraftServer server, final String dimId) {
         final List<HelloPolicyS2C.DimDescriptor> dims = buildDimDescriptors(server, false);
         for (int i = 0; i < dims.size(); i++) {
             if (dims.get(i).dimId().equals(dimId)) {
@@ -425,13 +473,6 @@ public final class ServerNetworking {
             }
         }
         return -1;
-    }
-
-    public void sendToPlayer(final ServerPlayerEntity player, final Message msg) {
-        final NegotiatedMapSync session = peerSession(player);
-        if (session != null) {
-            sendNegotiated(player, session, msg);
-        }
     }
 
     private HelloPolicyS2C buildPolicy(

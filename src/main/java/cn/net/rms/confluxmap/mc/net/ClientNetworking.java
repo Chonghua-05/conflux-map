@@ -15,7 +15,6 @@ import cn.net.rms.confluxmap.core.net.HelloPolicyS2C;
 import cn.net.rms.confluxmap.core.net.LoadStateDeltaS2C;
 import cn.net.rms.confluxmap.core.net.MapCapabilitiesS2C;
 import cn.net.rms.confluxmap.core.net.MapCompatibilityS2C;
-import cn.net.rms.confluxmap.core.net.MapFullSyncReqC2S;
 import cn.net.rms.confluxmap.core.net.MapFullSyncManifestS2C;
 import cn.net.rms.confluxmap.core.net.MapInvalidateS2C;
 import cn.net.rms.confluxmap.core.net.MapPatchS2C;

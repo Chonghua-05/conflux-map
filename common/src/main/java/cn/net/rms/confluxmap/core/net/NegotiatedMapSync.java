@@ -127,6 +127,7 @@ public final class NegotiatedMapSync {
             case Proto.MSG_QUADRA_LAYOUT_S2C -> MapSyncCapability.QUADRA_LAYOUT;
             case Proto.MSG_BIOME_LANG_REQ_C2S, Proto.MSG_BIOME_LANG_S2C ->
                 MapSyncCapability.DATAPACK_BIOME_LANGS;
+            case Proto.MSG_MAP_FULL_SYNC_MANIFEST_S2C -> MapSyncCapability.FULL_SYNC;
             default -> null;
         };
         if (required != null && !supports(required)) {

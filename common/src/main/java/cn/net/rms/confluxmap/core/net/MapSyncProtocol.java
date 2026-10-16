@@ -213,7 +213,8 @@ public final class MapSyncProtocol {
             || typeId == Proto.MSG_SERVER_INSTANCE_S2C
             || typeId == Proto.MSG_PLAYER_POSITIONS_S2C
             || typeId == Proto.MSG_QUADRA_LAYOUT_S2C
-            || typeId == Proto.MSG_BIOME_LANG_S2C;
+            || typeId == Proto.MSG_BIOME_LANG_S2C
+            || typeId == Proto.MSG_MAP_FULL_SYNC_MANIFEST_S2C;
     }
 
     public static Message decodeServerbound(final byte[] payload) throws ProtoException {

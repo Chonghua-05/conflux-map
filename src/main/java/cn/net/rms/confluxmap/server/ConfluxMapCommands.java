@@ -100,8 +100,12 @@ final class ConfluxMapCommands {
                         companion, context.getSource(), false
                     ))))
                 .then(literal("fullsync")
-                    .requires(source -> source.getEntity() instanceof ServerPlayerEntity)
-                    .executes(context -> fullSync(companion, context.getSource())))
+                    .requires(source -> source.getEntity() instanceof ServerPlayerEntity
+                        && MinecraftAccess.hasPermission(source, 2))
+                    .executes(context -> fullSync(companion, context.getSource(), false))
+                    .then(literal("cancel").executes(context -> fullSync(
+                        companion, context.getSource(), true
+                    ))))
         ));
     }
 
@@ -369,53 +373,38 @@ final class ConfluxMapCommands {
         };
     }
 
+    /**
+     * Operator-only, deliberate opt-in ({@code fullSyncEnabled}): pushes the dimension's whole
+     * generated-region manifest to the executing player's Conflux Map client, which then
+     * bulk-pulls every region. Cancel asks the client to stop a running sync.
+     */
     private static int fullSync(
         final ConfluxMapCompanion companion,
-        final ServerCommandSource source
+        final ServerCommandSource source,
+        final boolean cancel
     ) {
         if (!(source.getEntity() instanceof final ServerPlayerEntity player)) {
-            return error(source, "[ConfluxMap] 全量同步只能由玩家执行。");
+            return error(source, "[ConfluxMap] Full sync must be run by a player.");
         }
         if (!companion.isEnabled() || !companion.config().shareCorrections) {
-            return error(source, "[ConfluxMap] 本服务器已禁用地图同步功能。");
+            return error(source, "[ConfluxMap] Map sync is disabled on this server.");
         }
-        final String dimId = player.getServerWorld().getRegistryKey().getValue().toString();
-        final java.nio.file.Path worldRoot = source.getServer().getSavePath(net.minecraft.util.WorldSavePath.ROOT);
-        final java.nio.file.Path regionDir = RegionStoragePaths.regionDirectory(worldRoot, dimId);
-        final java.util.List<cn.net.rms.confluxmap.core.net.MapFullSyncManifestS2C.RegionCoord> coords = new java.util.ArrayList<>();
-        if (java.nio.file.Files.isDirectory(regionDir)) {
-            try (java.util.stream.Stream<java.nio.file.Path> stream = java.nio.file.Files.list(regionDir)) {
-                stream.forEach(file -> {
-                    final String name = file.getFileName().toString();
-                    if (name.startsWith("r.") && name.endsWith(".mca")) {
-                        final String[] parts = name.split("\\.");
-                        if (parts.length == 4) {
-                            try {
-                                final int mcaX = Integer.parseInt(parts[1]);
-                                final int mcaZ = Integer.parseInt(parts[2]);
-                                for (int dz = 0; dz < 2; dz++) {
-                                    for (int dx = 0; dx < 2; dx++) {
-                                        coords.add(new cn.net.rms.confluxmap.core.net.MapFullSyncManifestS2C.RegionCoord(mcaX * 2 + dx, mcaZ * 2 + dz));
-                                    }
-                                }
-                            } catch (final NumberFormatException ignored) {
-                            }
-                        }
-                    }
-                });
-            } catch (final java.io.IOException e) {
-                ConfluxMapMod.LOGGER.warn("[ConfluxMap] failed to list region directory for full sync: {}", regionDir, e);
-            }
+        if (!companion.config().fullSyncEnabled) {
+            return error(source, "[ConfluxMap] Full sync is disabled on this server "
+                + "(config/confluxmap/server.json: fullSyncEnabled).");
         }
-        final int dimIndex = companion.networking().dimensionIndex(source.getServer(), dimId);
-        if (dimIndex >= 0) {
-            companion.networking().sendToPlayer(
-                player,
-                new cn.net.rms.confluxmap.core.net.MapFullSyncManifestS2C(dimIndex, 0, coords)
-            );
-            return feedback(source, "[ConfluxMap] 已启动全量同步：已将 " + coords.size() + " 个区域加入同步队列。");
+        final ServerNetworking networking = companion.networking();
+        if (!networking.canFullSync(player)) {
+            return error(source, "[ConfluxMap] Full sync needs the Conflux Map client mod "
+                + "with map corrections active.");
         }
-        return error(source, "[ConfluxMap] 无法解析当前维度索引：" + dimId);
+        if (cancel) {
+            return networking.cancelFullSync(player)
+                ? feedback(source, "[ConfluxMap] Full sync cancel sent.")
+                : error(source, "[ConfluxMap] No companion session for that player.");
+        }
+        networking.startFullSync(source.getServer(), player, message -> feedback(source, message));
+        return feedback(source, "[ConfluxMap] Full sync requested; scanning region files...");
     }
 
     private static int feedback(final ServerCommandSource source, final String message) {

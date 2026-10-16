@@ -142,6 +142,7 @@ All companion-shared content is controlled in `config/confluxmap/server.json`:
 - `enabled` is the master switch; `checkForUpdates` announces a newer version in the server console at startup.
 - `shareSeed` sends the world seed to clients so they can predict biomes and structures. It is disabled by default because sharing the seed exposes it to every player; `allowBiomeMap` and `allowStructureSearch` control the biome layer and the structure finder separately.
 - `shareCorrections` sends real-terrain data from the server to correct predicted maps.
+- `fullSyncEnabled` allows operators to run `/confluxmap fullsync`, which bulk-syncs every generated region of the current dimension to their own client (cancel with `/confluxmap fullsync cancel`). It discloses the entire generated map, so it is disabled by default and additionally requires operator permission and the Fabric companion.
 - `shareChunkLoadState` exposes the chunks the server keeps loaded. It is disabled by default to reduce exposure of player activity and farm locations.
 - `allowEntityRadar` defaults to `true` and shares every online player's live position with compatible clients; disabling it stops the position stream and turns the client radar off.
 - `shareWaypoints` enables the shared waypoint list and defaults to `true`; `allowNonOperatorSharedWaypointManagement` defaults to letting ordinary players manage the entries they published.

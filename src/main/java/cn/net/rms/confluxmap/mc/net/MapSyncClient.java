@@ -9,7 +9,6 @@ import cn.net.rms.confluxmap.core.net.CorrectionProfile;
 import cn.net.rms.confluxmap.core.net.HelloPolicyS2C;
 import cn.net.rms.confluxmap.core.net.MapPatchS2C;
 import cn.net.rms.confluxmap.core.net.MapInvalidateS2C;
-import cn.net.rms.confluxmap.core.net.MapFullSyncReqC2S;
 import cn.net.rms.confluxmap.core.net.MapFullSyncManifestS2C;
 import cn.net.rms.confluxmap.core.net.FullSyncTracker;
 import cn.net.rms.confluxmap.core.net.MapRegionInvalidateS2C;
@@ -29,6 +28,7 @@ import cn.net.rms.confluxmap.core.predict.ViewRequestPlanner;
 import cn.net.rms.confluxmap.core.util.ChunkRegionSlice;
 import cn.net.rms.confluxmap.core.util.ChunkViewport;
 import cn.net.rms.confluxmap.core.util.TileMath;
+import java.util.ArrayDeque;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.HashSet;
@@ -60,6 +60,13 @@ public final class MapSyncClient {
      * hiding one round trip of latency.
      */
     private static final int MAX_INFLIGHT_REQUESTS = 2;
+    /**
+     * Full sync uses at most one of the two in-flight slots so viewport requests keep one
+     * and the map stays responsive for the whole (possibly minutes-long) sync.
+     */
+    private static final int FULL_SYNC_MAX_INFLIGHT = 1;
+    /** A region that failed this many times is skipped and reported, not retried forever. */
+    private static final int FULL_SYNC_MAX_ATTEMPTS = 3;
 
     private final CompanionSession companion;
     private final Sender sender;
@@ -100,6 +107,19 @@ public final class MapSyncClient {
     private final Set<RegionStamp> regionInFlightStamps = new HashSet<>();
     private final Set<RegionStamp> settledRegions = new HashSet<>();
     private final Set<RegionStamp> invalidatedRegions = new HashSet<>();
+    private final FullSyncTracker fullSyncTracker =
+        new FullSyncTracker(MapSyncClient::sendClientFeedback);
+    private final ArrayDeque<FullSyncPendingRegion> fullSyncPendingQueue = new ArrayDeque<>();
+    private int fullSyncSyncId = -1;
+    private int fullSyncDimIndex = -1;
+    private int fullSyncLod;
+    private long lastFullSyncSentMs;
+    private int manifestSyncId = -1;
+    private int manifestDimIndex;
+    private int manifestLod;
+    private int manifestPageCount;
+    private int manifestNextPageIndex;
+    private List<MapFullSyncManifestS2C.RegionCoord> manifestRegions;
     private ChunkViewport lastChunkViewport;
     private ChunkViewport lastExcludedChunkViewport;
 
@@ -107,6 +127,10 @@ public final class MapSyncClient {
     }
 
     private record RegionStamp(String dimension, int lod, ChunkRegionSlice slice) {
+    }
+
+    /** One queued full-sync region plus how often it already failed to arrive. */
+    private record FullSyncPendingRegion(ChunkRegionSlice slice, int attempts) {
     }
 
     private static final class InFlightRequest {
@@ -126,15 +150,30 @@ public final class MapSyncClient {
         final String dimension;
         final int dimIndex;
         final int lod;
+        final boolean fullSync;
+        /** Unanswered full-sync regions with their attempt counts; null for viewport requests. */
+        List<FullSyncPendingRegion> fullSyncEntries;
         long lastActivityMs;
         final Set<RegionStamp> pending = new HashSet<>();
 
         RegionInFlightRequest(
             final String dimension, final int dimIndex, final int lod, final long sentAtMs
         ) {
+            this(dimension, dimIndex, lod, sentAtMs, null);
+        }
+
+        RegionInFlightRequest(
+            final String dimension,
+            final int dimIndex,
+            final int lod,
+            final long sentAtMs,
+            final List<FullSyncPendingRegion> fullSyncEntries
+        ) {
             this.dimension = dimension;
             this.dimIndex = dimIndex;
             this.lod = lod;
+            this.fullSync = fullSyncEntries != null;
+            this.fullSyncEntries = fullSyncEntries;
             this.lastActivityMs = sentAtMs;
         }
     }
@@ -209,6 +248,7 @@ public final class MapSyncClient {
         final long now = millisClock.getAsLong();
         corrections.flushIfDue(now);
         expireStalledRequests(now);
+        pumpFullSync(now);
         final String dimensionId = dimension.toString();
         final boolean changed = !dimensionId.equals(lastDimension)
             || lod != lastLod || minX != lastMinX || maxX != lastMaxX || minZ != lastMinZ || maxZ != lastMaxZ;
@@ -366,6 +406,7 @@ public final class MapSyncClient {
         final long now = millisClock.getAsLong();
         corrections.flushIfDue(now);
         expireStalledRegionRequests(now);
+        pumpFullSync(now);
         final String dimensionId = dimension.toString();
         final boolean changed = !dimensionId.equals(lastDimension)
             || lod != lastLod || !chunks.equals(lastChunkViewport)
@@ -545,9 +586,13 @@ public final class MapSyncClient {
             invalidatedRegions.remove(stamp);
             settledRegions.add(stamp);
         }
-        if (fullSyncTracker.isRunning()) {
-            fullSyncTracker.recordProgress(payloadBytes, System.nanoTime());
-            sendNextFullSyncBatch();
+        if (request.fullSync) {
+            if (request.fullSyncEntries != null) {
+                request.fullSyncEntries.removeIf(entry -> entry.slice().equals(patch.slice()));
+            }
+            if (fullSyncTracker.isRunning()) {
+                fullSyncTracker.recordProgress(payloadBytes, System.nanoTime());
+            }
         }
         progress.regionPatchReceived(patch, payloadBytes, accepted, System.nanoTime());
     }
@@ -714,6 +759,7 @@ public final class MapSyncClient {
         partialRetryAfterMillis.clear();
         settledRegions.clear();
         invalidatedRegions.clear();
+        requeueInFlightFullSyncRegions();
         regionInFlightStamps.clear();
         regionInFlightRequests.clear();
         lastChunkViewport = null;
@@ -794,6 +840,8 @@ public final class MapSyncClient {
     }
 
     public synchronized void reset() {
+        fullSyncTracker.abandon();
+        clearFullSyncState();
         lastRequestNanos.clear();
         settledTiles.clear();
         invalidatedTiles.clear();
@@ -833,6 +881,7 @@ public final class MapSyncClient {
      * never finished syncing.
      */
     public synchronized void onError(final int payloadBytes) {
+        requeueInFlightFullSyncRegions();
         rollbackPendingTiles();
         rollbackPendingRegions();
         suppressedUntil = millisClock.getAsLong() + ERROR_BACKOFF_MS;
@@ -884,6 +933,9 @@ public final class MapSyncClient {
         while (pending.hasNext()) {
             final RegionInFlightRequest request = pending.next();
             if (now - request.lastActivityMs >= REQUEST_TIMEOUT_MS) {
+                if (request.fullSyncEntries != null) {
+                    requeueFullSyncRegions(request.fullSyncEntries);
+                }
                 regionInFlightStamps.removeAll(request.pending);
                 pending.remove();
             }
@@ -925,108 +977,200 @@ public final class MapSyncClient {
         return ((long) regionX << 32) ^ (regionZ & 0xFFFFFFFFL);
     }
 
-    private final FullSyncTracker fullSyncTracker = new FullSyncTracker(MapSyncClient::sendClientFeedback);
-    private int fullSyncDimIndex;
-    private int fullSyncLod;
-    private final java.util.Queue<ChunkRegionSlice> fullSyncPendingQueue = new java.util.ArrayDeque<>();
+    // ---- Server-initiated full sync ----
 
-    public synchronized void requestFullSync(final DimensionId dimension, final int lod) {
-        if (!companion.isActive()) {
-            return;
-        }
-        final int dimIndex = dimensionIndex(dimension);
-        if (dimIndex >= 0) {
-            sender.send(new MapFullSyncReqC2S(dimIndex, lod, false));
-        }
-    }
-
-    public synchronized void cancelFullSync() {
-        if (!companion.isActive()) {
-            return;
-        }
-        sender.send(new MapFullSyncReqC2S(0, 0, true));
-        fullSyncPendingQueue.clear();
-        fullSyncTracker.cancel();
-    }
-
+    /**
+     * Accumulates manifest pages under one sync id; the pull loop starts once the final
+     * page arrives. Pages arriving out of order (only possible after a reconnect dropped
+     * some) abort the accumulation - the player re-runs the command.
+     */
     public synchronized void onFullSyncManifest(final MapFullSyncManifestS2C manifest) {
-        fullSyncDimIndex = manifest.dimIndex();
-        fullSyncLod = manifest.lod();
-        fullSyncPendingQueue.clear();
-        fullSyncTracker.start(manifest.regions().size(), System.nanoTime());
-
-        if (manifest.regions().isEmpty()) {
+        if (manifest.cancel()) {
+            fullSyncTracker.cancel(System.nanoTime());
+            clearFullSyncState();
             return;
         }
-        for (final MapFullSyncManifestS2C.RegionCoord coord : manifest.regions()) {
-            fullSyncPendingQueue.add(new ChunkRegionSlice(coord.regionX(), coord.regionZ(), 0, 0, 15, 15));
+        if (manifest.pageIndex() == 0) {
+            // A fresh command supersedes any sync or partial manifest before it.
+            fullSyncTracker.abandon();
+            clearFullSyncState();
+            manifestSyncId = manifest.syncId();
+            manifestDimIndex = manifest.dimIndex();
+            manifestLod = manifest.lod();
+            manifestPageCount = manifest.pageCount();
+            manifestNextPageIndex = 1;
+            manifestRegions = new ArrayList<>(manifest.regions());
+        } else if (manifest.syncId() != manifestSyncId
+            || manifest.pageIndex() != manifestNextPageIndex
+            || manifest.pageCount() != manifestPageCount) {
+            // A running sync ignores stray pages; an idle client drops a half-received manifest.
+            if (!fullSyncTracker.isRunning()) {
+                clearFullSyncState();
+            }
+            return;
+        } else {
+            manifestRegions.addAll(manifest.regions());
+            manifestNextPageIndex++;
         }
-        // Dispatch up to MAX_INFLIGHT_REQUESTS
-        while (regionInFlightRequests.size() < MAX_INFLIGHT_REQUESTS && !fullSyncPendingQueue.isEmpty()) {
-            sendNextFullSyncBatch();
+        if (manifestNextPageIndex >= manifestPageCount) {
+            beginFullSync();
         }
     }
 
-    private void sendNextFullSyncBatch() {
-        if (!fullSyncTracker.isRunning() || fullSyncPendingQueue.isEmpty() || regionInFlightRequests.size() >= MAX_INFLIGHT_REQUESTS) {
+    private void beginFullSync() {
+        fullSyncDimIndex = manifestDimIndex;
+        fullSyncLod = manifestLod;
+        fullSyncSyncId = manifestSyncId;
+        fullSyncPendingQueue.clear();
+        for (final MapFullSyncManifestS2C.RegionCoord coord : manifestRegions) {
+            fullSyncPendingQueue.add(new FullSyncPendingRegion(
+                new ChunkRegionSlice(
+                    coord.regionX(), coord.regionZ(),
+                    0, 0, ChunkRegionSlice.REGION_CHUNKS - 1, ChunkRegionSlice.REGION_CHUNKS - 1
+                ),
+                0
+            ));
+        }
+        fullSyncTracker.start(fullSyncPendingQueue.size(), System.nanoTime());
+        manifestRegions = null;
+        lastFullSyncSentMs = 0L;
+        pumpFullSync(millisClock.getAsLong());
+    }
+
+    /** Drives the pull from the report tick: paced by the server budget, one slot, stall-watched. */
+    private void pumpFullSync(final long now) {
+        if (!fullSyncTracker.isRunning()) {
+            return;
+        }
+        if (fullSyncTracker.isStalled(System.nanoTime())) {
+            fullSyncTracker.failStalled(System.nanoTime());
+            clearFullSyncState();
+            return;
+        }
+        if (now < suppressedUntil || countInFlightFullSyncRequests() >= FULL_SYNC_MAX_INFLIGHT) {
             return;
         }
         final HelloPolicyS2C policy = companion.policy();
-        if (policy == null || fullSyncDimIndex < 0 || fullSyncDimIndex >= policy.dims().size()) {
+        if (policy == null) {
+            return;
+        }
+        if (now - lastFullSyncSentMs
+            < policy.budgets().minReqIntervalMs() + REQUEST_INTERVAL_MARGIN_MS) {
+            return;
+        }
+        sendNextFullSyncBatch(now);
+    }
+
+    private int countInFlightFullSyncRequests() {
+        int count = 0;
+        for (final RegionInFlightRequest request : regionInFlightRequests.values()) {
+            if (request.fullSync) {
+                count++;
+            }
+        }
+        return count;
+    }
+
+    private void sendNextFullSyncBatch(final long now) {
+        final HelloPolicyS2C policy = companion.policy();
+        if (fullSyncPendingQueue.isEmpty() || policy == null
+            || fullSyncDimIndex < 0 || fullSyncDimIndex >= policy.dims().size()) {
             return;
         }
         final String dimension = policy.dims().get(fullSyncDimIndex).dimId();
         final int batchLimit = Math.min(
-            Proto.MAX_REGION_PAGES_PER_REQ,
-            policy.budgets().maxTilesPerReq()
-        );
-        final List<MapRegionViewReqC2S.RegionReq> regions = new ArrayList<>(batchLimit);
+            Proto.MAX_REGION_PAGES_PER_REQ, Math.max(1, policy.budgets().maxTilesPerReq()));
+        final List<FullSyncPendingRegion> batch = new ArrayList<>(batchLimit);
+        final List<FullSyncPendingRegion> deferred = new ArrayList<>();
+        while (batch.size() < batchLimit && !fullSyncPendingQueue.isEmpty()) {
+            final FullSyncPendingRegion entry = fullSyncPendingQueue.poll();
+            if (regionInFlightStamps.contains(new RegionStamp(dimension, fullSyncLod, entry.slice()))) {
+                // The viewport loop is already fetching this region; retry it on a later pump.
+                deferred.add(entry);
+            } else {
+                batch.add(entry);
+            }
+        }
+        fullSyncPendingQueue.addAll(deferred);
+        if (batch.isEmpty()) {
+            return;
+        }
         final int reqId = nextReqId++ & 0x7FFF;
         final RegionInFlightRequest inFlight = new RegionInFlightRequest(
-            dimension, fullSyncDimIndex, fullSyncLod, millisClock.getAsLong()
+            dimension, fullSyncDimIndex, fullSyncLod, now, batch
         );
-        while (regions.size() < batchLimit && !fullSyncPendingQueue.isEmpty()) {
-            final ChunkRegionSlice slice = fullSyncPendingQueue.poll();
-            final RegionStamp stamp = new RegionStamp(dimension, fullSyncLod, slice);
+        final List<MapRegionViewReqC2S.RegionReq> regions = new ArrayList<>(batch.size());
+        for (final FullSyncPendingRegion entry : batch) {
+            final RegionStamp stamp = new RegionStamp(dimension, fullSyncLod, entry.slice());
             inFlight.pending.add(stamp);
             regionInFlightStamps.add(stamp);
             regions.add(new MapRegionViewReqC2S.RegionReq(
-                slice,
+                entry.slice(),
                 corrections.regionSliceRevision(
-                    dimension, fullSyncLod, slice, activePatchMode(), activeBaselineProfile(),
+                    dimension, fullSyncLod, entry.slice(), activePatchMode(), activeBaselineProfile(),
                     activeCorrectionProfile()
                 )
             ));
         }
-        if (regions.isEmpty()) {
-            return;
-        }
-        final MapRegionViewReqC2S request = new MapRegionViewReqC2S(
-            reqId, fullSyncDimIndex, fullSyncLod, regions
-        );
+        final MapRegionViewReqC2S request =
+            new MapRegionViewReqC2S(reqId, fullSyncDimIndex, fullSyncLod, regions);
         final int payloadBytes = sender.send(request);
+        // Pace even a failed send so a dead channel cannot drain the queue in one frame.
+        lastFullSyncSentMs = now;
         if (payloadBytes < 0) {
             for (final RegionStamp stamp : inFlight.pending) {
                 regionInFlightStamps.remove(stamp);
             }
+            requeueFullSyncRegions(batch);
             return;
         }
         regionInFlightRequests.put(reqId, inFlight);
-        lastSent = millisClock.getAsLong();
     }
 
-    private static void sendClientFeedback(final String text) {
-        final net.minecraft.client.MinecraftClient client = net.minecraft.client.MinecraftClient.getInstance();
-        if (client != null) {
-            client.execute(() -> {
-                if (client.player != null) {
-                    //#if MC>=260100
-                    //$$ client.player.sendSystemMessage(Texts.literal(text));
-                    //#else
-                    client.player.sendMessage(Texts.literal(text), false);
-                    //#endif
-                }
-            });
+    /** Returns unanswered full-sync regions to the queue, or gives up after too many attempts. */
+    private void requeueFullSyncRegions(final List<FullSyncPendingRegion> entries) {
+        final long nowNanos = System.nanoTime();
+        for (final FullSyncPendingRegion entry : entries) {
+            if (entry.attempts() >= FULL_SYNC_MAX_ATTEMPTS) {
+                fullSyncTracker.noteFailure(nowNanos);
+            } else {
+                fullSyncPendingQueue.addLast(new FullSyncPendingRegion(entry.slice(), entry.attempts() + 1));
+            }
         }
+    }
+
+    private void requeueInFlightFullSyncRegions() {
+        for (final RegionInFlightRequest request : regionInFlightRequests.values()) {
+            if (request.fullSyncEntries != null) {
+                requeueFullSyncRegions(request.fullSyncEntries);
+            }
+        }
+    }
+
+    private void clearFullSyncState() {
+        fullSyncPendingQueue.clear();
+        fullSyncSyncId = -1;
+        manifestSyncId = -1;
+        manifestRegions = null;
+        manifestPageCount = 0;
+        manifestNextPageIndex = 0;
+    }
+
+    private static void sendClientFeedback(final FullSyncTracker.Feedback feedback) {
+        final net.minecraft.client.MinecraftClient client = net.minecraft.client.MinecraftClient.getInstance();
+        if (client == null) {
+            return;
+        }
+        client.execute(() -> {
+            if (client.player == null) {
+                return;
+            }
+            final net.minecraft.text.Text text = Texts.translatable(feedback.key(), feedback.args());
+            //#if MC>=260100
+            //$$ client.player.sendSystemMessage(text);
+            //#else
+            client.player.sendMessage(text, false);
+            //#endif
+        });
     }
 }

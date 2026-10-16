@@ -142,6 +142,7 @@ Conflux Map 是一款 Fabric 平台的小地图与世界地图模组。客户端
 - `enabled` 为总开关；`checkForUpdates` 在服务端启动时于控制台提示新版本。
 - `shareSeed` 将世界种子发送至客户端，供预测群系与结构使用。默认关闭，因为共享后种子会暴露给所有玩家；`allowBiomeMap` 与 `allowStructureSearch` 分别控制群系图层与结构查找。
 - `shareCorrections` 将服务端掌握的真实地形发送至客户端，用于修正预测结果。
+- `fullSyncEnabled` 允许管理员执行 `/confluxmap fullsync`，把当前维度全部已生成区域一次性同步到自己的客户端（`/confluxmap fullsync cancel` 可中止）。该操作会暴露整张已生成地图，因此默认关闭，且需要管理员权限与 Fabric 组件。
 - `shareChunkLoadState` 公开服务端保持加载的区块，默认关闭，以减少玩家活动与农场位置的暴露。
 - `allowEntityRadar` 默认开启，向客户端发送所有在线玩家的实时位置；关闭后位置流停止，客户端实体雷达不可用。
 - `shareWaypoints` 启用共享路径点列表，默认开启；`allowNonOperatorSharedWaypointManagement` 默认允许普通玩家管理自己发布的条目。

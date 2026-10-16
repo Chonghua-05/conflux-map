@@ -112,8 +112,6 @@ public final class MsgCodec {
                 writeUtf(out, m.locale());
             } else if (msg instanceof final BiomeLangS2C m) {
                 encodeBiomeLangS2C(out, m);
-            } else if (msg instanceof final MapFullSyncReqC2S m) {
-                encodeMapFullSyncReqC2S(out, m);
             } else if (msg instanceof final MapFullSyncManifestS2C m) {
                 encodeMapFullSyncManifestS2C(out, m);
             } else {
@@ -695,7 +693,6 @@ public final class MsgCodec {
                     in, carriesTopMaterial(negotiated, MapSyncCapability.QUADRA_LAYOUT));
                 case Proto.MSG_BIOME_LANG_REQ_C2S -> new BiomeLangReqC2S(readUtf(in));
                 case Proto.MSG_BIOME_LANG_S2C -> decodeBiomeLangS2C(in);
-                case Proto.MSG_MAP_FULL_SYNC_REQ_C2S -> decodeMapFullSyncReqC2S(in);
                 case Proto.MSG_MAP_FULL_SYNC_MANIFEST_S2C -> decodeMapFullSyncManifestS2C(in);
                 default -> throw new ProtoException("unhandled message type id: 0x" + Integer.toHexString(typeId));
             };
@@ -1360,43 +1357,18 @@ public final class MsgCodec {
         }
     }
 
-    private static void encodeMapFullSyncReqC2S(
-        final DataOutputStream out, final MapFullSyncReqC2S m
-    ) throws IOException, ProtoException {
-        if (m.dimIndex() < 0 || m.dimIndex() >= Proto.MAX_DIM_ENTRIES) {
-            throw new ProtoException("full sync dimension out of range: " + m.dimIndex());
-        }
-        if (m.lod() < 0 || m.lod() > cn.net.rms.confluxmap.core.util.TileMath.MAX_LOD) {
-            throw new ProtoException("full sync LOD out of range: " + m.lod());
-        }
-        out.writeByte(m.dimIndex());
-        out.writeByte(m.lod());
-        out.writeByte(m.cancel() ? 1 : 0);
-    }
-
-    private static MapFullSyncReqC2S decodeMapFullSyncReqC2S(final DataInputStream in) throws IOException, ProtoException {
-        final int dimIndex = in.readUnsignedByte();
-        final int lod = in.readUnsignedByte();
-        final int flags = in.readUnsignedByte();
-        return new MapFullSyncReqC2S(dimIndex, lod, (flags & 1) != 0);
-    }
-
     private static void encodeMapFullSyncManifestS2C(
         final DataOutputStream out, final MapFullSyncManifestS2C m
     ) throws IOException, ProtoException {
-        if (m.dimIndex() < 0 || m.dimIndex() >= Proto.MAX_DIM_ENTRIES) {
-            throw new ProtoException("full sync manifest dimension out of range: " + m.dimIndex());
-        }
-        if (m.lod() < 0 || m.lod() > cn.net.rms.confluxmap.core.util.TileMath.MAX_LOD) {
-            throw new ProtoException("full sync manifest LOD out of range: " + m.lod());
-        }
+        validateManifest(m);
+        out.writeShort(m.syncId());
         out.writeByte(m.dimIndex());
         out.writeByte(m.lod());
-        out.writeInt(m.regions().size());
+        out.writeByte(m.pageIndex());
+        out.writeByte(m.pageCount());
+        out.writeByte(m.cancel() ? 1 : 0);
+        out.writeShort(m.regions().size());
         for (final MapFullSyncManifestS2C.RegionCoord coord : m.regions()) {
-            if (coord == null) {
-                throw new ProtoException("null region coordinate in full sync manifest");
-            }
             out.writeInt(coord.regionX());
             out.writeInt(coord.regionZ());
         }
@@ -1405,17 +1377,63 @@ public final class MsgCodec {
     private static MapFullSyncManifestS2C decodeMapFullSyncManifestS2C(
         final DataInputStream in
     ) throws IOException, ProtoException {
+        final int syncId = in.readUnsignedShort();
         final int dimIndex = in.readUnsignedByte();
         final int lod = in.readUnsignedByte();
-        final int count = in.readInt();
-        if (count < 0 || count > 100_000) {
-            throw new ProtoException("region count out of range: " + count);
+        final int pageIndex = in.readUnsignedByte();
+        final int pageCount = in.readUnsignedByte();
+        final boolean cancel = (in.readUnsignedByte() & 1) != 0;
+        final int count = in.readUnsignedShort();
+        if (count > Proto.MAX_FULL_SYNC_PAGE_REGIONS) {
+            throw new ProtoException(
+                "full sync manifest page region count " + count
+                    + " above cap " + Proto.MAX_FULL_SYNC_PAGE_REGIONS
+            );
         }
         final List<MapFullSyncManifestS2C.RegionCoord> regions = new ArrayList<>(count);
         for (int i = 0; i < count; i++) {
             regions.add(new MapFullSyncManifestS2C.RegionCoord(in.readInt(), in.readInt()));
         }
-        return new MapFullSyncManifestS2C(dimIndex, lod, regions);
+        final MapFullSyncManifestS2C manifest =
+            new MapFullSyncManifestS2C(syncId, dimIndex, lod, pageIndex, pageCount, cancel, regions);
+        validateManifest(manifest);
+        return manifest;
+    }
+
+    /** Range checks shared by both directions; every untrusted field is bounded here. */
+    private static void validateManifest(final MapFullSyncManifestS2C m) throws ProtoException {
+        if (m.syncId() < 0 || m.syncId() > 0xFFFF) {
+            throw new ProtoException("full sync manifest sync id out of range: " + m.syncId());
+        }
+        if (m.dimIndex() < 0 || m.dimIndex() >= Proto.MAX_DIM_ENTRIES) {
+            throw new ProtoException("full sync manifest dimension out of range: " + m.dimIndex());
+        }
+        if (m.lod() < 0 || m.lod() > cn.net.rms.confluxmap.core.util.TileMath.MAX_LOD) {
+            throw new ProtoException("full sync manifest LOD out of range: " + m.lod());
+        }
+        if (m.cancel()) {
+            if (m.pageCount() != 1 || m.pageIndex() != 0 || !m.regions().isEmpty()) {
+                throw new ProtoException("full sync cancel page must be a single empty page");
+            }
+            return;
+        }
+        if (m.pageCount() < 1 || m.pageCount() > Proto.MAX_FULL_SYNC_PAGES) {
+            throw new ProtoException("full sync manifest page count out of range: " + m.pageCount());
+        }
+        if (m.pageIndex() < 0 || m.pageIndex() >= m.pageCount()) {
+            throw new ProtoException("full sync manifest page index out of range: " + m.pageIndex());
+        }
+        if (m.regions().size() > Proto.MAX_FULL_SYNC_PAGE_REGIONS) {
+            throw new ProtoException(
+                "full sync manifest page region count " + m.regions().size()
+                    + " above cap " + Proto.MAX_FULL_SYNC_PAGE_REGIONS
+            );
+        }
+        for (final MapFullSyncManifestS2C.RegionCoord coord : m.regions()) {
+            if (coord == null) {
+                throw new ProtoException("null region coordinate in full sync manifest");
+            }
+        }
     }
 
     private static void requireUnsignedShort(final String field, final int value) throws ProtoException {
