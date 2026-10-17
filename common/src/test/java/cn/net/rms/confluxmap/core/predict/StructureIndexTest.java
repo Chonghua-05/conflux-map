@@ -880,6 +880,116 @@ class StructureIndexTest {
         assertTrue(batchRegionCounts.stream().allMatch(cells -> cells <= 1_024L));
     }
 
+    @Test
+    void nearestWalkReportsIncompleteWhenTheBudgetDiesMidFrameWithMarkersFillingTheLimit() {
+        final List<Long> batchRegionCounts = new ArrayList<>();
+        final StructureIndex index = new StructureIndex(
+            tempDir.resolve("cache"),
+            WorldIdentity.singleplayer("nearest-truncation-world"),
+            DimensionId.OVERWORLD,
+            new StructureIndex.CandidateProvider() {
+                @Override
+                public long[] candidates(
+                    final StructureIndex.StructureType type,
+                    final int regionX,
+                    final int regionZ
+                ) {
+                    throw new AssertionError("radius finder must use batch lookup");
+                }
+
+                @Override
+                public long[] candidates(
+                    final StructureIndex.StructureType type,
+                    final int minRegionX,
+                    final int minRegionZ,
+                    final int maxRegionX,
+                    final int maxRegionZ
+                ) {
+                    batchRegionCounts.add(
+                        ((long) maxRegionX - minRegionX + 1L)
+                            * ((long) maxRegionZ - minRegionZ + 1L)
+                    );
+                    final long[] markers = new long[20];
+                    for (int entry = 0; entry < markers.length; entry++) {
+                        markers[entry] = pack(-40 + entry * 4, -200);
+                    }
+                    return markers;
+                }
+            }
+        );
+        index.walkBudgetRegionsForTest(600);
+
+        final StructureIndex.CandidateSearch result = index.searchCandidates(
+            StructureIndex.StructureType.MINESHAFT, 0, 0, 4_000, 20, OptionalInt.empty(),
+            SearchOrder.NEAREST
+        );
+
+        assertEquals(20, result.markers().size());
+        assertFalse(result.complete(),
+            "a frame truncated mid-strip leaves strips inside the covered extent unscanned");
+        assertTrue(batchRegionCounts.stream().allMatch(cells -> cells <= 1_024L));
+    }
+
+    @Test
+    void farthestWalkReportsIncompleteWhenTheBudgetDiesInsideTheFinalFrame() {
+        final StructureIndex index = new StructureIndex(
+            tempDir.resolve("cache"),
+            WorldIdentity.singleplayer("farthest-truncation-world"),
+            DimensionId.OVERWORLD,
+            new StructureIndex.CandidateProvider() {
+                @Override
+                public long[] candidates(
+                    final StructureIndex.StructureType type,
+                    final int regionX,
+                    final int regionZ
+                ) {
+                    throw new AssertionError("radius finder must use batch lookup");
+                }
+
+                @Override
+                public long[] candidates(
+                    final StructureIndex.StructureType type,
+                    final int minRegionX,
+                    final int minRegionZ,
+                    final int maxRegionX,
+                    final int maxRegionZ
+                ) {
+                    final long[] markers = new long[20];
+                    for (int entry = 0; entry < markers.length; entry++) {
+                        markers[entry] = pack(-119 + entry * 12, -60);
+                    }
+                    return markers;
+                }
+            }
+        );
+        index.walkBudgetRegionsForTest(600);
+
+        final StructureIndex.CandidateSearch result = index.searchCandidates(
+            StructureIndex.StructureType.MINESHAFT, 0, 0, 200, 20, OptionalInt.empty(),
+            SearchOrder.FARTHEST
+        );
+
+        assertFalse(result.markers().isEmpty());
+        assertFalse(result.complete(),
+            "the innermost frame reached the radius but its remaining strips were never scanned");
+    }
+
+    @Test
+    void cancelledCandidateSearchStopsWalkingAndReportsIncomplete() {
+        final List<Long> batchRegionCounts = new ArrayList<>();
+        final StructureIndex index = countingIndex("cancelled-walk-world", batchRegionCounts);
+
+        final StructureIndex.CandidateSearch result = index.searchCandidates(
+            StructureIndex.StructureType.MINESHAFT, 0, 0, 100_000, 20, OptionalInt.empty(),
+            SearchOrder.NEAREST, () -> batchRegionCounts.size() >= 2
+        );
+
+        assertTrue(result.markers().isEmpty());
+        assertFalse(result.complete());
+        assertEquals(2, batchRegionCounts.size(),
+            "the walk must stop at the first check after the cancel signal");
+    }
+
     private StructureIndex countingIndex(final String worldName, final List<Long> batchRegionCounts) {
         return new StructureIndex(
             tempDir.resolve("cache"),

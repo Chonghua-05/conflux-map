@@ -240,7 +240,7 @@ public final class StructureMarkerService {
     }
 
     /** Returns candidates inside the requested radius without exceeding the index query budget. */
-    public synchronized List<StructureIndex.Marker> findCandidates(
+    public List<StructureIndex.Marker> findCandidates(
         final StructureIndex.StructureType type,
         final int blockX,
         final int blockZ,
@@ -250,7 +250,7 @@ public final class StructureMarkerService {
         return findCandidates(type, blockX, blockZ, maxRadius, limit, OptionalInt.empty());
     }
 
-    public synchronized List<StructureIndex.Marker> findCandidates(
+    public List<StructureIndex.Marker> findCandidates(
         final StructureIndex.StructureType type,
         final int blockX,
         final int blockZ,
@@ -261,7 +261,7 @@ public final class StructureMarkerService {
         return findCandidates(type, blockX, blockZ, maxRadius, limit, variant, SearchOrder.NEAREST);
     }
 
-    public synchronized List<StructureIndex.Marker> findCandidates(
+    public List<StructureIndex.Marker> findCandidates(
         final StructureIndex.StructureType type,
         final int blockX,
         final int blockZ,
@@ -273,7 +273,7 @@ public final class StructureMarkerService {
         return searchCandidates(type, blockX, blockZ, maxRadius, limit, variant, order).markers();
     }
 
-    public synchronized StructureIndex.CandidateSearch searchCandidates(
+    public StructureIndex.CandidateSearch searchCandidates(
         final StructureIndex.StructureType type,
         final int blockX,
         final int blockZ,
@@ -282,14 +282,50 @@ public final class StructureMarkerService {
         final OptionalInt variant,
         final SearchOrder order
     ) {
-        if (current == null || !structureSearchAllowed.getAsBoolean()) {
-            return new StructureIndex.CandidateSearch(List.of(), true);
+        return searchCandidates(type, blockX, blockZ, maxRadius, limit, variant, order, () -> false);
+    }
+
+    /**
+     * Runs the candidate walk without holding the service monitor across the native batches:
+     * render-thread viewport queries only ever wait for one marker-map mutation, never for the
+     * whole walk. The walk cancels itself when {@code cancelled} fires or the session
+     * generation moves on, so closing the screen or changing worlds stops the work instead of
+     * burning the remaining budget.
+     */
+    public StructureIndex.CandidateSearch searchCandidates(
+        final StructureIndex.StructureType type,
+        final int blockX,
+        final int blockZ,
+        final int maxRadius,
+        final int limit,
+        final OptionalInt variant,
+        final SearchOrder order,
+        final BooleanSupplier cancelled
+    ) {
+        final StructureIndex index;
+        final DimensionId dimensionAtStart;
+        final long generationAtStart;
+        synchronized (this) {
+            if (current == null || !structureSearchAllowed.getAsBoolean()) {
+                return new StructureIndex.CandidateSearch(List.of(), true);
+            }
+            index = current;
+            dimensionAtStart = currentDimension;
+            generationAtStart = generation;
         }
-        final StructureIndex.CandidateSearch found =
-            current.searchCandidates(type, blockX, blockZ, maxRadius, limit, variant, order);
-        return new StructureIndex.CandidateSearch(
-            filterQuadrants(found.markers()), found.complete()
+        final StructureIndex.CandidateSearch found = index.searchCandidates(
+            type, blockX, blockZ, maxRadius, limit, variant, order,
+            () -> cancelled.getAsBoolean() || activeGeneration() != generationAtStart
         );
+        synchronized (this) {
+            return new StructureIndex.CandidateSearch(
+                filterQuadrants(found.markers(), dimensionAtStart), found.complete()
+            );
+        }
+    }
+
+    private synchronized long activeGeneration() {
+        return generation;
     }
 
     /**
@@ -298,18 +334,32 @@ public final class StructureMarkerService {
      * promise structures that do not visibly exist. {@code null} dimension means no session yet.
      */
     private boolean predictsTerrainAt(final StructureIndex.Marker marker) {
-        final QuadrantLayout layout = currentDimension == null
-            ? null : prediction.quadrantLayout(currentDimension);
+        return predictsTerrainAt(marker, currentDimension);
+    }
+
+    private boolean predictsTerrainAt(
+        final StructureIndex.Marker marker,
+        final DimensionId dimension
+    ) {
+        final QuadrantLayout layout = dimension == null
+            ? null : prediction.quadrantLayout(dimension);
         return layout == null || layout.predictsTerrainAt(marker.blockX(), marker.blockZ());
     }
 
     private List<StructureIndex.Marker> filterQuadrants(final List<StructureIndex.Marker> markers) {
-        if (currentDimension == null || prediction.quadrantLayout(currentDimension) == null) {
+        return filterQuadrants(markers, currentDimension);
+    }
+
+    private List<StructureIndex.Marker> filterQuadrants(
+        final List<StructureIndex.Marker> markers,
+        final DimensionId dimension
+    ) {
+        if (dimension == null || prediction.quadrantLayout(dimension) == null) {
             return markers;
         }
         final List<StructureIndex.Marker> visible = new ArrayList<>(markers.size());
         for (final StructureIndex.Marker marker : markers) {
-            if (predictsTerrainAt(marker)) {
+            if (predictsTerrainAt(marker, dimension)) {
                 visible.add(marker);
             }
         }

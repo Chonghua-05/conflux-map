@@ -52,7 +52,7 @@ final class StructureCandidateScreen extends ConfluxScreen {
     private List<StructureIndex.Marker> results = List.of();
     private int scrollOffset;
     private boolean initialQueryStarted;
-    private int queryGeneration;
+    private volatile int queryGeneration;
     private boolean searching;
     private boolean draggingScrollBar;
     private double scrollBarGrabOffset;
@@ -289,7 +289,7 @@ final class StructureCandidateScreen extends ConfluxScreen {
                 try {
                     found = structures.searchCandidates(
                         type, queryCenterX, queryCenterZ, queryRadius, queryLimit,
-                        queryVariant, queryOrder
+                        queryVariant, queryOrder, () -> generation != queryGeneration
                     );
                 } catch (final RuntimeException e) {
                     MinecraftClient.getInstance().execute(() -> acceptFailure(generation));
