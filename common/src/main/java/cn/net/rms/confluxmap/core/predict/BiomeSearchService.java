@@ -22,19 +22,38 @@ public final class BiomeSearchService {
         final int radius,
         final int limit
     ) {
+        return search(
+            store, targetBiomeId, predictedBiomeId, sampler,
+            centerX, centerZ, radius, limit, SearchOrder.NEAREST
+        );
+    }
+
+    public static List<BiomeCandidateSearch.Candidate> search(
+        final ColumnStore store,
+        final String targetBiomeId,
+        final OptionalInt predictedBiomeId,
+        final BaselineSampler sampler,
+        final int centerX,
+        final int centerZ,
+        final int radius,
+        final int limit,
+        final SearchOrder order
+    ) {
         final List<BiomeCandidateSearch.Candidate> candidates = new ArrayList<>(
             BiomeCandidateSearch.findExplored(
-                store, targetBiomeId, centerX, centerZ, radius, limit
+                store, targetBiomeId, centerX, centerZ, radius, limit, order
             )
         );
-        if (candidates.size() < limit && predictedBiomeId.isPresent() && sampler != null) {
+        if ((candidates.size() < limit || order == SearchOrder.FARTHEST)
+            && predictedBiomeId.isPresent() && sampler != null) {
             for (final BiomeCandidateSearch.Candidate candidate : samplePredicted(
                 sampler,
                 predictedBiomeId.getAsInt(),
                 centerX,
                 centerZ,
                 radius,
-                limit
+                limit,
+                order
             )) {
                 if (!store.hasRealChunk(
                     Math.floorDiv(candidate.blockX(), 16),
@@ -45,7 +64,7 @@ public final class BiomeSearchService {
             }
         }
         return BiomeCandidateSearch.select(
-            centerX, centerZ, radius, limit, candidates
+            centerX, centerZ, radius, limit, candidates, order
         );
     }
 
@@ -56,6 +75,18 @@ public final class BiomeSearchService {
         final int centerZ,
         final int radius,
         final int limit
+    ) {
+        return samplePredicted(sampler, targetBiomeId, centerX, centerZ, radius, limit, SearchOrder.NEAREST);
+    }
+
+    static List<BiomeCandidateSearch.Candidate> samplePredicted(
+        final BaselineSampler sampler,
+        final int targetBiomeId,
+        final int centerX,
+        final int centerZ,
+        final int radius,
+        final int limit,
+        final SearchOrder order
     ) {
         final int radiusInBlocks = Math.max(4, ((radius + 3) / 4) * 4);
         final int spanInBlocks = radiusInBlocks * 2;
@@ -94,8 +125,10 @@ public final class BiomeSearchService {
                 side,
                 side,
                 strideInBlocks,
-                biomeIds
-            )
+                biomeIds,
+                order
+            ),
+            order
         );
     }
 }

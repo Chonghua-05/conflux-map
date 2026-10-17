@@ -594,7 +594,10 @@ class StructureIndexTest {
         assertEquals(2, result.size());
         assertEquals(128, result.get(0).blockX());
         assertTrue(requestedCells.stream().allMatch(cells -> cells <= 1_024L));
-        assertEquals(1, requestedCells.size(), "oversized expansion must stop before native lookup");
+        assertTrue(requestedCells.size() > 1,
+            "expansion must continue in bounded rings past the doubling cap");
+        assertTrue(requestedCells.stream().mapToLong(Long::longValue).sum() <= 103_424L,
+            "the walk must respect the total region budget");
     }
 
     @Test
@@ -637,6 +640,553 @@ class StructureIndexTest {
         assertEquals(1, result.size());
         assertEquals(Integer.MAX_VALUE - 8, result.get(0).blockX());
         assertEquals(Integer.MIN_VALUE + 8, result.get(0).blockZ());
+    }
+
+    @Test
+    void nearestRingExpansionGeneratesTheWholeFrameBeforeTrustingTheCoveredExtent() {
+        final List<Long> batchRegionCounts = new ArrayList<>();
+        final List<Long> positions = new ArrayList<>();
+        for (int blockX = 0; blockX <= 2_048; blockX += 512) {
+            positions.add(pack(blockX, -7_000));
+        }
+        positions.add(pack(0, 6_700));
+        final StructureIndex index = new StructureIndex(
+            tempDir.resolve("cache"),
+            WorldIdentity.singleplayer("full-frame-world"),
+            DimensionId.OVERWORLD,
+            new StructureIndex.CandidateProvider() {
+                @Override
+                public long[] candidates(
+                    final StructureIndex.StructureType type,
+                    final int regionX,
+                    final int regionZ
+                ) {
+                    throw new AssertionError("radius finder must use batch lookup");
+                }
+
+                @Override
+                public long[] candidates(
+                    final StructureIndex.StructureType type,
+                    final int minRegionX,
+                    final int minRegionZ,
+                    final int maxRegionX,
+                    final int maxRegionZ
+                ) {
+                    batchRegionCounts.add(
+                        ((long) maxRegionX - minRegionX + 1L)
+                            * ((long) maxRegionZ - minRegionZ + 1L)
+                    );
+                    final List<Long> matched = new ArrayList<>();
+                    for (final long packed : positions) {
+                        final int regionX = Math.floorDiv((int) (packed >>> 32), 512);
+                        final int regionZ = Math.floorDiv((int) packed, 512);
+                        if (regionX >= minRegionX && regionX <= maxRegionX
+                            && regionZ >= minRegionZ && regionZ <= maxRegionZ) {
+                            matched.add(packed);
+                        }
+                    }
+                    final long[] result = new long[matched.size()];
+                    for (int entry = 0; entry < matched.size(); entry++) {
+                        result[entry] = matched.get(entry);
+                    }
+                    return result;
+                }
+            }
+        );
+
+        final List<StructureIndex.Marker> result = index.findCandidates(
+            StructureIndex.StructureType.VILLAGE, 0, 0, 100_000, 5
+        );
+
+        assertEquals(5, result.size());
+        assertEquals(6_700, result.get(0).blockZ(),
+            "the nearer candidate in the frame's later strips must not be skipped");
+        assertTrue(batchRegionCounts.stream().allMatch(cells -> cells <= 1_024L));
+    }
+
+    @Test
+    void nearestCandidateSearchDoesNotStopOnCachedStraysBeyondTheCoveredArea() {
+        final List<Long> batchRegionCounts = new ArrayList<>();
+        final List<Long> positions = new ArrayList<>();
+        for (int blockX = 512; blockX <= 5_120; blockX += 512) {
+            positions.add(pack(blockX, 0));
+        }
+        for (int blockX = 5_632; blockX <= 11_264; blockX += 512) {
+            positions.add(pack(blockX, 0));
+        }
+        for (int stray = 0; stray < 25; stray++) {
+            positions.add(pack(512 * stray, 98_048));
+        }
+        final StructureIndex index = new StructureIndex(
+            tempDir.resolve("cache"),
+            WorldIdentity.singleplayer("stray-heavy-world"),
+            DimensionId.OVERWORLD,
+            new StructureIndex.CandidateProvider() {
+                @Override
+                public long[] candidates(
+                    final StructureIndex.StructureType type,
+                    final int regionX,
+                    final int regionZ
+                ) {
+                    throw new AssertionError("radius finder must use batch lookup");
+                }
+
+                @Override
+                public long[] candidates(
+                    final StructureIndex.StructureType type,
+                    final int minRegionX,
+                    final int minRegionZ,
+                    final int maxRegionX,
+                    final int maxRegionZ
+                ) {
+                    batchRegionCounts.add(
+                        ((long) maxRegionX - minRegionX + 1L)
+                            * ((long) maxRegionZ - minRegionZ + 1L)
+                    );
+                    final List<Long> matched = new ArrayList<>();
+                    for (final long packed : positions) {
+                        final int regionX = Math.floorDiv((int) (packed >>> 32), 512);
+                        final int regionZ = Math.floorDiv((int) packed, 512);
+                        if (regionX >= minRegionX && regionX <= maxRegionX
+                            && regionZ >= minRegionZ && regionZ <= maxRegionZ) {
+                            matched.add(packed);
+                        }
+                    }
+                    final long[] result = new long[matched.size()];
+                    for (int entry = 0; entry < matched.size(); entry++) {
+                        result[entry] = matched.get(entry);
+                    }
+                    return result;
+                }
+            }
+        );
+        index.query(0, 12_287, 98_048, 98_559, EnumSet.of(StructureIndex.StructureType.VILLAGE));
+
+        final List<StructureIndex.Marker> result = index.findCandidates(
+            StructureIndex.StructureType.VILLAGE, 0, 0, 100_000, 20
+        );
+
+        assertEquals(20, result.size());
+        assertTrue(result.stream().noneMatch(marker -> Math.abs(marker.blockZ()) > 50_000),
+            "cached strays must not pad the nearest list while nearer areas are ungenerated");
+        for (int entry = 1; entry < result.size(); entry++) {
+            assertTrue(distanceSquared(result.get(entry - 1)) <= distanceSquared(result.get(entry)));
+        }
+        assertTrue(batchRegionCounts.stream().allMatch(cells -> cells <= 1_024L));
+    }
+
+    @Test
+    void nearestCandidateSearchKeepsExpandingInBudgetBoundedRingsWhenTheDoublingBudgetCapsOut() {
+        final List<Long> batchRegionCounts = new ArrayList<>();
+        final List<Long> positions = new ArrayList<>();
+        for (int blockX = 512; blockX <= 5_120; blockX += 512) {
+            positions.add(pack(blockX, 0));
+        }
+        for (int blockX = 5_632; blockX <= 11_264; blockX += 512) {
+            positions.add(pack(blockX, 0));
+        }
+        positions.add(pack(48, 98_048));
+        positions.add(pack(-1_472, -98_304));
+        final StructureIndex index = new StructureIndex(
+            tempDir.resolve("cache"),
+            WorldIdentity.singleplayer("ring-expansion-world"),
+            DimensionId.OVERWORLD,
+            new StructureIndex.CandidateProvider() {
+                @Override
+                public long[] candidates(
+                    final StructureIndex.StructureType type,
+                    final int regionX,
+                    final int regionZ
+                ) {
+                    throw new AssertionError("radius finder must use batch lookup");
+                }
+
+                @Override
+                public long[] candidates(
+                    final StructureIndex.StructureType type,
+                    final int minRegionX,
+                    final int minRegionZ,
+                    final int maxRegionX,
+                    final int maxRegionZ
+                ) {
+                    batchRegionCounts.add(
+                        ((long) maxRegionX - minRegionX + 1L)
+                            * ((long) maxRegionZ - minRegionZ + 1L)
+                    );
+                    final List<Long> matched = new ArrayList<>();
+                    for (final long packed : positions) {
+                        final int regionX = Math.floorDiv((int) (packed >>> 32), 512);
+                        final int regionZ = Math.floorDiv((int) packed, 512);
+                        if (regionX >= minRegionX && regionX <= maxRegionX
+                            && regionZ >= minRegionZ && regionZ <= maxRegionZ) {
+                            matched.add(packed);
+                        }
+                    }
+                    final long[] result = new long[matched.size()];
+                    for (int entry = 0; entry < matched.size(); entry++) {
+                        result[entry] = matched.get(entry);
+                    }
+                    return result;
+                }
+            }
+        );
+        index.query(0, 512, 98_048, 98_559, EnumSet.of(StructureIndex.StructureType.VILLAGE));
+        index.query(-1_536, -1_024, -98_304, -97_793, EnumSet.of(StructureIndex.StructureType.VILLAGE));
+
+        final List<StructureIndex.Marker> result = index.findCandidates(
+            StructureIndex.StructureType.VILLAGE, 0, 0, 100_000, 20
+        );
+
+        assertEquals(20, result.size());
+        assertTrue(result.stream().noneMatch(marker -> Math.abs(marker.blockZ()) > 50_000),
+            "far cached strays must lose to freshly generated nearer candidates");
+        for (int entry = 1; entry < result.size(); entry++) {
+            assertTrue(distanceSquared(result.get(entry - 1)) <= distanceSquared(result.get(entry)));
+        }
+        assertTrue(batchRegionCounts.stream().allMatch(cells -> cells <= 1_024L));
+    }
+
+    @Test
+    void farthestCandidateWalkStaysInsideATotalRegionBudget() {
+        final List<Long> batchRegionCounts = new ArrayList<>();
+        final StructureIndex index = countingIndex("farthest-budget-world", batchRegionCounts);
+
+        final StructureIndex.CandidateSearch result = index.searchCandidates(
+            StructureIndex.StructureType.MINESHAFT, 0, 0, 4_000, 20, OptionalInt.empty(),
+            SearchOrder.FARTHEST
+        );
+
+        assertTrue(result.markers().isEmpty());
+        assertFalse(result.complete());
+        final long totalRegions = batchRegionCounts.stream().mapToLong(Long::longValue).sum();
+        assertTrue(totalRegions <= 103_424L, "farthest walk consumed " + totalRegions + " regions");
+        assertTrue(batchRegionCounts.stream().allMatch(cells -> cells <= 1_024L));
+    }
+
+    @Test
+    void nearestCandidateRingWalkStaysInsideATotalRegionBudget() {
+        final List<Long> batchRegionCounts = new ArrayList<>();
+        final StructureIndex index = countingIndex("nearest-budget-world", batchRegionCounts);
+
+        final StructureIndex.CandidateSearch result = index.searchCandidates(
+            StructureIndex.StructureType.MINESHAFT, 0, 0, 4_000, 20, OptionalInt.empty(),
+            SearchOrder.NEAREST
+        );
+
+        assertTrue(result.markers().isEmpty());
+        assertFalse(result.complete());
+        final long totalRegions = batchRegionCounts.stream().mapToLong(Long::longValue).sum();
+        assertTrue(totalRegions <= 103_424L, "nearest walk consumed " + totalRegions + " regions");
+        assertTrue(batchRegionCounts.stream().allMatch(cells -> cells <= 1_024L));
+    }
+
+    private StructureIndex countingIndex(final String worldName, final List<Long> batchRegionCounts) {
+        return new StructureIndex(
+            tempDir.resolve("cache"),
+            WorldIdentity.singleplayer(worldName),
+            DimensionId.OVERWORLD,
+            new StructureIndex.CandidateProvider() {
+                @Override
+                public long[] candidates(
+                    final StructureIndex.StructureType type,
+                    final int regionX,
+                    final int regionZ
+                ) {
+                    return new long[0];
+                }
+
+                @Override
+                public long[] candidates(
+                    final StructureIndex.StructureType type,
+                    final int minRegionX,
+                    final int minRegionZ,
+                    final int maxRegionX,
+                    final int maxRegionZ
+                ) {
+                    batchRegionCounts.add(
+                        ((long) maxRegionX - minRegionX + 1L)
+                            * ((long) maxRegionZ - minRegionZ + 1L)
+                    );
+                    return new long[0];
+                }
+            }
+        );
+    }
+
+    @Test
+    void farthestCandidateSearchScansEveryStripBeforeRankingAcrossStrips() {
+        final StructureIndex index = new StructureIndex(
+            tempDir.resolve("cache"),
+            WorldIdentity.singleplayer("cross-strip-world"),
+            DimensionId.OVERWORLD,
+            new StructureIndex.CandidateProvider() {
+                @Override
+                public long[] candidates(
+                    final StructureIndex.StructureType type,
+                    final int regionX,
+                    final int regionZ
+                ) {
+                    return new long[0];
+                }
+
+                @Override
+                public StructureIndex.Candidate[] detailedCandidates(
+                    final StructureIndex.StructureType type,
+                    final int minRegionX,
+                    final int minRegionZ,
+                    final int maxRegionX,
+                    final int maxRegionZ
+                ) {
+                    return new StructureIndex.Candidate[] {
+                        new StructureIndex.Candidate(0, -8_465, 0),
+                        new StructureIndex.Candidate(9_999, 0, 0)
+                    };
+                }
+            }
+        );
+
+        final List<StructureIndex.Marker> result = index.findCandidates(
+            StructureIndex.StructureType.VILLAGE, 0, 0, 10_000, 1, OptionalInt.empty(), SearchOrder.FARTHEST
+        );
+
+        assertEquals(1, result.size());
+        assertEquals(9_999, result.get(0).blockX());
+    }
+
+    @Test
+    void farthestCandidateSearchDoesNotStopAboveTheInnerSquareCorner() {
+        final StructureIndex index = new StructureIndex(
+            tempDir.resolve("cache"),
+            WorldIdentity.singleplayer("inner-corner-world"),
+            DimensionId.OVERWORLD,
+            new StructureIndex.CandidateProvider() {
+                @Override
+                public long[] candidates(
+                    final StructureIndex.StructureType type,
+                    final int regionX,
+                    final int regionZ
+                ) {
+                    return new long[0];
+                }
+
+                @Override
+                public StructureIndex.Candidate[] detailedCandidates(
+                    final StructureIndex.StructureType type,
+                    final int minRegionX,
+                    final int minRegionZ,
+                    final int maxRegionX,
+                    final int maxRegionZ
+                ) {
+                    return new StructureIndex.Candidate[] {
+                        new StructureIndex.Candidate(0, -3_441, 0),
+                        new StructureIndex.Candidate(0, 3_441, 0),
+                        new StructureIndex.Candidate(-3_440, 3_440, 0)
+                    };
+                }
+            }
+        );
+
+        final List<StructureIndex.Marker> result = index.findCandidates(
+            StructureIndex.StructureType.VILLAGE, 0, 0, 6_000, 2, OptionalInt.empty(), SearchOrder.FARTHEST
+        );
+
+        assertEquals(2, result.size());
+        assertEquals(-3_440, result.get(0).blockX());
+        assertEquals(3_440, result.get(0).blockZ());
+        assertEquals(0, result.get(1).blockX());
+        assertEquals(-3_441, result.get(1).blockZ());
+    }
+
+    @Test
+    void farthestCandidateSearchReturnsTheOutermostMarkersInDescendingOrder() {
+        final List<Long> batchRegionCounts = new ArrayList<>();
+        final StructureIndex index = new StructureIndex(
+            tempDir.resolve("cache"),
+            WorldIdentity.singleplayer("farthest-world"),
+            DimensionId.OVERWORLD,
+            new StructureIndex.CandidateProvider() {
+                @Override
+                public long[] candidates(
+                    final StructureIndex.StructureType type,
+                    final int regionX,
+                    final int regionZ
+                ) {
+                    throw new AssertionError("farthest finder must use the bounded batch lookup");
+                }
+
+                @Override
+                public long[] candidates(
+                    final StructureIndex.StructureType type,
+                    final int minRegionX,
+                    final int minRegionZ,
+                    final int maxRegionX,
+                    final int maxRegionZ
+                ) {
+                    batchRegionCounts.add(
+                        ((long) maxRegionX - minRegionX + 1L)
+                            * ((long) maxRegionZ - minRegionZ + 1L)
+                    );
+                    return new long[] {pack(96, 0), pack(4_800, 0), pack(9_000, 0)};
+                }
+            }
+        );
+
+        final List<StructureIndex.Marker> result = index.findCandidates(
+            StructureIndex.StructureType.VILLAGE,
+            0,
+            0,
+            10_000,
+            3,
+            OptionalInt.empty(),
+            SearchOrder.FARTHEST
+        );
+
+        assertEquals(List.of(9_000, 4_800, 96), result.stream()
+            .map(StructureIndex.Marker::blockX)
+            .toList());
+        assertTrue(batchRegionCounts.stream().allMatch(cells -> cells <= 1_024L));
+    }
+
+    @Test
+    void farthestCandidateSearchSkipsOutOfRangeAndRetractedMarkers() {
+        final StructureIndex index = new StructureIndex(
+            tempDir.resolve("cache"),
+            WorldIdentity.singleplayer("farthest-filter-world"),
+            DimensionId.OVERWORLD,
+            new StructureIndex.CandidateProvider() {
+                @Override
+                public long[] candidates(
+                    final StructureIndex.StructureType type,
+                    final int regionX,
+                    final int regionZ
+                ) {
+                    return new long[0];
+                }
+
+                @Override
+                public StructureIndex.Candidate[] detailedCandidates(
+                    final StructureIndex.StructureType type,
+                    final int minRegionX,
+                    final int minRegionZ,
+                    final int maxRegionX,
+                    final int maxRegionZ
+                ) {
+                    return new StructureIndex.Candidate[] {
+                        new StructureIndex.Candidate(9_000, 0, 0),
+                        new StructureIndex.Candidate(9_500, 0, 0),
+                        new StructureIndex.Candidate(12_000, 0, 0),
+                        new StructureIndex.Candidate(5_000, 0, 0)
+                    };
+                }
+            }
+        );
+        index.findCandidates(
+            StructureIndex.StructureType.VILLAGE, 0, 0, 10_000, 4, OptionalInt.empty(), SearchOrder.FARTHEST
+        );
+        index.verify(StructureIndex.StructureType.VILLAGE, 9_500, 0, false);
+
+        final List<StructureIndex.Marker> result = index.findCandidates(
+            StructureIndex.StructureType.VILLAGE, 0, 0, 10_000, 4, OptionalInt.empty(), SearchOrder.FARTHEST
+        );
+
+        assertEquals(List.of(9_000, 5_000), result.stream()
+            .map(StructureIndex.Marker::blockX)
+            .toList());
+    }
+
+    @Test
+    void farthestCandidateSearchFiltersVariantsBeforeSelecting() {
+        final StructureIndex index = new StructureIndex(
+            tempDir.resolve("cache"),
+            WorldIdentity.singleplayer("farthest-variant-world"),
+            DimensionId.OVERWORLD,
+            new StructureIndex.CandidateProvider() {
+                @Override
+                public long[] candidates(
+                    final StructureIndex.StructureType type,
+                    final int regionX,
+                    final int regionZ
+                ) {
+                    return new long[0];
+                }
+
+                @Override
+                public StructureIndex.Candidate[] detailedCandidates(
+                    final StructureIndex.StructureType type,
+                    final int minRegionX,
+                    final int minRegionZ,
+                    final int maxRegionX,
+                    final int maxRegionZ
+                ) {
+                    return new StructureIndex.Candidate[] {
+                        new StructureIndex.Candidate(8_000, 0, 0),
+                        new StructureIndex.Candidate(4_000, 0, 2)
+                    };
+                }
+            }
+        );
+
+        final List<StructureIndex.Marker> result = index.findCandidates(
+            StructureIndex.StructureType.VILLAGE,
+            0,
+            0,
+            10_000,
+            1,
+            OptionalInt.of(2),
+            SearchOrder.FARTHEST
+        );
+
+        assertEquals(1, result.size());
+        assertEquals(2, result.get(0).variant());
+        assertEquals(4_000, result.get(0).blockX());
+    }
+
+    @Test
+    void farthestCandidateSearchIsExactForGlobalPlacementTypes() {
+        final StructureIndex index = new StructureIndex(
+            tempDir.resolve("cache"),
+            WorldIdentity.singleplayer("farthest-global-world"),
+            DimensionId.OVERWORLD,
+            new StructureIndex.CandidateProvider() {
+                @Override
+                public long[] candidates(
+                    final StructureIndex.StructureType type,
+                    final int regionX,
+                    final int regionZ
+                ) {
+                    return new long[0];
+                }
+
+                @Override
+                public StructureIndex.Candidate[] detailedCandidates(
+                    final StructureIndex.StructureType type,
+                    final int minRegionX,
+                    final int minRegionZ,
+                    final int maxRegionX,
+                    final int maxRegionZ
+                ) {
+                    return new StructureIndex.Candidate[] {
+                        new StructureIndex.Candidate(9_000, 0, 0),
+                        new StructureIndex.Candidate(1_000, 0, 0),
+                        new StructureIndex.Candidate(-9_500, 0, 0)
+                    };
+                }
+            }
+        );
+
+        final List<StructureIndex.Marker> result = index.findCandidates(
+            StructureIndex.StructureType.STRONGHOLD,
+            0,
+            0,
+            10_000,
+            2,
+            OptionalInt.empty(),
+            SearchOrder.FARTHEST
+        );
+
+        assertEquals(List.of(-9_500, 9_000), result.stream()
+            .map(StructureIndex.Marker::blockX)
+            .toList());
     }
 
     private static long distanceSquared(final StructureIndex.Marker marker) {

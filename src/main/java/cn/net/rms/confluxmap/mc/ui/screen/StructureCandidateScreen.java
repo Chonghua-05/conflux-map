@@ -1,10 +1,12 @@
 package cn.net.rms.confluxmap.mc.ui.screen;
 
+import cn.net.rms.confluxmap.ConfluxMapClient;
 import cn.net.rms.confluxmap.compat.MinecraftAccess;
 import cn.net.rms.confluxmap.compat.MouseButtons;
 import cn.net.rms.confluxmap.compat.Texts;
 import cn.net.rms.confluxmap.compat.Widgets;
 import cn.net.rms.confluxmap.core.model.DimensionId;
+import cn.net.rms.confluxmap.core.predict.SearchOrder;
 import cn.net.rms.confluxmap.core.predict.StructureIndex;
 import cn.net.rms.confluxmap.mc.predict.StructureMarkerService;
 import cn.net.rms.confluxmap.mc.ui.GuiDraw;
@@ -12,6 +14,7 @@ import cn.net.rms.confluxmap.mc.ui.StructureIconCatalog;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.OptionalInt;
+import java.util.concurrent.RejectedExecutionException;
 import java.util.regex.Pattern;
 import net.minecraft.client.MinecraftClient;
 //#if MC>=12109
@@ -45,9 +48,12 @@ final class StructureCandidateScreen extends ConfluxScreen {
     private int centerZ;
     private int radius = DEFAULT_RADIUS;
     private int limit = DEFAULT_LIMIT;
+    private SearchOrder order = SearchOrder.NEAREST;
     private List<StructureIndex.Marker> results = List.of();
     private int scrollOffset;
-    private boolean initialQueryComplete;
+    private boolean initialQueryStarted;
+    private int queryGeneration;
+    private boolean searching;
     private boolean draggingScrollBar;
     private double scrollBarGrabOffset;
     private TextFieldWidget centerXField;
@@ -56,6 +62,7 @@ final class StructureCandidateScreen extends ConfluxScreen {
     private TextFieldWidget limitField;
     private ButtonWidget searchButton;
     private ButtonWidget variantButton;
+    private ButtonWidget orderButton;
     private int fieldWidth;
     private int panelContentWidth = 1;
     private String statusKey;
@@ -86,11 +93,11 @@ final class StructureCandidateScreen extends ConfluxScreen {
 
     @Override
     protected void init() {
-        if (!initialQueryComplete) {
-            refreshResults();
-            initialQueryComplete = true;
-        }
         rebuild();
+        if (!initialQueryStarted) {
+            initialQueryStarted = true;
+            submitSearch();
+        }
     }
 
     private void rebuild() {
@@ -114,13 +121,14 @@ final class StructureCandidateScreen extends ConfluxScreen {
         addDrawableChild(radiusField);
         addDrawableChild(limitField);
         final boolean hasVariants = !type.variantCodes().isEmpty();
+        final int controlCount = hasVariants ? 3 : 2;
         final int controlsWidth = Math.min(
-            hasVariants ? 204 : 100,
+            controlCount * 100 + (controlCount - 1) * GAP,
             layout.panelContentWidth()
         );
-        final int controlWidth = hasVariants
-            ? Math.max(1, (controlsWidth - GAP) / 2)
-            : controlsWidth;
+        final int controlWidth = Math.max(
+            1, (controlsWidth - (controlCount - 1) * GAP) / controlCount
+        );
         final int controlsLeft = layout.panelCenterX() - controlsWidth / 2;
         searchButton = addDrawableChild(Widgets.button(
             controlsLeft,
@@ -147,6 +155,14 @@ final class StructureCandidateScreen extends ConfluxScreen {
         } else {
             variantButton = null;
         }
+        orderButton = addDrawableChild(Widgets.button(
+            controlsLeft + (controlCount - 1) * (controlWidth + GAP),
+            88,
+            controlWidth,
+            FIELD_HEIGHT,
+            Texts.translatable(CandidateListUi.orderLabelKey(order)),
+            ignored -> toggleOrder()
+        ));
 
         final CandidateListUi listUi = candidateListUi();
         scrollOffset = listUi.scrollOffset();
@@ -236,9 +252,7 @@ final class StructureCandidateScreen extends ConfluxScreen {
             statusKey = "confluxmap.screen.structure_candidates.invalid";
             return;
         }
-        refreshResults();
-        scrollOffset = 0;
-        rebuild();
+        submitSearch();
     }
 
     private void chooseVariant() {
@@ -251,22 +265,74 @@ final class StructureCandidateScreen extends ConfluxScreen {
                 selected -> {
                     selectedVariant = selected;
                     scrollOffset = 0;
-                    refreshResults();
+                    submitSearch();
                 }
             )
         );
     }
 
-    private void refreshResults() {
-        results = structures.findCandidates(
-            type, centerX, centerZ, radius, limit, selectedVariant
-        );
-        statusKey = results.isEmpty()
-            ? "confluxmap.screen.structure_candidates.not_found"
-            : null;
-        if (!results.isEmpty()) {
-            map.focusStructure(results.get(0));
+    private void submitSearch() {
+        final int generation = ++queryGeneration;
+        final int queryCenterX = centerX;
+        final int queryCenterZ = centerZ;
+        final int queryRadius = radius;
+        final int queryLimit = limit;
+        final OptionalInt queryVariant = selectedVariant;
+        final SearchOrder queryOrder = order;
+        searching = true;
+        statusKey = "confluxmap.screen.structure_candidates.searching";
+        scrollOffset = 0;
+        rebuild();
+        try {
+            ConfluxMapClient.get().executors().workers().execute(() -> {
+                final StructureIndex.CandidateSearch found;
+                try {
+                    found = structures.searchCandidates(
+                        type, queryCenterX, queryCenterZ, queryRadius, queryLimit,
+                        queryVariant, queryOrder
+                    );
+                } catch (final RuntimeException e) {
+                    MinecraftClient.getInstance().execute(() -> acceptFailure(generation));
+                    return;
+                }
+                MinecraftClient.getInstance().execute(() -> acceptResults(generation, found));
+            });
+        } catch (final RejectedExecutionException e) {
+            searching = false;
+            statusKey = "confluxmap.screen.structure_candidates.failed";
+            rebuild();
         }
+    }
+
+    private void acceptFailure(final int generation) {
+        if (generation != queryGeneration
+            || MinecraftAccess.screen(MinecraftClient.getInstance()) != this) {
+            return;
+        }
+        searching = false;
+        statusKey = "confluxmap.screen.structure_candidates.failed";
+        rebuild();
+    }
+
+    private void acceptResults(final int generation, final StructureIndex.CandidateSearch found) {
+        if (generation != queryGeneration
+            || MinecraftAccess.screen(MinecraftClient.getInstance()) != this) {
+            return;
+        }
+        results = found.markers();
+        searching = false;
+        statusKey = found.complete()
+            ? (results.isEmpty() ? "confluxmap.screen.structure_candidates.not_found" : null)
+            : "confluxmap.screen.structure_candidates.incomplete";
+        if (!results.isEmpty()) {
+            focus(results.get(0));
+        }
+        rebuild();
+    }
+
+    private void toggleOrder() {
+        order = CandidateListUi.toggledOrder(order);
+        submitSearch();
     }
 
     private void focus(final StructureIndex.Marker marker) {
@@ -308,10 +374,13 @@ final class StructureCandidateScreen extends ConfluxScreen {
     }
 
     private void updateAccess() {
-        final boolean allowed = structures.availableTypes(dimension).contains(type);
+        final boolean allowed = structures.availableTypes(dimension).contains(type) && !searching;
         searchButton.active = allowed;
         if (variantButton != null) {
             variantButton.active = allowed;
+        }
+        if (orderButton != null) {
+            orderButton.active = allowed;
         }
         for (final ButtonWidget button : waypointButtons) {
             button.active = allowed;
@@ -452,6 +521,7 @@ final class StructureCandidateScreen extends ConfluxScreen {
 
     @Override
     public void onClose() {
+        queryGeneration++;
         MinecraftAccess.setScreen(MinecraftClient.getInstance(), picker);
     }
 
