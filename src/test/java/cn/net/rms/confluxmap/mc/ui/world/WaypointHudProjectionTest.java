@@ -29,8 +29,8 @@ final class WaypointHudProjectionTest {
     //$$         "LAST already stores the camera view rotation in ModelView; clearing it moves forward waypoints out of clip space"
     //$$     );
     //$$     assertTrue(
-    //$$         renderHud.contains("pushWorldHudModelView"),
-    //$$         "renderHud must enter the version-aware world HUD ModelView scope"
+    //$$         renderHud.contains("pushWorldViewSnapshot") || renderHud.contains("pushWorldHudModelView"),
+    //$$         "renderHud must enter the version-aware world HUD ModelView scope: the END pass reinstalls the captured world view, the in-pass phases save it"
     //$$     );
     //$$     assertTrue(
     //$$         pushModelView.contains("getModelViewStack().pushMatrix()"),

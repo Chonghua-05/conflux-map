@@ -1,5 +1,6 @@
 package cn.net.rms.confluxmap.mc.ui.world;
 
+import cn.net.rms.confluxmap.ConfluxMapMod;
 import cn.net.rms.confluxmap.bridge.GameBridge;
 import cn.net.rms.confluxmap.bridge.PlayerView;
 import cn.net.rms.confluxmap.compat.MinecraftAccess;
@@ -18,6 +19,7 @@ import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
@@ -73,10 +75,16 @@ import net.minecraft.util.math.Vec3d;
  * have NO in-world presence"): a vertical translucent beam at each visible waypoint's
  * column, and a camera-facing name/distance label floating above it.
  *
- * <p>The beam runs at the last terrain-adjacent phase offered by the active Fabric rendering
- * API, so it participates in world occlusion. The HUD marker runs at the final main-world phase
- * and draws with depth testing disabled so world content cannot hide player-facing navigation
- * information. In fabric-rendering-v1 1.10.1 (bundled with the
+ * <p>On versions with the classic {@code WorldRenderEvents} (before 1.21.9) both the beam and
+ * the HUD marker run at {@code WorldRenderEvents.END}, after the whole world pass: deferred
+ * shader packs (Photon and family) finalize from {@code LevelRenderer.render}'s RETURN and
+ * rewrite the color attachment from the gbuffer, erasing anything drawn inside the world pass,
+ * so drawing at END puts the waypoints on the finished frame. The beam still participates in
+ * world occlusion by depth-testing against the completed scene depth buffer, while the labels
+ * draw afterwards with depth testing disabled so world content cannot hide player-facing
+ * navigation information. On 1.21.9 and later the events moved into main-pass positions the
+ * packs rewrite, and no Iris dev environment exists for those lines yet, so the beam still
+ * rides a terrain-adjacent phase there. In fabric-rendering-v1 1.10.1 (bundled with the
  * installed fabric-api 0.46.1+1.17), {@link WorldRenderContext#consumers()} is {@code
  * null} at this phase and its matrix stack carries no pre-existing camera translation -
  * both are handled here: the beam is drawn with plain {@code Tessellator}/{@code
@@ -131,6 +139,18 @@ public final class WaypointWorldRenderer {
     static final int LABEL_DISTANCE_COLOR = 0xFFC8C8C8;
     /** LightmapTextureManager.pack(15, 15) - always fully lit, like other UI-ish world markers. */
     private static final int LABEL_LIGHT = 0xF000F0;
+    /**
+     * Waypoint world-render diagnostics switch: {@code -Dconfluxmap.debugWaypointRender=true}
+     * or {@code CONFLUXMAP_DEBUG_RENDER=1} (Gradle launches inherit env vars, not -D flags).
+     * Emits rate-limited logs of the camera, the global matrices, and where the first
+     * waypoint lands on screen, so render placement bugs can be located from the log
+     * instead of screenshot-by-screenshot.
+     */
+    private static final boolean DEBUG_RENDER =
+        Boolean.getBoolean("confluxmap.debugWaypointRender")
+            || "1".equals(System.getenv("CONFLUXMAP_DEBUG_RENDER"));
+    /** Per-phase rate limit: a shared timestamp would let the first phase of a frame starve the rest. */
+    private static final Map<String, Long> lastDebugLogNanos = new HashMap<>();
 
     private final MinecraftClient client;
     private final ConfluxConfig config;
@@ -209,10 +229,76 @@ public final class WaypointWorldRenderer {
         //#elseif MC>=12109
         //$$ active = this;
         //#else
-        WorldRenderEvents.AFTER_TRANSLUCENT.register(this::renderBeams);
-        WorldRenderEvents.LAST.register(this::renderHud);
+        // Deferred shading packs (Photon and family) run their finalize passes from
+        // LevelRenderer.render's RETURN and rewrite the whole color attachment from the
+        // gbuffer, erasing anything drawn inside the world pass (AFTER_TRANSLUCENT/LAST) -
+        // including this beam and its labels. WorldRenderEvents.END fires at that same
+        // RETURN, after the pack's finalize, so both draw on the finished frame instead:
+        // the beam depth-tests against the completed scene depth buffer, and the labels
+        // draw after it with depth testing disabled. Vanilla pops the world view matrix
+        // off the global ModelView just before that same RETURN, so the LAST listener
+        // (still inside the world pass) captures it read-only for the END passes to
+        // reinstall; it draws nothing, so the deferred erase cannot affect it.
+        WorldRenderEvents.LAST.register(this::captureWorldView);
+        WorldRenderEvents.END.register(this::renderBeams);
+        WorldRenderEvents.END.register(this::renderHud);
         //#endif
     }
+
+    //#if MC<12109
+    /** Read-only LAST listener: records the world view matrix for the END passes (see RenderUtil). */
+    private void captureWorldView(final WorldRenderContext context) {
+        RenderUtil.snapshotWorldViewModelView();
+        debugRenderState("last-capture", null, null, null, null);
+    }
+    //#endif
+
+    //#if MC<12109
+    /**
+     * One rate-limited diagnostics line per waypoint render pass: camera state, the view
+     * matrix in force for this mod's draws, and the screen position the given camera-relative
+     * anchor projects to under the pass's matrices. Compare lines across passes (or against
+     * where the waypoint actually shows on screen) to place render bugs without screenshot
+     * loops. {@code projection} is the world projection the caller installed; {@code Object}
+     * keeps the signature compiling on versions without JOML.
+     */
+    private void debugRenderState(
+        final String phase,
+        final Camera camera,
+        final MatrixStack matrices,
+        final Object projection,
+        final double[] anchorRel
+    ) {
+        if (!DEBUG_RENDER) {
+            return;
+        }
+        final long now = System.nanoTime();
+        final Long lastLog = lastDebugLogNanos.get(phase);
+        if (lastLog != null && now - lastLog < 2_000_000_000L) {
+            return;
+        }
+        lastDebugLogNanos.put(phase, now);
+        final StringBuilder line = new StringBuilder(384).append("[wp-render] ").append(phase);
+        if (camera != null) {
+            line.append(String.format(Locale.ROOT,
+                " cam=(%.2f, %.2f, %.2f) yaw=%.1f pitch=%.1f",
+                camera.getPos().x, camera.getPos().y, camera.getPos().z,
+                camera.getYaw(), camera.getPitch()));
+        }
+        //#if MC>=11904 && MC<12109
+        //$$ final org.joml.Matrix4f view = RenderUtil.capturedWorldViewMatrix();
+        //$$ if (view != null) {
+        //$$     line.append(" view=").append(RenderUtil.debugMatrix(view));
+        //$$ }
+        //$$ if (matrices != null && projection != null && view != null && anchorRel != null) {
+        //$$     line.append(RenderUtil.debugProjectAnchor(
+        //$$         (org.joml.Matrix4f) projection, view,
+        //$$         anchorRel[0], anchorRel[1], anchorRel[2], client));
+        //$$ }
+        //#endif
+        ConfluxMapMod.LOGGER.info("{}", line);
+    }
+    //#endif
 
     //#if MC>=12109 && MC<12111
     //$$ private void renderBeams(final MatrixStack matrices) {
@@ -279,6 +365,17 @@ public final class WaypointWorldRenderer {
         RenderSystem.depthMask(false);
         RenderSystem.disableCull();
         //#endif
+        //#if MC<12109
+        // END runs after the pack's finalize, which leaves the global projection pointing at
+        // its composite passes, and after vanilla popped the world view matrix off the global
+        // ModelView; reinstall the projection and the view captured at LAST for the beam and
+        // put both back afterwards.
+        RenderUtil.applyWorldProjection(context.projectionMatrix());
+        RenderUtil.pushWorldViewSnapshot();
+        //#endif
+        //#if MC<12109
+        debugRenderState("end-beam", camera, matrices, context.projectionMatrix(), null);
+        //#endif
         RenderUtil.beginAdditiveTriangles();
 
         for (final WaypointRenderEntry waypoint : waypoints) {
@@ -312,6 +409,10 @@ public final class WaypointWorldRenderer {
         }
 
         RenderUtil.restoreDefaultBlend();
+        //#if MC<12109
+        RenderUtil.popModelView();
+        RenderUtil.restoreProjection();
+        //#endif
         //#if MC<12105
         RenderSystem.enableCull();
         RenderSystem.depthMask(true);
@@ -402,10 +503,19 @@ public final class WaypointWorldRenderer {
         final List<WaypointItemHudRenderer.Label> itemLabels = new ArrayList<>();
 
         if (!labelSelection.candidates().isEmpty()) {
-            // Modern LAST keeps the camera view rotation in ModelView while its context stack is
-            // local identity. Legacy LAST needs that stale global transform cleared instead.
-            //#if MC<260200
-            RenderUtil.pushWorldHudModelView();
+            //#if MC<12109
+            // Same state repair as the beam pass: reinstall the world projection and the view
+            // matrix vanilla popped before END, so world-anchored labels keep their rotation.
+            RenderUtil.applyWorldProjection(context.projectionMatrix());
+            RenderUtil.pushWorldViewSnapshot();
+            final LabelCandidate first = labelSelection.candidates().get(0);
+            debugRenderState("end-hud", camera, matrices, context.projectionMatrix(), new double[] {
+                first.waypoint().x() - cameraPos.x,
+                first.waypoint().y() + LABEL_Y_OFFSET - cameraPos.y,
+                first.waypoint().z() - cameraPos.z
+            });
+            //#elseif MC<260200
+            //$$ RenderUtil.pushWorldHudModelView();
             //#endif
             try {
                 //#if MC<12105
@@ -497,8 +607,11 @@ public final class WaypointWorldRenderer {
                 RenderSystem.depthMask(true);
                 RenderSystem.enableDepthTest();
                 //#endif
-                //#if MC<260200
+                //#if MC<12109
                 RenderUtil.popModelView();
+                RenderUtil.restoreProjection();
+                //#elseif MC<260200
+                //$$ RenderUtil.popModelView();
                 //#endif
             }
         }
