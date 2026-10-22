@@ -154,11 +154,14 @@ Key numeric/behavioral facts:
   replaced by `pivot + 1` and the column is flagged **solid**, which (Section 5) forces the
   rendered pixel to fully transparent rather than a fabricated terrain color.
 - **Overhang/foliage overlay:** the block immediately above a found floor is inspected; if
-  it is snow, or is non-air/non-lava/non-water, it is drawn as a single overlay layer on top
-  of the floor color (the same visual role as grass/leaves overlaying terrain on the surface
-  map). Cave-mode columns only compute this one overlay layer plus the floor layer — the
-  separate "see-through block" and "ocean floor beneath water" layers used on the surface
-  map are not computed while underground.
+  it is snow, or is non-air/non-lava/non-water, it becomes an overlay candidate — then the
+  shared decoration-visibility policy (`OverlayVisibility` in common, one table for every
+  rendering path) decides whether it draws: bulk foliage (grass/fern family) and vegetation
+  (flowers, mushrooms, saplings, vines, ...) never render on floor-scan layers, so cave
+  floors stay clean material color instead of speckled with plant dots; markers and
+  everything else (torch, rails, snow, carpets) do draw. Cave-mode columns only compute this
+  one overlay layer plus the floor layer — the separate "see-through block" and "ocean floor
+  beneath water" layers used on the surface map are not computed while underground.
 
 ### 2.2 Pivot-Y refresh debounce (live map only)
 

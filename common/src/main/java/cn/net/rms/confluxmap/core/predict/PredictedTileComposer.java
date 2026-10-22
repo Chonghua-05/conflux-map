@@ -1,5 +1,6 @@
 package cn.net.rms.confluxmap.core.predict;
 
+import cn.net.rms.confluxmap.core.color.OverlayVisibility;
 import cn.net.rms.confluxmap.core.color.ShadingPipeline;
 import cn.net.rms.confluxmap.core.color.MapColorStyle;
 import cn.net.rms.confluxmap.core.color.XaeroMapStyle;
@@ -554,14 +555,13 @@ public final class PredictedTileComposer {
         );
     }
 
-    /** Mirrors the client snapshot's {@code isXaeroInvisible}: torches and glass vanish from
-     *  the Xaero-style overlay, so that style shows the surface beneath them. */
+    /** The shared {@link OverlayVisibility} policy in Xaero style: the torch/glass marker
+     *  family vanishes from the Xaero-style overlay, so that style shows the surface beneath
+     *  them, matching the client snapshot's own Xaero arrays. */
     private static boolean xaeroHidesOverlay(final String overlayMaterialId) {
-        if (overlayMaterialId == null || overlayMaterialId.isEmpty()) {
-            return false;
-        }
-        return overlayMaterialId.endsWith("torch") || overlayMaterialId.endsWith("glass")
-            || overlayMaterialId.endsWith("glass_pane");
+        return !OverlayVisibility.overlayVisible(
+            OverlayVisibility.categorize(overlayMaterialId), false, true
+        );
     }
 
     /** One column's colour before height shading and relief. */

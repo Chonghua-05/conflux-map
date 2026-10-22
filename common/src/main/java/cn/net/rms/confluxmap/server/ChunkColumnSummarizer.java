@@ -1,5 +1,6 @@
 package cn.net.rms.confluxmap.server;
 
+import cn.net.rms.confluxmap.core.color.OverlayVisibility;
 import cn.net.rms.confluxmap.core.model.SurfaceKind;
 import cn.net.rms.confluxmap.core.net.SummaryCodec;
 
@@ -293,8 +294,9 @@ public final class ChunkColumnSummarizer {
     /**
      * Non-colliding decoration standing on the surface (flowers, roses, mushrooms, fire, ...)
      * worth reporting as an overlay so the synced map composites it like the client does.
-     * Bulk foliage (the grass family) is excluded: its tint is visually absorbed by the block
-     * beneath it, and it would turn most vegetated columns into patch records.
+     * Exclusion follows the shared {@link OverlayVisibility} policy: bulk foliage never
+     * renders in any consumer, and reporting it would only turn most vegetated columns into
+     * patch records. Everything else is reported; per-style visibility is the consumer's call.
      */
     private static boolean isOverlayDecoration(
         final ChunkColumnSource source,
@@ -309,7 +311,7 @@ public final class ChunkColumnSummarizer {
         if (source.fluidKindAt(x, y, z) != SurfaceKind.UNKNOWN) {
             return false;
         }
-        return !name.contains("grass") && !name.contains("fern");
+        return OverlayVisibility.categorize(name) != OverlayVisibility.Category.BULK_FOLIAGE;
     }
 
     private static int clamp(final int value) {

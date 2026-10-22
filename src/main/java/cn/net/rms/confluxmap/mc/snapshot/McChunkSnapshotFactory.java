@@ -1,6 +1,8 @@
 package cn.net.rms.confluxmap.mc.snapshot;
 
+import cn.net.rms.confluxmap.compat.Regs;
 import cn.net.rms.confluxmap.core.color.LightTint;
+import cn.net.rms.confluxmap.core.color.OverlayVisibility;
 import cn.net.rms.confluxmap.core.model.ChunkSnapshot;
 import cn.net.rms.confluxmap.core.model.MapLayer;
 import cn.net.rms.confluxmap.core.model.SurfaceKind;
@@ -15,6 +17,7 @@ import net.minecraft.block.Blocks;
 import net.minecraft.block.CarpetBlock;
 import net.minecraft.block.FlowerBlock;
 import net.minecraft.block.PaneBlock;
+import net.minecraft.block.PlantBlock;
 import net.minecraft.block.LeavesBlock;
 import net.minecraft.block.SnowBlock;
 import net.minecraft.block.TallFlowerBlock;
@@ -442,9 +445,11 @@ public final class McChunkSnapshotFactory {
                 floorComposite = coloredLayer(seafloorState, seafloorY, worldX, worldZ, pos, world);
                 xaeroFloorComposite = xaeroColoredLayer(seafloorState, seafloorY, worldX, worldZ, pos, world);
                 if (foliageOverlay != null) {
-                    floorComposite = Argb.over(
-                        coloredLayer(foliageOverlay, foliageOverlayY, worldX, worldZ, pos, world), floorComposite
-                    );
+                    if (OverlayVisibility.overlayVisible(categorizeOverlay(foliageOverlay), false, false)) {
+                        floorComposite = Argb.over(
+                            coloredLayer(foliageOverlay, foliageOverlayY, worldX, worldZ, pos, world), floorComposite
+                        );
+                    }
                     if (!isXaeroInvisible(foliageOverlay)) {
                         xaeroFloorComposite = Argb.over(
                             xaeroColoredLayer(foliageOverlay, foliageOverlayY, worldX, worldZ, pos, world),
@@ -465,7 +470,9 @@ public final class McChunkSnapshotFactory {
             int overlayComposite = Argb.TRANSPARENT;
             int xaeroOverlayComposite = Argb.TRANSPARENT;
             if (foliageOverlay != null) {
-                overlayComposite = coloredLayer(foliageOverlay, foliageOverlayY, worldX, worldZ, pos, world);
+                if (OverlayVisibility.overlayVisible(categorizeOverlay(foliageOverlay), false, false)) {
+                    overlayComposite = coloredLayer(foliageOverlay, foliageOverlayY, worldX, worldZ, pos, world);
+                }
                 if (!isXaeroInvisible(foliageOverlay)) {
                     xaeroOverlayComposite = xaeroColoredLayer(
                         foliageOverlay, foliageOverlayY, worldX, worldZ, pos, world
@@ -522,24 +529,86 @@ public final class McChunkSnapshotFactory {
         return Argb.multiply(base, tint);
     }
 
-    /** Mirrors Xaero's default surface scan exclusions for decoration above the real terrain. */
+    /**
+     * Whether the Xaero-styled arrays must drop this decoration: the shared
+     * {@link OverlayVisibility} policy in Xaero style, mirroring Xaero's own scan exclusions
+     * (the torch/glass marker family and bulk foliage vanish so that style shows the surface
+     * beneath them).
+     */
     private static boolean isXaeroInvisible(final BlockState state) {
+        return !OverlayVisibility.overlayVisible(categorizeOverlay(state), false, true);
+    }
+
+    /**
+     * Instance-based classification onto {@link OverlayVisibility.Category} - the authoritative
+     * mapping for live capture, richer than the name-based {@link OverlayVisibility#categorize}
+     * because block instances also recognize vegetation, which material ids cannot express.
+     * The 1.17.1 registry sweep test pins the two representations together; any block the name
+     * rules classify must land in the same category here, with the sweep's allowlist documenting
+     * the few that cannot (and why they are unreachable as overlays).
+     */
+    static OverlayVisibility.Category categorizeOverlay(final BlockState state) {
         final Block block = state.getBlock();
+        final boolean flower = isFlower(state, block);
         //#if MC>=12100
         //$$ final boolean shortGrass = block == Blocks.SHORT_GRASS;
         //#else
         final boolean shortGrass = block == Blocks.GRASS;
         //#endif
-        if (block == Blocks.TORCH || shortGrass || block == Blocks.GLASS || block == Blocks.GLASS_PANE) {
-            return true;
+        if (shortGrass || block == Blocks.FERN || (block instanceof TallPlantBlock && !flower)) {
+            return OverlayVisibility.Category.BULK_FOLIAGE;
         }
-        final boolean flower = block instanceof FlowerBlock || block instanceof TallFlowerBlock
+        final String path = Regs.blockId(block).getPath();
+        for (final String suffix : OverlayVisibility.MARKER_SUFFIXES) {
+            if (path.endsWith(suffix)) {
+                return OverlayVisibility.Category.MARKER;
+            }
+        }
+        if (flower || block instanceof PlantBlock || isFloorVegetation(path)) {
+            return OverlayVisibility.Category.VEGETATION;
+        }
+        return OverlayVisibility.Category.OTHER;
+    }
+
+    private static boolean isFlower(final BlockState state, final Block block) {
+        return block instanceof FlowerBlock || block instanceof TallFlowerBlock
             || state.isIn(BlockTags.FLOWERS)
             //#if MC>=12000
             //$$ || block instanceof net.minecraft.block.PitcherCropBlock
             //#endif
             ;
-        return block instanceof TallPlantBlock && !flower;
+    }
+
+    /**
+     * Cave/nether floor vegetation the block hierarchy does not expose as {@link PlantBlock}
+     * (full-block and nether-ecology plants). Matched on registry path, never on {@code Blocks}
+     * constants: resolving those at class-init time would force vanilla's block registry to
+     * initialize whenever this factory loads, which explodes under the 1.18+ bare test bootstrap.
+     */
+    private static boolean isFloorVegetation(final String path) {
+        switch (path) {
+            case "azalea":
+            case "flowering_azalea":
+            case "big_dripleaf":
+            case "spore_blossom":
+            case "brown_mushroom":
+            case "red_mushroom":
+            case "nether_wart":
+            case "cave_vines":
+            case "cave_vines_plant":
+            case "weeping_vines":
+            case "weeping_vines_plant":
+            case "twisting_vines":
+            case "twisting_vines_plant":
+            case "crimson_roots":
+            case "warped_roots":
+            case "nether_sprouts":
+            case "crimson_fungus":
+            case "warped_fungus":
+                return true;
+            default:
+                return false;
+        }
     }
 
     /**
@@ -694,12 +763,18 @@ public final class McChunkSnapshotFactory {
         return !isOpaque(state, world, pos) && state.getBlock() != Blocks.LAVA;
     }
 
-    /** §2.1's overhang/foliage overlay eligibility: snow, or anything that isn't air/lava/water. */
+    /**
+     * §2.1's overhang/foliage overlay eligibility: snow, or anything that isn't air/lava/water,
+     * then filtered by the shared {@link OverlayVisibility} policy for floor-scan layers -
+     * bulk foliage and vegetation never render here, so cave floors stay clean material colour
+     * instead of speckled with plant dots.
+     */
     static boolean isFloorOverlayCandidate(final BlockState state) {
         if (state.getBlock() instanceof SnowBlock) {
             return true;
         }
-        return !state.isAir() && state.getBlock() != Blocks.LAVA && state.getBlock() != Blocks.WATER;
+        return !state.isAir() && state.getBlock() != Blocks.LAVA && state.getBlock() != Blocks.WATER
+            && OverlayVisibility.overlayVisible(categorizeOverlay(state), true, false);
     }
 
     /** Thin snow and carpets remain the visible top even when MOTION_BLOCKING ignores them. */

@@ -92,7 +92,10 @@ drawn as the surface, not the ground underneath it.
 **Small plants, flowers, saplings, glass, etc.:** these have a zero
 light-dampening factor and no occluding shape, so the descent loop walks
 through them; they only appear at all if they end up as the top or bottom of
-the transparent stack per the rule above.
+the transparent stack per the rule above. Whether a captured overlay actually
+draws is decided by the shared decoration-visibility policy (`OverlayVisibility`
+in common — one table for every rendering path): bulk foliage never draws in
+any style, and the torch/glass marker family is hidden only in the Xaero style.
 
 **Seafloor scan (water/ice columns only):** triggered specifically when the
 resolved surface block is water or ice. Starting one block below that
