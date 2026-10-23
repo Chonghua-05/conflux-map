@@ -337,7 +337,7 @@ public final class ConfluxMapClient implements ClientModInitializer {
         playerTrailTracker = new PlayerTrailTracker(client, config, sessionGuard, playerTrail);
         waypointService = new WaypointService(waypointRoot, executors, ConfluxMapMod.LOGGER);
         portalService = new PortalService(portalRoot, executors, ConfluxMapMod.LOGGER);
-        portalScanService = new PortalScanService(client, config, gameBridge, portalService);
+        portalScanService = new PortalScanService(client, config, portalService);
         PortalScanHandler.bind(portalScanService);
         annotationService = new AnnotationService(annotationRoot, executors, ConfluxMapMod.LOGGER);
         crossWorldWaypoints = new CrossWorldWaypointService(

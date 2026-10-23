@@ -78,6 +78,49 @@ class PortalRegistryTest {
     }
 
     @Test
+    void crossDimensionDuplicateAnchorIsPrunedByRescan() {
+        final PortalRegistry registry = new PortalRegistry();
+        // The nether-side portal of a crossing, registered under the overworld
+        // because its chunk arrived while the session dimension still lagged
+        // behind the world swap.
+        registry.applyChunkScan(OVERWORLD, 6, 6, List.of(
+            marker(OVERWORLD, PortalKind.NETHER_PORTAL, 6, 6, 100, 100)
+        ));
+        // The correct registration, once the same chunk is rescanned under
+        // the nether: the identical anchor marks it as one physical portal.
+        assertTrue(registry.applyChunkScan(NETHER, 6, 6, List.of(
+            marker(NETHER, PortalKind.NETHER_PORTAL, 6, 6, 100, 100)
+        )));
+        assertTrue(registry.list(OVERWORLD).isEmpty());
+        assertEquals(
+            List.of(marker(NETHER, PortalKind.NETHER_PORTAL, 6, 6, 100, 100)),
+            registry.list(NETHER)
+        );
+    }
+
+    @Test
+    void crossDimensionCoincidenceWithDifferentAnchorIsKept() {
+        final PortalRegistry registry = new PortalRegistry();
+        // A genuine overworld portal in the same chunk coordinates as a
+        // nether one: different anchors mean different portals, so the
+        // rescan must leave the overworld marker alone.
+        registry.applyChunkScan(OVERWORLD, 6, 6, List.of(
+            marker(OVERWORLD, PortalKind.NETHER_PORTAL, 6, 6, 100, 100)
+        ));
+        registry.applyChunkScan(NETHER, 6, 6, List.of(
+            marker(NETHER, PortalKind.NETHER_PORTAL, 6, 6, 103, 105)
+        ));
+        assertEquals(
+            List.of(marker(OVERWORLD, PortalKind.NETHER_PORTAL, 6, 6, 100, 100)),
+            registry.list(OVERWORLD)
+        );
+        assertEquals(
+            List.of(marker(NETHER, PortalKind.NETHER_PORTAL, 6, 6, 103, 105)),
+            registry.list(NETHER)
+        );
+    }
+
+    @Test
     void dimensionsAreKeptSeparately() {
         final PortalRegistry registry = new PortalRegistry();
         registry.apply(marker(OVERWORLD, PortalKind.NETHER_PORTAL, 2, 2, 40, 40));

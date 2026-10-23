@@ -1,6 +1,5 @@
 package cn.net.rms.confluxmap.mc.portal;
 
-import cn.net.rms.confluxmap.bridge.GameBridge;
 import cn.net.rms.confluxmap.compat.Ids;
 import cn.net.rms.confluxmap.compat.MinecraftAccess;
 import cn.net.rms.confluxmap.compat.Regs;
@@ -19,6 +18,7 @@ import net.minecraft.block.Block;
 import net.minecraft.block.BlockState;
 import net.minecraft.client.MinecraftClient;
 import net.minecraft.client.world.ClientWorld;
+import net.minecraft.util.Identifier;
 import net.minecraft.world.chunk.ChunkSection;
 import net.minecraft.world.chunk.ChunkStatus;
 import net.minecraft.world.chunk.PalettedContainer;
@@ -39,11 +39,16 @@ import net.minecraft.world.chunk.WorldChunk;
  * markers incrementally - they schedule a full rescan of that one chunk, which
  * keeps anchors and multi-kind chunks correct in both directions (a portal
  * lit by another player appears; a dismantled one disappears).
+ *
+ * <p>Markers are attributed to the dimension of {@code client.world}, never
+ * to the session dimension: the session tracker only rotates at the end of a
+ * tick, so chunks arriving right after a dimension switch would otherwise be
+ * filed under the dimension the player just left, and those markers would
+ * show up on the wrong dimension's map.
  */
 public final class PortalScanService {
     private final MinecraftClient client;
     private final ConfluxConfig config;
-    private final GameBridge gameBridge;
     private final PortalService portals;
 
     private Map<Block, PortalKind> portalBlocks;
@@ -52,12 +57,10 @@ public final class PortalScanService {
     public PortalScanService(
         final MinecraftClient client,
         final ConfluxConfig config,
-        final GameBridge gameBridge,
         final PortalService portals
     ) {
         this.client = client;
         this.config = config;
-        this.gameBridge = gameBridge;
         this.portals = portals;
     }
 
@@ -84,11 +87,13 @@ public final class PortalScanService {
 
     /** Mixin entry: one block changed (single update or section-delta batch member). */
     public void blockUpdated(final int x, final int y, final int z, final BlockState state) {
-        if (!config.portalMarkersEnabled || client.world == null) {
+        final ClientWorld world = client.world;
+        if (!config.portalMarkersEnabled || world == null) {
             return;
         }
+        final DimensionId dimension = dimensionOf(world);
         if (portalBlocks().containsKey(state.getBlock())
-            || portals.hasMarkersInChunk(gameBridge.session().dimension(), x >> 4, z >> 4)) {
+            || portals.hasMarkersInChunk(dimension, x >> 4, z >> 4)) {
             rescanChunkAt(x >> 4, z >> 4);
         }
     }
@@ -134,7 +139,11 @@ public final class PortalScanService {
     }
 
     private void scanChunk(final WorldChunk chunk) {
-        final DimensionId dimension = gameBridge.session().dimension();
+        final ClientWorld world = client.world;
+        if (world == null) {
+            return;
+        }
+        final DimensionId dimension = dimensionOf(world);
         //#if MC>=260100
         //$$ final int chunkX = chunk.getPos().x();
         //$$ final int chunkZ = chunk.getPos().z();
@@ -143,6 +152,12 @@ public final class PortalScanService {
         final int chunkZ = chunk.getPos().z;
         //#endif
         portals.applyChunkScan(dimension, chunkX, chunkZ, findPortals(chunk, dimension, chunkX, chunkZ));
+    }
+
+    /** The dimension the chunk really belongs to, read from the live client world. */
+    private static DimensionId dimensionOf(final ClientWorld world) {
+        final Identifier id = world.getRegistryKey().getValue();
+        return DimensionId.of(id.getNamespace(), id.getPath());
     }
 
     /** First tracked block per kind in bottom-up section order; empty when the chunk holds none. */
