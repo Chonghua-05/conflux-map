@@ -1,6 +1,7 @@
 package cn.net.rms.confluxmap.mc.world;
 
 import cn.net.rms.confluxmap.ConfluxMapMod;
+import cn.net.rms.confluxmap.compat.Dimensions;
 import cn.net.rms.confluxmap.compat.MinecraftAccess;
 import cn.net.rms.confluxmap.compat.Regs;
 import cn.net.rms.confluxmap.compat.Texts;
@@ -586,7 +587,7 @@ public final class ClientMultiworldService {
             observed.put("biomes", ClientWorldSignalHasher.hashSorted(biomes));
         }
 
-        final Identifier dimension = client.world.getRegistryKey().getValue();
+        final DimensionId dimension = Dimensions.of(client.world);
         observed.put("dimension", ClientWorldSignalHasher.hash(dimension.toString()));
         observed.put("dimension_type", ClientWorldSignalHasher.hash(
             client.world.getDimension().hasCeiling() + ":"
@@ -613,10 +614,7 @@ public final class ClientMultiworldService {
         terrainAttempted = true;
         final long generation = observationGeneration;
         final String expectedServer = serverId;
-        final String dimension = DimensionId.of(
-            client.world.getRegistryKey().getValue().getNamespace(),
-            client.world.getRegistryKey().getValue().getPath()
-        ).fileName();
+        final String dimension = Dimensions.of(client.world).fileName();
         io.execute(() -> {
             final List<TerrainFingerprintMatcher.Candidate> candidates = loadTerrainCandidates(
                 expectedServer, dimension, layer, probes, profiles
@@ -640,7 +638,7 @@ public final class ClientMultiworldService {
 
     private MapLayer terrainProbeLayer() {
         final DimensionLayerPolicy.DimensionKind kind = DimensionLayerPolicy.classify(
-            DimensionLayerPolicy.dimensionId(client.world),
+            Dimensions.of(client.world),
             client.world.getDimension()
         );
         switch (kind) {

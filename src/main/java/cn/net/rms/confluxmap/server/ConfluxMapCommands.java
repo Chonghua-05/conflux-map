@@ -9,9 +9,9 @@ import static net.minecraft.server.command.CommandManager.argument;
 import static net.minecraft.server.command.CommandManager.literal;
 
 import cn.net.rms.confluxmap.ConfluxMapMod;
+import cn.net.rms.confluxmap.compat.Dimensions;
 import cn.net.rms.confluxmap.compat.MinecraftAccess;
 import cn.net.rms.confluxmap.compat.Texts;
-import cn.net.rms.confluxmap.core.model.DimensionId;
 import cn.net.rms.confluxmap.server.shared.SharedWaypointCommandService;
 import cn.net.rms.confluxmap.server.shared.SharedWaypointService;
 import java.nio.charset.StandardCharsets;
@@ -232,7 +232,7 @@ final class ConfluxMapCommands {
 
     private static SharedWaypointCommandService.Position position(final ServerPlayerEntity player) {
         return new SharedWaypointCommandService.Position(
-            DimensionId.parse(player.getServerWorld().getRegistryKey().getValue().toString()),
+            Dimensions.of(player.getServerWorld()),
             player.getX(), player.getY(), player.getZ()
         );
     }

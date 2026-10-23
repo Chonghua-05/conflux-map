@@ -1,5 +1,6 @@
 package cn.net.rms.confluxmap.mc.world;
 
+import cn.net.rms.confluxmap.compat.Dimensions;
 import cn.net.rms.confluxmap.core.model.MapLayer;
 import cn.net.rms.confluxmap.gametest.GameTestCompat;
 //#if MC>=12105
@@ -38,7 +39,7 @@ public final class LayerSelectorEndGameTest implements FabricGameTest {
             return;
         }
         final DimensionLayerPolicy.DimensionKind kind = DimensionLayerPolicy.classify(
-            DimensionLayerPolicy.dimensionId(end),
+            Dimensions.of(end),
             end.getDimension()
         );
         if (kind != DimensionLayerPolicy.DimensionKind.NO_SKY_NO_CEILING) {

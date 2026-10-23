@@ -1,6 +1,7 @@
 package cn.net.rms.confluxmap.server;
 
 import cn.net.rms.confluxmap.ConfluxMapMod;
+import cn.net.rms.confluxmap.compat.Dimensions;
 import cn.net.rms.confluxmap.compat.Ids;
 import cn.net.rms.confluxmap.compat.MinecraftAccess;
 import cn.net.rms.confluxmap.compat.MinecraftVersion;
@@ -49,7 +50,6 @@ import net.minecraft.server.MinecraftServer;
 import net.minecraft.server.network.ServerPlayerEntity;
 import net.minecraft.server.world.ServerWorld;
 import net.minecraft.util.Identifier;
-import net.minecraft.world.World;
 
 /**
  * Server-side channel handler for {@link Proto#CHANNEL_ID}. Owns the receiver registrations and
@@ -235,8 +235,9 @@ public final class ServerNetworking {
             || !session.supports(MapSyncCapability.FULL_SYNC)) {
             return;
         }
-        final String dimId = player.getServerWorld().getRegistryKey().getValue().toString();
-        final int dimIndex = dimensionIndex(server, dimId);
+        final DimensionId dimension = Dimensions.of(player.getServerWorld());
+        final String dimId = dimension.toString();
+        final int dimIndex = Dimensions.indexOf(server, dimension);
         if (dimIndex < 0) {
             onStatus.accept("[ConfluxMap] Unable to resolve the dimension index for " + dimId + ".");
             return;
@@ -449,7 +450,7 @@ public final class ServerNetworking {
             entries.add(new PlayerPositionsS2C.Entry(
                 player.getUuid(),
                 MinecraftAccess.playerName(player),
-                player.getServerWorld().getRegistryKey().getValue().toString(),
+                Dimensions.of(player.getServerWorld()).toString(),
                 player.getX(),
                 player.getY(),
                 player.getZ(),
@@ -463,16 +464,6 @@ public final class ServerNetworking {
                 sendNegotiated(player, session, snapshot);
             }
         }
-    }
-
-    private int dimensionIndex(final MinecraftServer server, final String dimId) {
-        final List<HelloPolicyS2C.DimDescriptor> dims = buildDimDescriptors(server, false);
-        for (int i = 0; i < dims.size(); i++) {
-            if (dims.get(i).dimId().equals(dimId)) {
-                return i;
-            }
-        }
-        return -1;
     }
 
     private HelloPolicyS2C buildPolicy(
@@ -509,17 +500,18 @@ public final class ServerNetworking {
         final long seed = server.getOverworld().getSeed();
         final List<HelloPolicyS2C.DimDescriptor> dims = new ArrayList<>(2);
         for (final ServerWorld sw : server.getWorlds()) {
-            final String dimId = sw.getRegistryKey().getValue().toString();
-            final String dimType = sw.getRegistryKey().getValue().getPath();
+            final DimensionId dimension = Dimensions.of(sw);
             final WorldPreset preset = WorldPresetDetector.detect(sw);
             // predictable=false also withholds the seed on pre-preset clients (their seedFor
             // checks it), so superflat/custom dims degrade correctly across versions.
-            final boolean predictable = PredictionDimensions.supported(DimensionId.parse(dimId))
+            final boolean predictable = PredictionDimensions.supported(dimension)
                 && preset.predictable();
             // The server always knows the seed; we just don't always share it.
             final boolean hasSeed = shareSeed;
             final long seedToSend = shareSeed ? seed : 0L;
-            dims.add(new HelloPolicyS2C.DimDescriptor(dimId, dimType, predictable, hasSeed, seedToSend, preset));
+            dims.add(new HelloPolicyS2C.DimDescriptor(
+                dimension.toString(), dimension.path(), predictable, hasSeed, seedToSend, preset
+            ));
         }
         return dims;
     }
@@ -546,12 +538,7 @@ public final class ServerNetworking {
         final List<QuadraLayoutS2C.Entry> entries = new ArrayList<>(layouts.size());
         int dimIndex = 0;
         for (final ServerWorld sw : server.getWorlds()) {
-            final QuadrantLayout layout = layouts.get(
-                DimensionId.of(
-                    sw.getRegistryKey().getValue().getNamespace(),
-                    sw.getRegistryKey().getValue().getPath()
-                )
-            );
+            final QuadrantLayout layout = layouts.get(Dimensions.of(sw));
             if (layout != null) {
                 entries.add(new QuadraLayoutS2C.Entry(dimIndex, layout));
             }

@@ -1,5 +1,6 @@
 package cn.net.rms.confluxmap.mc.portal;
 
+import cn.net.rms.confluxmap.compat.Dimensions;
 import cn.net.rms.confluxmap.compat.Ids;
 import cn.net.rms.confluxmap.compat.MinecraftAccess;
 import cn.net.rms.confluxmap.compat.Regs;
@@ -18,7 +19,6 @@ import net.minecraft.block.Block;
 import net.minecraft.block.BlockState;
 import net.minecraft.client.MinecraftClient;
 import net.minecraft.client.world.ClientWorld;
-import net.minecraft.util.Identifier;
 import net.minecraft.world.chunk.ChunkSection;
 import net.minecraft.world.chunk.ChunkStatus;
 import net.minecraft.world.chunk.PalettedContainer;
@@ -91,7 +91,7 @@ public final class PortalScanService {
         if (!config.portalMarkersEnabled || world == null) {
             return;
         }
-        final DimensionId dimension = dimensionOf(world);
+        final DimensionId dimension = Dimensions.of(world);
         if (portalBlocks().containsKey(state.getBlock())
             || portals.hasMarkersInChunk(dimension, x >> 4, z >> 4)) {
             rescanChunkAt(x >> 4, z >> 4);
@@ -143,7 +143,7 @@ public final class PortalScanService {
         if (world == null) {
             return;
         }
-        final DimensionId dimension = dimensionOf(world);
+        final DimensionId dimension = Dimensions.of(world);
         //#if MC>=260100
         //$$ final int chunkX = chunk.getPos().x();
         //$$ final int chunkZ = chunk.getPos().z();
@@ -152,12 +152,6 @@ public final class PortalScanService {
         final int chunkZ = chunk.getPos().z;
         //#endif
         portals.applyChunkScan(dimension, chunkX, chunkZ, findPortals(chunk, dimension, chunkX, chunkZ));
-    }
-
-    /** The dimension the chunk really belongs to, read from the live client world. */
-    private static DimensionId dimensionOf(final ClientWorld world) {
-        final Identifier id = world.getRegistryKey().getValue();
-        return DimensionId.of(id.getNamespace(), id.getPath());
     }
 
     /** First tracked block per kind in bottom-up section order; empty when the chunk holds none. */

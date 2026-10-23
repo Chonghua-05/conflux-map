@@ -1,6 +1,7 @@
 package cn.net.rms.confluxmap.mc.world;
 
 import cn.net.rms.confluxmap.ConfluxMapMod;
+import cn.net.rms.confluxmap.compat.Dimensions;
 import cn.net.rms.confluxmap.core.model.DimensionId;
 import cn.net.rms.confluxmap.core.model.WorldIdentity;
 import cn.net.rms.confluxmap.core.multiworld.ServerAliasResolver;
@@ -15,7 +16,6 @@ import java.util.function.Consumer;
 import net.fabricmc.fabric.api.client.event.lifecycle.v1.ClientTickEvents;
 import net.minecraft.client.MinecraftClient;
 import net.minecraft.client.network.ServerInfo;
-import net.minecraft.util.Identifier;
 import net.minecraft.util.WorldSavePath;
 
 /**
@@ -113,7 +113,7 @@ public final class WorldSessionTracker {
             }
             return;
         }
-        final DimensionId dimension = toDimensionId(client.world.getRegistryKey().getValue());
+        final DimensionId dimension = Dimensions.of(client.world);
         updateSession(resolveWorldIdentity(client), dimension);
     }
 
@@ -160,10 +160,6 @@ public final class WorldSessionTracker {
         for (final Consumer<SessionGuard.Session> listener : listeners) {
             listener.accept(session);
         }
-    }
-
-    private static DimensionId toDimensionId(final Identifier id) {
-        return DimensionId.of(id.getNamespace(), id.getPath());
     }
 
     /**

@@ -1,6 +1,6 @@
 package cn.net.rms.confluxmap.mixin;
 
-import cn.net.rms.confluxmap.core.model.DimensionId;
+import cn.net.rms.confluxmap.compat.Dimensions;
 import cn.net.rms.confluxmap.mc.chat.WaypointChatMessageRewriter;
 import cn.net.rms.confluxmap.mc.world.ClientWorldIdentityHandler;
 import net.minecraft.client.MinecraftClient;
@@ -14,7 +14,6 @@ import net.minecraft.client.gui.hud.ChatHud;
 //$$ import net.minecraft.network.message.MessageSignatureData;
 //#endif
 import net.minecraft.text.Text;
-import net.minecraft.util.Identifier;
 import org.spongepowered.asm.mixin.Mixin;
 import org.spongepowered.asm.mixin.injection.At;
 import org.spongepowered.asm.mixin.injection.Inject;
@@ -79,10 +78,9 @@ public abstract class ChatHudMixin {
             return original;
         }
 
-        final Identifier dimensionIdentifier = client.world.getRegistryKey().getValue();
         return WaypointChatMessageRewriter.rewrite(
             original,
-            DimensionId.of(dimensionIdentifier.getNamespace(), dimensionIdentifier.getPath())
+            Dimensions.of(client.world)
         );
     }
 }

@@ -1,5 +1,6 @@
 package cn.net.rms.confluxmap.mc.teleport;
 
+import cn.net.rms.confluxmap.compat.Dimensions;
 import cn.net.rms.confluxmap.compat.MinecraftAccess;
 import cn.net.rms.confluxmap.compat.Texts;
 import cn.net.rms.confluxmap.core.config.ConfluxConfig;
@@ -113,7 +114,7 @@ public final class ClientGroundTeleportService {
         if (world == null || client.player == null) {
             return;
         }
-        final boolean crossDimension = !DimensionLayerPolicy.dimensionId(world).equals(dimension);
+        final boolean crossDimension = !Dimensions.of(world).equals(dimension);
         final GroundSample sample = crossDimension
             ? GroundSample.NOT_LOADED
             : sampleGround(world, blockX, blockZ);
@@ -198,7 +199,7 @@ public final class ClientGroundTeleportService {
         if (client.world != current.world()) {
             // A cross-dimension staging command just arrived in the target dimension; any
             // other world swap (portal, disconnect handled by the session listener) cancels.
-            if (!DimensionLayerPolicy.dimensionId(client.world).equals(current.dimension())) {
+            if (!Dimensions.of(client.world).equals(current.dimension())) {
                 pending = null;
                 return;
             }
@@ -280,7 +281,7 @@ public final class ClientGroundTeleportService {
             Math.floorMod(blockZ, 16)
         );
         if (DimensionLayerPolicy.classify(
-                DimensionLayerPolicy.dimensionId(world), world.getDimension()
+                Dimensions.of(world), world.getDimension()
             ) == DimensionLayerPolicy.DimensionKind.HAS_CEILING) {
             // MOTION_BLOCKING reports the bedrock roof in ceiling dimensions; scan under it.
             final BlockPos.Mutable pos = new BlockPos.Mutable();

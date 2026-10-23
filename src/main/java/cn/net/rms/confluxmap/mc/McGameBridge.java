@@ -2,13 +2,12 @@ package cn.net.rms.confluxmap.mc;
 
 import cn.net.rms.confluxmap.bridge.GameBridge;
 import cn.net.rms.confluxmap.bridge.PlayerView;
-import cn.net.rms.confluxmap.core.model.DimensionId;
+import cn.net.rms.confluxmap.compat.Dimensions;
 import cn.net.rms.confluxmap.core.task.SessionGuard;
 import java.util.Optional;
 import net.minecraft.client.MinecraftClient;
 import net.minecraft.client.network.ClientPlayerEntity;
 import net.minecraft.entity.Entity;
-import net.minecraft.util.Identifier;
 import net.minecraft.util.math.MathHelper;
 
 public final class McGameBridge implements GameBridge {
@@ -64,14 +63,13 @@ public final class McGameBridge implements GameBridge {
     }
 
     private Optional<PlayerView> viewOf(final Entity entity, final float tickDelta) {
-        final Identifier dim = client.world.getRegistryKey().getValue();
         return Optional.of(new PlayerView(
             MathHelper.lerp(tickDelta, entity.prevX, entity.getX()),
             MathHelper.lerp(tickDelta, entity.prevY, entity.getY()),
             MathHelper.lerp(tickDelta, entity.prevZ, entity.getZ()),
             entity.getEyeY(),
             entity.getYaw(tickDelta),
-            DimensionId.of(dim.getNamespace(), dim.getPath())
+            Dimensions.of(client.world)
         ));
     }
 

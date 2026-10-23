@@ -2,6 +2,7 @@ package cn.net.rms.confluxmap.mc.world;
 
 import cn.net.rms.confluxmap.bridge.GameBridge;
 import cn.net.rms.confluxmap.bridge.PlayerView;
+import cn.net.rms.confluxmap.compat.Dimensions;
 import cn.net.rms.confluxmap.core.config.ConfluxConfig;
 import cn.net.rms.confluxmap.core.model.MapLayer;
 import cn.net.rms.confluxmap.mc.world.DimensionLayerPolicy.DimensionKind;
@@ -76,7 +77,7 @@ public final class LayerSelector {
         refreshPivot(eyeY);
 
         final DimensionKind kind = DimensionLayerPolicy.classify(
-            DimensionLayerPolicy.dimensionId(world),
+            Dimensions.of(world),
             world.getDimension()
         );
         final MapLayer layer;
@@ -111,7 +112,7 @@ public final class LayerSelector {
         final ClientWorld world = client.world;
         final DimensionKind kind = world != null
             ? DimensionLayerPolicy.classify(
-                DimensionLayerPolicy.dimensionId(world), world.getDimension())
+                Dimensions.of(world), world.getDimension())
             : DimensionKind.SKY_LIT;
         config.layerOverride = nextOverride(kind, config.layerOverride);
     }

@@ -1,5 +1,6 @@
 package cn.net.rms.confluxmap.server;
 
+import cn.net.rms.confluxmap.compat.Dimensions;
 import cn.net.rms.confluxmap.compat.MinecraftVersion;
 import cn.net.rms.confluxmap.core.model.DimensionId;
 import cn.net.rms.confluxmap.core.shared.SharedWaypoint;
@@ -59,11 +60,10 @@ final class FabricWebMapBackend implements WebMapBackend {
         final List<WebMapManifest.Dimension> dimensions = new ArrayList<>();
         int index = 0;
         for (final ServerWorld world : server.getWorlds()) {
-            final String id = world.getRegistryKey().getValue().toString();
-            final DimensionId dimensionId = DimensionId.parse(id);
+            final DimensionId dimensionId = Dimensions.of(world);
             final WorldPreset preset = WorldPresetDetector.detect(world);
             dimensions.add(new WebMapManifest.Dimension(
-                index++, id, world.getRegistryKey().getValue().getPath(),
+                index++, dimensionId.toString(), dimensionId.path(),
                 PredictionDimensions.supported(dimensionId) && preset.predictable(), preset
             ));
         }
@@ -153,7 +153,8 @@ final class FabricWebMapBackend implements WebMapBackend {
                 if (companion.webMapHidden(player.getUuid())) continue;
                 result.add(new WebPlayerSnapshot.Player(
                     player.getUuid().toString(), player.getName().getString(),
-                    worldIndex((ServerWorld) player.getServerWorld()), player.getX(), player.getZ(),
+                    Dimensions.indexOf(server, (ServerWorld) player.getServerWorld()),
+                    player.getX(), player.getZ(),
                     player.isSpectator() || player.isInvisible()
                 ));
                 final URI skin = skin(player);
@@ -163,7 +164,7 @@ final class FabricWebMapBackend implements WebMapBackend {
         final List<WebMapSnapshot.Waypoint> waypoints = new ArrayList<>();
         if (companion.sharedWaypointsEnabled()) {
             for (final SharedWaypoint waypoint : companion.sharedWaypoints().snapshot().waypoints()) {
-                final int dimension = worldIndex(waypoint.dimensionId());
+                final int dimension = Dimensions.indexOf(server, waypoint.dimensionId());
                 if (dimension >= 0) {
                     waypoints.add(new WebMapSnapshot.Waypoint(
                         waypoint.id().toString(), waypoint.name(), dimension,
@@ -202,23 +203,5 @@ final class FabricWebMapBackend implements WebMapBackend {
             // Authlib changed GameProfile and Property from beans to records across versions.
         }
         return null;
-    }
-
-    private int worldIndex(final ServerWorld target) {
-        int index = 0;
-        for (final ServerWorld world : server.getWorlds()) {
-            if (world == target) return index;
-            index++;
-        }
-        return -1;
-    }
-
-    private int worldIndex(final DimensionId target) {
-        int index = 0;
-        for (final ServerWorld world : server.getWorlds()) {
-            if (DimensionId.parse(world.getRegistryKey().getValue().toString()).equals(target)) return index;
-            index++;
-        }
-        return -1;
     }
 }

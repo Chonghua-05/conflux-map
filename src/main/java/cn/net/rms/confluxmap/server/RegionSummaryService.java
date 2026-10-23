@@ -26,6 +26,7 @@ import cn.net.rms.confluxmap.core.predict.NativeBaselineSampler;
 import cn.net.rms.confluxmap.core.predict.PredictionDimensions;
 import cn.net.rms.confluxmap.core.predict.QuadrantLayout;
 import cn.net.rms.confluxmap.core.predict.WorldPreset;
+import cn.net.rms.confluxmap.compat.Dimensions;
 import cn.net.rms.confluxmap.compat.MinecraftVersion;
 import cn.net.rms.confluxmap.nativepredict.McVersions;
 import cn.net.rms.confluxmap.nativepredict.NativeLib;
@@ -1150,11 +1151,7 @@ public final class RegionSummaryService {
             }
         }
         if (NativeLib.available() && preset.predictable()) {
-            final cn.net.rms.confluxmap.core.model.DimensionId dimension =
-                cn.net.rms.confluxmap.core.model.DimensionId.of(
-                    world.getRegistryKey().getValue().getNamespace(),
-                    world.getRegistryKey().getValue().getPath()
-                );
+            final DimensionId dimension = Dimensions.of(world);
             final int nativeDim = PredictionDimensions.nativeDim(dimension);
             final java.util.OptionalInt version = McVersions.toCubiomes(MinecraftVersion.current());
             if (nativeDim != Integer.MIN_VALUE && version.isPresent()) {
@@ -1235,7 +1232,7 @@ public final class RegionSummaryService {
     }
 
     private boolean watched(final MinecraftServer server, final ProgressiveKey key) {
-        final int dimIndex = worldIndex(server, key.world());
+        final int dimIndex = Dimensions.indexOf(server, key.world());
         return dimIndex >= 0
             && invalidations.watches(dimIndex, key.lod(), key.tileX(), key.tileZ());
     }
@@ -1314,11 +1311,7 @@ public final class RegionSummaryService {
             }
         }
         if (NativeLib.available() && preset.predictable()) {
-            final cn.net.rms.confluxmap.core.model.DimensionId dimension =
-                cn.net.rms.confluxmap.core.model.DimensionId.of(
-                    world.getRegistryKey().getValue().getNamespace(),
-                    world.getRegistryKey().getValue().getPath()
-                );
+            final DimensionId dimension = Dimensions.of(world);
             final int nativeDim = PredictionDimensions.nativeDim(dimension);
             final java.util.OptionalInt version = McVersions.toCubiomes(MinecraftVersion.current());
             if (nativeDim != Integer.MIN_VALUE && version.isPresent()) {
@@ -1445,7 +1438,7 @@ public final class RegionSummaryService {
     private void drainChangedRegions(final MinecraftServer server) {
         ChangedRegion changed;
         while ((changed = changedRegions.poll()) != null) {
-            final int dimIndex = worldIndex(server, changed.dimension());
+            final int dimIndex = Dimensions.indexOf(server, DimensionId.parse(changed.dimension()));
             if (dimIndex >= 0) {
                 invalidations.invalidateRegion(dimIndex, changed.regionX(), changed.regionZ());
                 regionInvalidations.invalidateRegion(dimIndex, changed.regionX(), changed.regionZ());
@@ -1454,7 +1447,7 @@ public final class RegionSummaryService {
                         regionPageTasks.entrySet().iterator();
                     while (pages.hasNext()) {
                         final Map.Entry<RegionPageKey, RegionPageTask> page = pages.next();
-                        if (worldIndex(server, page.getKey().world()) == dimIndex
+                        if (Dimensions.indexOf(server, page.getKey().world()) == dimIndex
                             && page.getKey().slice().regionX() == changed.regionX()
                             && page.getKey().slice().regionZ() == changed.regionZ()) {
                             page.getValue().future.cancel(false);
@@ -1465,7 +1458,7 @@ public final class RegionSummaryService {
                 synchronized (progressiveTasks) {
                     for (final Map.Entry<ProgressiveKey, ProgressiveRegionPatch> entry
                         : progressiveTasks.entrySet()) {
-                        if (worldIndex(server, entry.getKey().world()) == dimIndex) {
+                        if (Dimensions.indexOf(server, entry.getKey().world()) == dimIndex) {
                             entry.getValue().invalidateRegion(changed.regionX(), changed.regionZ());
                         }
                     }
@@ -1542,28 +1535,6 @@ public final class RegionSummaryService {
                 iterator.remove();
             }
         }
-    }
-
-    private static int worldIndex(final MinecraftServer server, final ServerWorld target) {
-        int index = 0;
-        for (final ServerWorld world : server.getWorlds()) {
-            if (world == target) {
-                return index;
-            }
-            index++;
-        }
-        return -1;
-    }
-
-    private static int worldIndex(final MinecraftServer server, final String dimension) {
-        int index = 0;
-        for (final ServerWorld world : server.getWorlds()) {
-            if (world.getRegistryKey().getValue().toString().equals(dimension)) {
-                return index;
-            }
-            index++;
-        }
-        return -1;
     }
 
     private static int chunkX(final ChunkPos pos) {

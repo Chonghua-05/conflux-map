@@ -1,6 +1,7 @@
 package cn.net.rms.confluxmap.server;
 
 import cn.net.rms.confluxmap.ConfluxMapMod;
+import cn.net.rms.confluxmap.compat.Dimensions;
 import cn.net.rms.confluxmap.compat.Ids;
 import cn.net.rms.confluxmap.compat.Regs;
 import cn.net.rms.confluxmap.core.model.DimensionId;
@@ -28,7 +29,6 @@ import net.minecraft.block.BlockState;
 import net.minecraft.server.MinecraftServer;
 import net.minecraft.server.world.ServerWorld;
 import net.minecraft.util.registry.Registry;
-import net.minecraft.world.World;
 import net.minecraft.world.biome.Biome;
 
 /**
@@ -128,11 +128,11 @@ public final class QuadraGenLayouts {
         }
         final Map<DimensionId, QuadrantLayout> layouts = new LinkedHashMap<>();
         for (final ServerWorld world : server.getWorlds()) {
-            final String path = world.getRegistryKey().getValue().getPath();
+            final DimensionId dimension = Dimensions.of(world);
             final DimensionSpec spec;
-            if (World.OVERWORLD.getValue().getPath().equals(path)) {
+            if (DimensionId.OVERWORLD.equals(dimension)) {
                 spec = config.overworld;
-            } else if (World.NETHER.getValue().getPath().equals(path)) {
+            } else if (DimensionId.NETHER.equals(dimension)) {
                 spec = config.nether;
             } else {
                 continue;
@@ -143,7 +143,7 @@ public final class QuadraGenLayouts {
                 || !WorldPresetDetector.detect(world).predictable()) {
                 continue;
             }
-            layout(world, spec).ifPresent(layout -> layouts.put(dimensionId(world), layout));
+            layout(world, spec).ifPresent(layout -> layouts.put(dimension, layout));
         }
         return Collections.unmodifiableMap(layouts);
     }
@@ -269,12 +269,5 @@ public final class QuadraGenLayouts {
             case QuadrantLayout.X_NEGATIVE_Z_NEGATIVE -> spec.quadrants.get("x_negative_z_negative");
             default -> null;
         };
-    }
-
-    private static DimensionId dimensionId(final ServerWorld world) {
-        return DimensionId.of(
-            world.getRegistryKey().getValue().getNamespace(),
-            world.getRegistryKey().getValue().getPath()
-        );
     }
 }

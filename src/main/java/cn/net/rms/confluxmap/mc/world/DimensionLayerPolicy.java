@@ -2,7 +2,6 @@ package cn.net.rms.confluxmap.mc.world;
 
 import cn.net.rms.confluxmap.core.model.DimensionId;
 import cn.net.rms.confluxmap.core.model.MapLayer;
-import net.minecraft.world.World;
 import net.minecraft.world.dimension.DimensionType;
 
 /**
@@ -28,11 +27,6 @@ public final class DimensionLayerPolicy {
         NO_SKY_NO_CEILING,
         /** Case C: ordinary sky-lit dimension (e.g. the Overworld). */
         SKY_LIT
-    }
-
-    /** The core {@link DimensionId} of a world, from its registry key (e.g. "minecraft:the_end"). */
-    public static DimensionId dimensionId(final World world) {
-        return DimensionId.parse(world.getRegistryKey().getValue().toString());
     }
 
     /** Identity-first classification: the vanilla End stays the End whatever its metadata claims. */

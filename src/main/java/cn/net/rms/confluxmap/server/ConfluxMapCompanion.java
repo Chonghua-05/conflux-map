@@ -1,6 +1,7 @@
 package cn.net.rms.confluxmap.server;
 
 import cn.net.rms.confluxmap.ConfluxMapMod;
+import cn.net.rms.confluxmap.compat.Dimensions;
 import cn.net.rms.confluxmap.core.model.DimensionId;
 import cn.net.rms.confluxmap.core.predict.QuadrantLayout;
 import cn.net.rms.confluxmap.core.store.ServerInstanceIdStore;
@@ -370,7 +371,7 @@ public final class ConfluxMapCompanion {
             final Map<DimensionId, SharedWaypointValidator.HeightRange> dimensions = new LinkedHashMap<>();
             for (final ServerWorld world : server.getWorlds()) {
                 dimensions.put(
-                    DimensionId.parse(world.getRegistryKey().getValue().toString()),
+                    Dimensions.of(world),
                     new SharedWaypointValidator.HeightRange(world.getBottomY(), world.getTopY())
                 );
             }
