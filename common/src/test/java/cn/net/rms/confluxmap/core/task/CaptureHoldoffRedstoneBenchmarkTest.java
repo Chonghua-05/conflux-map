@@ -53,6 +53,33 @@ class CaptureHoldoffRedstoneBenchmarkTest {
             gated.lastCaptureTick - (MACHINE_STOP_TICK - 1));
     }
 
+    @Test
+    void sporadicMiningPaceChangesIncurNoHoldoffDelay() {
+        final CaptureHoldoffGate gate = new CaptureHoldoffGate(DEFAULT_HOLDOFF);
+        final ArrayDeque<Long> dirty = new ArrayDeque<>();
+        final HashSet<Long> queued = new HashSet<>();
+        final long chunk = key(7, 7);
+        int changes = 0;
+        int captures = 0;
+        for (int tick = 0; tick < TOTAL_TICKS; tick++) {
+            // One isolated change every 30 ticks - mining pace, far beyond any hold-off window.
+            if (tick % 30 == 0 && mark(gate, dirty, queued, chunk)) {
+                changes++;
+            }
+            for (final long matured : gate.tick()) {
+                mark(gate, dirty, queued, matured);
+            }
+            if (!dirty.isEmpty()) {
+                dirty.pollFirst();
+                queued.remove(chunk);
+                gate.recordCaptured(chunk);
+                captures++;
+            }
+            assertTrue(dirty.isEmpty(), "tick " + tick + " ended with the change still queued");
+        }
+        assertEquals(changes, captures);
+    }
+
     private static Run simulate(final int holdoffTicks) {
         final CaptureHoldoffGate gate = new CaptureHoldoffGate(holdoffTicks);
         final ArrayDeque<Long> dirty = new ArrayDeque<>();
@@ -83,7 +110,7 @@ class CaptureHoldoffRedstoneBenchmarkTest {
         return run;
     }
 
-    private static void mark(
+    private static boolean mark(
         final CaptureHoldoffGate gate,
         final ArrayDeque<Long> dirty,
         final HashSet<Long> queued,
@@ -91,7 +118,9 @@ class CaptureHoldoffRedstoneBenchmarkTest {
     ) {
         if (gate.tryMark(chunkKey) && queued.add(chunkKey)) {
             dirty.addLast(chunkKey);
+            return true;
         }
+        return false;
     }
 
     private static long key(final int chunkX, final int chunkZ) {
