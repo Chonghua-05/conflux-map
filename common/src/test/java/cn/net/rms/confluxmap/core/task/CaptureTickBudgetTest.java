@@ -58,4 +58,55 @@ class CaptureTickBudgetTest {
         assertEquals(false, budget.canCapture(0, true));
     }
 
+    @Test
+    void windowScalesWithTheConfiguredBudgetAndSaturates() {
+        assertEquals(1_500_000L, CaptureTickBudget.windowNanos(1));
+        assertEquals(1_500_000L, CaptureTickBudget.windowNanos(0));
+        assertEquals(12_000_000L, CaptureTickBudget.windowNanos(8));
+        assertEquals(24_000_000L, CaptureTickBudget.windowNanos(16));
+        assertEquals(24_000_000L, CaptureTickBudget.windowNanos(64));
+    }
+
+    @Test
+    void loweredBudgetShrinksEffectiveThroughputOnAFastMachine() {
+        final AtomicLong clock = new AtomicLong();
+        final CaptureTickBudget budget = CaptureTickBudget.visible(1, clock::get);
+
+        int captured = 0;
+        while (budget.canCapture(captured)) {
+            captured++;
+            clock.addAndGet(100_000L);
+        }
+
+        assertEquals(15, captured);
+    }
+
+    @Test
+    void raisedBudgetExtendsTheBurstInsteadOfStallingAtTheConfiguredFloor() {
+        final AtomicLong clock = new AtomicLong();
+        final CaptureTickBudget budget = CaptureTickBudget.visible(64, clock::get);
+
+        int captured = 0;
+        while (budget.canCapture(captured)) {
+            captured++;
+            clock.addAndGet(100_000L);
+        }
+
+        assertEquals(240, captured);
+    }
+
+    @Test
+    void raisedBudgetOnASlowTickStopsAtTheWindowInsteadOfTheFullBudget() {
+        final AtomicLong clock = new AtomicLong();
+        final CaptureTickBudget budget = CaptureTickBudget.visible(64, clock::get);
+
+        int captured = 0;
+        while (budget.canCapture(captured)) {
+            captured++;
+            clock.addAndGet(2_000_000L);
+        }
+
+        assertEquals(12, captured);
+    }
+
 }

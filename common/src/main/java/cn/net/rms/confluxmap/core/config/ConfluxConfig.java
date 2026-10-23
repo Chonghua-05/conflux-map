@@ -201,6 +201,7 @@ public final class ConfluxConfig {
     /** Map quality level controlling LOD scale transition points. */
     public MapQuality mapQuality = MapQuality.BALANCED;
 
+    /** Visible-capture target per tick; scales the synchronous sampling window (CaptureTickBudget). */
     public int snapshotBudgetPerTick = 8;
     /** Tick window during which packet-driven marks on a just-captured chunk are deferred; 0 disables. */
     public int recaptureHoldoffTicks = 10;
