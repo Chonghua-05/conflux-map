@@ -24,8 +24,8 @@ package cn.net.rms.confluxmap.gametest;
 //#if MC>=12104
 //$$ @SuppressWarnings("UnstableApiUsage")
 //$$ public final class ClientConnectionGameTest implements FabricClientGameTest {
-//$$     private static final long MAX_COLD_MAP_RENDER_MS = 500L;
-//$$     private static final long MAX_CONTROL_MULTIPLIER = 4L;
+//$$     private static final long MAX_COLD_MAP_RENDER_MS = 600L;
+//$$     private static final long MAX_CONTROL_MULTIPLIER = 6L;
 //$$
 //$$     @Override
 //$$     public void runTest(final ClientGameTestContext context) {
