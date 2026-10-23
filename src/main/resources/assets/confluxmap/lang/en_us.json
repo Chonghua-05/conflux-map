@@ -409,6 +409,7 @@
   "confluxmap.config.waypoints.highlight_cross_dimension": "Show Highlight Across Dimensions: %s",
   "confluxmap.config.waypoints.label_scale": "Label Size: %s",
   "confluxmap.config.performance.snapshot_budget": "Map Update Speed: %s",
+  "confluxmap.config.performance.recapture_holdoff": "Live Recapture Interval: %s ticks",
   "confluxmap.config.performance.gpu_tile_cache_limit": "Loaded Map Area: %s",
   "confluxmap.config.performance.update_check": "Check for Updates on Launch: %s",
   "confluxmap.config.prediction.enabled": "Map Autofill: %s",

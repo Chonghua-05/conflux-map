@@ -14,6 +14,7 @@ import cn.net.rms.confluxmap.core.predict.PredictionTileService;
 import cn.net.rms.confluxmap.core.store.MapWorld;
 import cn.net.rms.confluxmap.core.store.MapWorldService;
 import cn.net.rms.confluxmap.core.task.CaptureRefreshSweep;
+import cn.net.rms.confluxmap.core.task.CaptureHoldoffGate;
 import cn.net.rms.confluxmap.core.task.CaptureTickBudget;
 import cn.net.rms.confluxmap.core.task.DirtyChunkSet;
 import cn.net.rms.confluxmap.core.task.MapExecutors;
@@ -67,6 +68,7 @@ public final class ChunkCaptureService {
     private final McTerrainChunkEncoder terrainEncoder;
     private final McTerrainWorker terrainWorker;
     private final DirtyChunkSet dirtyChunks = new DirtyChunkSet();
+    private final CaptureHoldoffGate holdoffGate = new CaptureHoldoffGate(0);
     private final CaptureRefreshSweep visibleRefresh = new CaptureRefreshSweep();
     private final AtomicLong storedSnapshots = new AtomicLong();
     private long lastLoggedSnapshots = -1;
@@ -120,6 +122,7 @@ public final class ChunkCaptureService {
     public void onSessionChanged(final SessionGuard.Session session) {
         dirtyChunks.clear();
         visibleRefresh.reset();
+        holdoffGate.clear();
         minimapViewport = null;
         layerSelector.onSessionChanged(session);
         lastDecision = null;
@@ -143,8 +146,15 @@ public final class ChunkCaptureService {
     }
 
     private void markCaptureDirty(final int chunkX, final int chunkZ) {
+        if (!holdoffGate.tryMark(chunkKey(chunkX, chunkZ))) {
+            return;
+        }
         dirtyChunks.mark(chunkX, chunkZ);
         visibleRefresh.markDirty(chunkX, chunkZ);
+    }
+
+    private static long chunkKey(final int chunkX, final int chunkZ) {
+        return ((long) chunkX << 32) | (chunkZ & 0xFFFFFFFFL);
     }
 
     /** Main thread, after a server block update has been applied to the client chunk. */
@@ -306,6 +316,10 @@ public final class ChunkCaptureService {
     }
 
     private void tick() {
+        holdoffGate.configure(config.recaptureHoldoffTicks);
+        for (final long matured : holdoffGate.tick()) {
+            markCaptureDirty((int) (matured >> 32), (int) matured);
+        }
         final MapWorld world = worlds.current();
         final ClientPlayerEntity player = client.player;
         final PlayerView viewpoint = gameBridge.viewpoint().orElse(null);
@@ -484,7 +498,11 @@ public final class ChunkCaptureService {
                 terrainWorker.prime(encoded);
             }
         }
-        return accepted == plan.size();
+        if (accepted == plan.size()) {
+            holdoffGate.recordCaptured(chunkKey((int) chunk[0], (int) chunk[1]));
+            return true;
+        }
+        return false;
     }
 
     private int finishWorkerResults(

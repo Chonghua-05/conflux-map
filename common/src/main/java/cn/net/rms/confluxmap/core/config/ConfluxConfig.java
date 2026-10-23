@@ -202,6 +202,8 @@ public final class ConfluxConfig {
     public MapQuality mapQuality = MapQuality.BALANCED;
 
     public int snapshotBudgetPerTick = 8;
+    /** Tick window during which packet-driven marks on a just-captured chunk are deferred; 0 disables. */
+    public int recaptureHoldoffTicks = 10;
     public int gpuTileCacheLimit = 256;
 
     /** Master toggle for the whole entity-radar overlay (docs/reference-specs/radar-icons.md sec 4). */
@@ -377,6 +379,7 @@ public final class ConfluxConfig {
         c.mapColorStyle = mapColorStyle;
         c.mapQuality = mapQuality;
         c.snapshotBudgetPerTick = snapshotBudgetPerTick;
+        c.recaptureHoldoffTicks = recaptureHoldoffTicks;
         c.gpuTileCacheLimit = gpuTileCacheLimit;
         c.portalMarkersEnabled = portalMarkersEnabled;
         c.portalIconsEnabled = portalIconsEnabled;
@@ -592,6 +595,7 @@ public final class ConfluxConfig {
         caveSliceY = clamp(caveSliceY, 0, 255);
         netherSliceY = clamp(netherSliceY, 0, 127);
         snapshotBudgetPerTick = clamp(snapshotBudgetPerTick, 1, 64);
+        recaptureHoldoffTicks = clamp(recaptureHoldoffTicks, 0, 100);
         gpuTileCacheLimit = clamp(gpuTileCacheLimit, 16, 2048);
         radarMaxEntities = clamp(radarMaxEntities, 1, 500);
         radarIconSize = clamp(radarIconSize, MIN_RADAR_ICON_SIZE, MAX_RADAR_ICON_SIZE);

@@ -409,6 +409,7 @@
   "confluxmap.config.waypoints.highlight_cross_dimension": "跨维度显示高亮位置：%s",
   "confluxmap.config.waypoints.label_scale": "标签大小：%s",
   "confluxmap.config.performance.snapshot_budget": "地图更新速度：%s",
+  "confluxmap.config.performance.recapture_holdoff": "动态重采间隔：%s tick",
   "confluxmap.config.performance.gpu_tile_cache_limit": "已加载地图范围：%s",
   "confluxmap.config.performance.update_check": "启动时检查更新：%s",
   "confluxmap.config.prediction.enabled": "地图补全：%s",

@@ -824,6 +824,11 @@ public final class ConfigScreen extends ConfluxScreen {
                     () -> config.snapshotBudgetPerTick, v -> config.snapshotBudgetPerTick = v, ConfigScreen::plainText
                 );
                 y = addIntSliderRow(
+                    y, "confluxmap.config.performance.recapture_holdoff", 0, 100,
+                    () -> config.recaptureHoldoffTicks, v -> config.recaptureHoldoffTicks = v,
+                    ConfigScreen::plainText
+                );
+                y = addIntSliderRow(
                     y, "confluxmap.config.performance.gpu_tile_cache_limit", 16, 2048,
                     () -> config.gpuTileCacheLimit, v -> config.gpuTileCacheLimit = v, ConfigScreen::plainText
                 );
