@@ -3,6 +3,7 @@ package cn.net.rms.confluxmap.core.export;
 import cn.net.rms.confluxmap.core.net.ChunkLoadBand;
 import cn.net.rms.confluxmap.core.net.LoadStateDeltaS2C;
 import cn.net.rms.confluxmap.core.util.Argb;
+import cn.net.rms.confluxmap.core.util.ChunkKeys;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
@@ -21,7 +22,7 @@ public final class MapExportLoadState {
         final Map<Long, ChunkLoadBand> copy = new HashMap<>();
         for (final LoadStateDeltaS2C.Entry entry : entries) {
             if (entry.band() != ChunkLoadBand.UNLOADED) {
-                copy.put(key(entry.chunkX(), entry.chunkZ()), entry.band());
+                copy.put(ChunkKeys.pack(entry.chunkX(), entry.chunkZ()), entry.band());
             }
         }
         bands = Map.copyOf(copy);
@@ -36,7 +37,7 @@ public final class MapExportLoadState {
         final int blockZ,
         final MapExportResolution resolution
     ) {
-        final ChunkLoadBand band = bands.get(key(blockX >> 4, blockZ >> 4));
+        final ChunkLoadBand band = bands.get(ChunkKeys.pack(blockX >> 4, blockZ >> 4));
         if (band == null) {
             return Argb.TRANSPARENT;
         }
@@ -55,9 +56,5 @@ public final class MapExportLoadState {
         return pixelX == 0 || pixelZ == 0 || pixelX == chunkPixels - 1 || pixelZ == chunkPixels - 1
             ? Argb.over(OUTLINE_COLOR, fill)
             : fill;
-    }
-
-    private static long key(final int chunkX, final int chunkZ) {
-        return (long) chunkX << 32 ^ (chunkZ & 0xFFFFFFFFL);
     }
 }

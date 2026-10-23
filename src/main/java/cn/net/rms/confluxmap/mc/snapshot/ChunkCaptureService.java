@@ -20,6 +20,7 @@ import cn.net.rms.confluxmap.core.task.DirtyChunkSet;
 import cn.net.rms.confluxmap.core.task.MapExecutors;
 import cn.net.rms.confluxmap.core.task.SessionGuard;
 import cn.net.rms.confluxmap.core.tile.TileService;
+import cn.net.rms.confluxmap.core.util.ChunkKeys;
 import cn.net.rms.confluxmap.core.util.ChunkViewport;
 import cn.net.rms.confluxmap.mc.color.BiomeTintResolver;
 import cn.net.rms.confluxmap.mc.color.SpriteColorSampler;
@@ -146,15 +147,11 @@ public final class ChunkCaptureService {
     }
 
     private void markCaptureDirty(final int chunkX, final int chunkZ) {
-        if (!holdoffGate.tryMark(chunkKey(chunkX, chunkZ))) {
+        if (!holdoffGate.tryMark(ChunkKeys.pack(chunkX, chunkZ))) {
             return;
         }
         dirtyChunks.mark(chunkX, chunkZ);
         visibleRefresh.markDirty(chunkX, chunkZ);
-    }
-
-    private static long chunkKey(final int chunkX, final int chunkZ) {
-        return ((long) chunkX << 32) | (chunkZ & 0xFFFFFFFFL);
     }
 
     /** Main thread, after a server block update has been applied to the client chunk. */
@@ -318,7 +315,7 @@ public final class ChunkCaptureService {
     private void tick() {
         holdoffGate.configure(config.recaptureHoldoffTicks);
         for (final long matured : holdoffGate.tick()) {
-            markCaptureDirty((int) (matured >> 32), (int) matured);
+            markCaptureDirty(ChunkKeys.chunkX(matured), ChunkKeys.chunkZ(matured));
         }
         final MapWorld world = worlds.current();
         final ClientPlayerEntity player = client.player;
@@ -499,7 +496,7 @@ public final class ChunkCaptureService {
             }
         }
         if (accepted == plan.size()) {
-            holdoffGate.recordCaptured(chunkKey((int) chunk[0], (int) chunk[1]));
+            holdoffGate.recordCaptured(ChunkKeys.pack((int) chunk[0], (int) chunk[1]));
             return true;
         }
         return false;

@@ -1,6 +1,7 @@
 package cn.net.rms.confluxmap.core.predict;
 
 import cn.net.rms.confluxmap.core.model.SurfaceKind;
+import cn.net.rms.confluxmap.core.util.ChunkKeys;
 import java.util.ArrayList;
 import java.util.HashSet;
 import java.util.List;
@@ -153,7 +154,7 @@ public final class CanopyStylizer {
                 }
                 final int bx = tileOriginX + px * bpp;
                 final int bz = tileOriginZ + pz * bpp;
-                if (chunks != null && !chunks.contains(chunkKey(Math.floorDiv(bx, 16), Math.floorDiv(bz, 16)))) {
+                if (chunks != null && !chunks.contains(ChunkKeys.pack(Math.floorDiv(bx, 16), Math.floorDiv(bz, 16)))) {
                     continue;
                 }
                 final int bump = lod <= 1 ? canopyBlob(seed, bx, bz, treeCover) : canopyPoint(seed, bx, bz, treeCover);
@@ -224,7 +225,7 @@ public final class CanopyStylizer {
             for (int chunkX = minChunkX; chunkX <= maxChunkX; chunkX++) {
                 final int count = sampler.treeCandidates(chunkX, chunkZ, chunkCandidates);
                 if (count == BaselineSampler.TREES_UNSUPPORTED) {
-                    fallbackChunks.add(chunkKey(chunkX, chunkZ));
+                    fallbackChunks.add(ChunkKeys.pack(chunkX, chunkZ));
                     continue;
                 }
                 if (count < 0 || count > chunkCandidates.length) {
@@ -248,10 +249,6 @@ public final class CanopyStylizer {
             paintCandidate(derived, baseSurfaceY, candidate, lod, tileOriginX, tileOriginZ);
         }
         return true;
-    }
-
-    private static long chunkKey(final int chunkX, final int chunkZ) {
-        return ((long) chunkX << 32) | (chunkZ & 0xFFFFFFFFL);
     }
 
     private static void paintCandidate(

@@ -1,5 +1,6 @@
 package cn.net.rms.confluxmap.core.task;
 
+import cn.net.rms.confluxmap.core.util.ChunkKeys;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.HashSet;
@@ -44,18 +45,14 @@ public final class DirtyChunkSet {
     /** Drains so far - the clock the {@link #MAX_DEFERRALS} hold is measured against. */
     private int drains;
 
-    private static long key(final int chunkX, final int chunkZ) {
-        return ((long) chunkX << 32) | (chunkZ & 0xFFFFFFFFL);
-    }
-
     /** Marking an already-dirty chunk keeps the drain it was first marked on, so re-marks cannot starve it. */
     public void mark(final int chunkX, final int chunkZ) {
-        dirty.putIfAbsent(key(chunkX, chunkZ), drains);
+        dirty.putIfAbsent(ChunkKeys.pack(chunkX, chunkZ), drains);
     }
 
     /** Removes work already completed by a higher-priority queue. */
     public void discard(final int chunkX, final int chunkZ) {
-        final long key = key(chunkX, chunkZ);
+        final long key = ChunkKeys.pack(chunkX, chunkZ);
         dirty.remove(key);
         degraded.remove(key);
     }
@@ -90,10 +87,10 @@ public final class DirtyChunkSet {
     /** Keeps only dirty chunks accepted by {@code predicate}. */
     public void retain(final ChunkPredicate predicate) {
         dirty.keySet().removeIf(chunk ->
-            !predicate.test((int) (chunk >> 32), (int) chunk.longValue())
+            !predicate.test(ChunkKeys.chunkX(chunk), ChunkKeys.chunkZ(chunk))
         );
         degraded.removeIf(chunk ->
-            !predicate.test((int) (chunk >> 32), (int) chunk.longValue())
+            !predicate.test(ChunkKeys.chunkX(chunk), ChunkKeys.chunkZ(chunk))
         );
     }
 
@@ -131,8 +128,8 @@ public final class DirtyChunkSet {
             if (result.size() >= budget) {
                 break;
             }
-            final int chunkX = (int) (key >> 32);
-            final int chunkZ = (int) key;
+            final int chunkX = ChunkKeys.chunkX(key);
+            final int chunkZ = ChunkKeys.chunkZ(key);
             final Readiness state = readiness.of(chunkX, chunkZ);
             if (state == Readiness.MISSING) {
                 dirty.remove(key);
@@ -154,8 +151,8 @@ public final class DirtyChunkSet {
     }
 
     private static long distanceSq(final long key, final int centerX, final int centerZ) {
-        final long dx = (key >> 32) - centerX;
-        final long dz = (int) key - centerZ;
+        final long dx = ChunkKeys.chunkX(key) - centerX;
+        final long dz = ChunkKeys.chunkZ(key) - centerZ;
         return dx * dx + dz * dz;
     }
 
