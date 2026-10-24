@@ -78,6 +78,19 @@ public interface BaselineSampler {
         return false;
     }
 
+    /**
+     * Search-targeted variant of {@link #biomesSparseStrided}: cells that cannot be {@code
+     * targetBiomeId} may be rejected cheaply and reported as {@code -1} instead of paying a full
+     * biome query; every other cell carries its real biome id. The default falls back to the
+     * plain sparse sweep, which yields the same hits.
+     */
+    default boolean biomesScanStrided(
+        final int scale, final int x, final int z, final int w, final int h, final int stride,
+        final int targetBiomeId, final int[] out
+    ) {
+        return biomesSparseStrided(scale, x, z, w, h, stride, out);
+    }
+
     /** Overworld: floored heights for a w*h rectangle at 1:4 scale ({@code x4}/{@code z4} = blockX/4, blockZ/4). */
     boolean heights(int x4, int z4, int w, int h, int[] outY);
 

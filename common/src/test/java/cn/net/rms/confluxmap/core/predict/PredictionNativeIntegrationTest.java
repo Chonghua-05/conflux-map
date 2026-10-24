@@ -341,6 +341,74 @@ class PredictionNativeIntegrationTest {
     }
 
     @Test
+    void scanStridedPrefilterNeverChangesTheHitsSparseWouldReport() {
+        final int side = 32;
+        final int stride = 9;
+        final NativeBaselineSampler overworld = new NativeBaselineSampler(
+            mc21(), SEED, PredictionDimensions.OVERWORLD, 0
+        );
+        final int[] sparse = new int[side * side];
+        assertTrue(overworld.biomesSparseStrided(16, -200, 60, side, side, stride, sparse));
+
+        for (final String name : new String[] {"forest", "plains", "mushroom_fields", "ocean"}) {
+            final OptionalInt target = CubiomesBiomeIds.idForName(name);
+            assertTrue(target.isPresent(), "CubiomesBiomeIds must know " + name);
+            final int[] scan = new int[side * side];
+            assertTrue(overworld.biomesScanStrided(
+                16, -200, 60, side, side, stride, target.getAsInt(), scan
+            ));
+            int rejected = 0;
+            int hits = 0;
+            for (int i = 0; i < scan.length; i++) {
+                if (scan[i] == -1) {
+                    rejected++;
+                    assertFalse(
+                        sparse[i] == target.getAsInt(),
+                        "prefilter rejected a cell the full query reports as " + name
+                    );
+                } else {
+                    assertEquals(
+                        sparse[i], scan[i],
+                        "a surviving cell must carry the same biome id the plain sparse sweep reports"
+                    );
+                }
+                if (sparse[i] == target.getAsInt()) {
+                    hits++;
+                }
+            }
+            assertTrue(hits > 0 || rejected > 0, "grid must produce a signal for " + name);
+        }
+
+        // A target without a parameter table degrades to the plain sparse sweep.
+        final int[] unlisted = new int[side * side];
+        assertTrue(overworld.biomesScanStrided(16, -200, 60, side, side, stride, 200, unlisted));
+        assertArrayEquals(
+            sparse, unlisted,
+            "an id with no climate envelope must scan identically to the plain sparse sweep"
+        );
+
+        final NativeBaselineSampler nether = new NativeBaselineSampler(
+            mc21(), SEED, PredictionDimensions.NETHER, 0
+        );
+        final int[] netherSparse = new int[64];
+        final int[] netherScan = new int[64];
+        assertTrue(nether.biomesSparseStrided(4, 0, 0, 8, 8, 3, netherSparse));
+        assertTrue(nether.biomesScanStrided(4, 0, 0, 8, 8, 3, 8, netherScan));
+        assertArrayEquals(
+            netherSparse, netherScan,
+            "Nether has no climate envelope; the scan must equal the plain sparse sweep"
+        );
+
+        final NativeBaselineSampler legacy = new NativeBaselineSampler(
+            mc17(), SEED, PredictionDimensions.OVERWORLD, 0
+        );
+        assertFalse(
+            legacy.biomesScanStrided(16, 0, 0, 2, 2, 1, 4, new int[4]),
+            "pre-1.18 Overworld layer stacks must keep failing so callers fall back"
+        );
+    }
+
+    @Test
     void overviewPipelineHasTheSameQualityContractAcrossVersionsAndLods() {
         assertOverviewQuality(mc17(), 0);
         assertOverviewQuality(mc17(), 4);

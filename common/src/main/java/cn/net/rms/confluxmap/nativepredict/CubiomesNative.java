@@ -74,6 +74,16 @@ final class CubiomesNative {
         long handle, int scale, int x, int z, int w, int h, int stride, int[] out
     );
 
+    /**
+     * Search-targeted variant of {@link #cfxBiomesSparseStrided}: cells that cannot be
+     * {@code targetBiomeId} (Overworld post-1.18 scale 16, by climate-parameter envelope)
+     * are rejected cheaply and reported as {@code -1}; every other cell carries its real
+     * biome id. Same supported combinations as the sparse variant.
+     */
+    static native int cfxBiomesScanStrided(
+        long handle, int scale, int x, int z, int w, int h, int stride, int targetBiomeId, int[] out
+    );
+
     /** Nether-only strided biome grid sampled at the requested block Y. */
     static native int cfxBiomesAtYStrided(
         long handle, int blockY, int scale, int x, int z, int w, int h, int stride, int[] out

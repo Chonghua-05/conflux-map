@@ -29,13 +29,14 @@
 #include <jni.h>
 #include <stdint.h>
 #include <stdlib.h>
+#include <limits.h>
 #include <math.h>
 
 #include "finders.h"
 #include "features/end_city.h"
 #include "terrain_features.h"
 
-#define CFX_ABI 13
+#define CFX_ABI 14
 #define CFX_NETHER_ROOF_Y 127
 
 #define CFX_OK              0
@@ -375,6 +376,97 @@ JNIEXPORT jint JNICALL Java_cn_net_rms_confluxmap_nativepredict_CubiomesNative_c
         for (i = 0; i < w; i++)
         {
             const Range r = { scale, x + i * stride, z + j * stride, 1, 1, 0, 1 };
+            if (cfxGenerateBiomes(ctx, &sampled[j * w + i], r, CFX_NETHER_ROOF_Y) != CFX_OK)
+            {
+                free(sampled);
+                return CFX_ERR_GENERATION;
+            }
+        }
+    }
+    (*env)->SetIntArrayRegion(env, out, 0, w * h, sampled);
+    free(sampled);
+    return CFX_OK;
+}
+
+/*
+ * Search-targeted variant of cfxBiomesSparseStrided: only cells that could still be
+ * the target biome pay the full biome query. Overworld post-1.18 at scale 16 consults
+ * the target's climate-parameter envelope (getBiomeParaLimits). The scale-16 full
+ * query samples its climate parameters at quart coordinates (x + i*stride)*4 + 2 with
+ * SAMPLE_NO_SHIFT, so the prefilter samples the same DoublePerlin noise at the same
+ * coordinates: a parameter outside the envelope proves the cell cannot be the target.
+ * Parameter quantization mirrors sampleBiomeNoise exactly
+ * ((int64_t)(10000.0F * (float) v)) so a cell sitting on an envelope edge cannot be
+ * wrongly rejected. Rejected cells are reported as -1; every other cell carries its
+ * real biome id, so a caller matching by id sees the same hits with or without the
+ * prefilter. Combinations without a parameter table (Nether scale 4, End scale 4/16,
+ * unlisted Overworld ids) fall back to the plain per-cell query.
+ */
+JNIEXPORT jint JNICALL Java_cn_net_rms_confluxmap_nativepredict_CubiomesNative_cfxBiomesScanStrided(
+    JNIEnv *env, jclass clazz, jlong handle,
+    jint scale, jint x, jint z, jint w, jint h, jint stride, jint target, jintArray out
+)
+{
+    (void) clazz;
+    CfxContext *ctx = cfxHandle(handle);
+    if (ctx == NULL)
+        return CFX_ERR_BAD_HANDLE;
+    if (!cfxValidCells(w, h) || stride <= 0)
+        return CFX_ERR_BAD_SIZE;
+    if (!cfxValidScale(scale))
+        return CFX_ERR_BAD_ARGS;
+    const int supported =
+        (ctx->dim == DIM_OVERWORLD && ctx->mc >= MC_1_18 && scale == 16) ||
+        (ctx->dim == DIM_NETHER && scale == 4) ||
+        (ctx->dim == DIM_END && (scale == 4 || scale == 16));
+    if (!supported)
+        return CFX_ERR_BAD_ARGS;
+    const int64_t lastX = (int64_t) x + (int64_t) (w - 1) * stride;
+    const int64_t lastZ = (int64_t) z + (int64_t) (h - 1) * stride;
+    if (lastX < INT32_MIN || lastX > INT32_MAX
+        || lastZ < INT32_MIN || lastZ > INT32_MAX)
+        return CFX_ERR_BAD_ARGS;
+    if ((*env)->GetArrayLength(env, out) < w * h)
+        return CFX_ERR_BAD_SIZE;
+
+    const int *lim = (ctx->dim == DIM_OVERWORLD && ctx->mc >= MC_1_18 && scale == 16)
+        ? getBiomeParaLimits(ctx->mc, target) : NULL;
+    static const int para[] = {
+        NP_TEMPERATURE, NP_HUMIDITY, NP_EROSION, NP_CONTINENTALNESS, NP_WEIRDNESS,
+    };
+
+    int *sampled = malloc(sizeof(int) * (size_t) w * (size_t) h);
+    if (sampled == NULL)
+        return CFX_ERR_ALLOC;
+    int j, i, k;
+    for (j = 0; j < h; j++)
+    {
+        for (i = 0; i < w; i++)
+        {
+            const int cx = x + i * stride;
+            const int cz = z + j * stride;
+            if (lim != NULL)
+            {
+                const double qx = (double) (cx * 4 + 2);
+                const double qz = (double) (cz * 4 + 2);
+                for (k = 0; k < 5; k++)
+                {
+                    const int *plim = lim + 2 * para[k];
+                    if (plim[0] == INT_MIN && plim[1] == INT_MAX)
+                        continue;
+                    const float v = (float) sampleDoublePerlin(
+                        &ctx->g.bn.climate[para[k]], qx, 0, qz);
+                    const int64_t q = (int64_t) (10000.0F * v);
+                    if (q < plim[0] || q > plim[1])
+                        break;
+                }
+                if (k < 5)
+                {
+                    sampled[j * w + i] = -1;
+                    continue;
+                }
+            }
+            const Range r = { scale, cx, cz, 1, 1, 0, 1 };
             if (cfxGenerateBiomes(ctx, &sampled[j * w + i], r, CFX_NETHER_ROOF_Y) != CFX_OK)
             {
                 free(sampled);

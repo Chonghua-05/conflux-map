@@ -14,6 +14,9 @@ import cn.net.rms.confluxmap.core.task.SessionGuard;
 import java.util.Arrays;
 import java.util.List;
 import java.util.OptionalInt;
+import java.util.Set;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
 import org.junit.jupiter.api.Test;
 
 class BiomeSearchServiceTest {
@@ -609,5 +612,69 @@ class BiomeSearchServiceTest {
                 return false;
             }
         };
+    }
+
+    @Test
+    void parallelScanMatchesSingleThreadedResultsAndCoversEveryRowExactlyOnce() throws InterruptedException {
+        final Set<Long> scannedRows = java.util.Collections.synchronizedSet(new java.util.HashSet<>());
+        final BaselineSampler sampler = new BaselineSampler() {
+            @Override
+            public boolean biomesScanStrided(
+                final int scale, final int x, final int z, final int w, final int h,
+                final int stride, final int targetBiomeId, final int[] out
+            ) {
+                if (scale != 16) {
+                    return false;
+                }
+                for (int row = 0; row < h; row++) {
+                    if (!scannedRows.add((long) z + row * stride)) {
+                        throw new IllegalStateException("row scanned twice: " + (z + row * stride));
+                    }
+                    for (int column = 0; column < w; column++) {
+                        final int blockX = (x + column * stride) * 16;
+                        final int blockZ = (z + row * stride) * 16;
+                        final boolean hit = blockX >= -2048 && blockX <= 2048 && blockZ >= -512 && blockZ <= 512;
+                        out[row * w + column] = hit && (blockX + blockZ) % 400 == 0 ? targetBiomeId : -1;
+                    }
+                }
+                return true;
+            }
+
+            @Override
+            public boolean biomes(
+                final int scale, final int x, final int z, final int w, final int h, final int[] out
+            ) {
+                return false;
+            }
+
+            @Override
+            public boolean heights(final int x4, final int z4, final int w, final int h, final int[] outY) {
+                return false;
+            }
+
+            @Override
+            public boolean endHeights(final int x4, final int z4, final int w, final int h, final int[] outY) {
+                return false;
+            }
+        };
+
+        final List<BiomeCandidateSearch.Candidate> singleThreaded = BiomeSearchService.samplePredicted(
+            sampler, 7, 0, 0, 100_000, 10
+        );
+        assertFalse(singleThreaded.isEmpty(), "the fake layout must produce candidates");
+        final ExecutorService pool = Executors.newFixedThreadPool(3);
+        try {
+            scannedRows.clear();
+            final List<BiomeCandidateSearch.Candidate> parallel = BiomeSearchService.samplePredicted(
+                sampler, 7, 0, 0, 100_000, 10, SearchOrder.NEAREST, pool, 3
+            );
+            assertEquals(singleThreaded, parallel, "row-parallel scanning must not change the candidates");
+            assertEquals(
+                511, scannedRows.size(),
+                "every grid row must be scanned exactly once across all bands"
+            );
+        } finally {
+            pool.shutdownNow();
+        }
     }
 }

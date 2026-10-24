@@ -63,6 +63,22 @@ public final class NativeBaselineSampler implements BaselineSampler {
     }
 
     @Override
+    public boolean biomesScanStrided(
+        final int scale, final int x, final int z, final int w, final int h, final int stride,
+        final int targetBiomeId, final int[] out
+    ) {
+        try {
+            final CubiomesContext ctx = CubiomesContexts.get(mcVersion, seed, dim, flags);
+            return ctx != null && ctx.biomesScanStrided(
+                scale, x, z, w, h, stride, targetBiomeId, out
+            ) == 0;
+        } catch (final Throwable fault) {
+            NativeLib.disableForSession(fault);
+            return false;
+        }
+    }
+
+    @Override
     public boolean biomesAtYStrided(
         final int blockY,
         final int scale,

@@ -12,6 +12,7 @@ import cn.net.rms.confluxmap.core.predict.BiomeSearchService;
 import cn.net.rms.confluxmap.core.predict.CubiomesBiomeIds;
 import cn.net.rms.confluxmap.core.predict.SearchOrder;
 import cn.net.rms.confluxmap.core.store.ColumnStore;
+import cn.net.rms.confluxmap.core.task.MapExecutors;
 import cn.net.rms.confluxmap.mc.ui.GuiDraw;
 import java.util.ArrayList;
 import java.util.List;
@@ -229,7 +230,8 @@ final class BiomeCandidateScreen extends ConfluxScreen {
         scrollOffset = 0;
         rebuild();
         try {
-            ConfluxMapClient.get().executors().workers().execute(() -> {
+            final MapExecutors executors = ConfluxMapClient.get().executors();
+            executors.workers().execute(() -> {
                 final List<BiomeCandidateSearch.Candidate> found = BiomeSearchService.search(
                     store,
                     biome.toString(),
@@ -239,7 +241,11 @@ final class BiomeCandidateScreen extends ConfluxScreen {
                     queryCenterZ,
                     queryRadius,
                     queryLimit,
-                    queryOrder
+                    queryOrder,
+                    executors.workers(),
+                    // The search already occupies one worker and runs the first row band
+                    // itself, so workerCount-1 bands still leave a worker for tile compositing.
+                    Math.max(1, executors.workerCount() - 1)
                 );
                 MinecraftClient.getInstance().execute(() -> acceptResults(
                     generation, found, sampler != null

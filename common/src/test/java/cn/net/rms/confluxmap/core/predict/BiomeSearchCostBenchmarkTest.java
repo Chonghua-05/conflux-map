@@ -69,6 +69,28 @@ class BiomeSearchCostBenchmarkTest {
         final boolean sparseOk = sampler.biomesSparseStrided(16, 0, 0, SIDE, SIDE, STRIDE / 16, sparseIds);
         final long t8 = System.nanoTime();
 
+        final OptionalInt forest = CubiomesBiomeIds.idForName("forest");
+        assertTrue(forest.isPresent(), "CubiomesBiomeIds must know \"forest\"");
+        final OptionalInt mushroom = CubiomesBiomeIds.idForName("mushroom_fields");
+        assertTrue(mushroom.isPresent(), "CubiomesBiomeIds must know \"mushroom_fields\"");
+        final int[] scanIds = new int[cells];
+        final long t9 = System.nanoTime();
+        final boolean scanForestOk = sampler.biomesScanStrided(
+            16, 0, 0, SIDE, SIDE, STRIDE / 16, forest.getAsInt(), scanIds
+        );
+        final long t10 = System.nanoTime();
+        final long t11 = System.nanoTime();
+        final boolean scanMushroomOk = sampler.biomesScanStrided(
+            16, 0, 0, SIDE, SIDE, STRIDE / 16, mushroom.getAsInt(), scanIds
+        );
+        final long t12 = System.nanoTime();
+        int rejectedByMushroomPrefilter = 0;
+        for (final int id : scanIds) {
+            if (id == -1) {
+                rejectedByMushroomPrefilter++;
+            }
+        }
+
         System.out.printf(
             "grid=%dx%d strideBlocks=%d cells=%d%n"
                 + "  overviewHeights       : %10.3f ms  %8.3f us/point%n"
@@ -76,14 +98,19 @@ class BiomeSearchCostBenchmarkTest {
                 + "  surface total         : %10.3f ms%n"
                 + "  biomesStrided s4      : %10.3f ms  %8.3f us/point (%b)%n"
                 + "  biomesStrided s16     : %10.3f ms  %8.3f us/point (%b)%n"
-                + "  biomesSparseStrided16 : %10.3f ms  %8.3f us/point (%b)%n",
+                + "  biomesSparseStrided16 : %10.3f ms  %8.3f us/point (%b)%n"
+                + "  scanStrided forest    : %10.3f ms  %8.3f us/point (%b)%n"
+                + "  scanStrided mushroom  : %10.3f ms  %8.3f us/point (%b, %d/%d prefiltered)%n",
             SIDE, SIDE, STRIDE, cells,
             (t1 - t0) / 1e6, (t1 - t0) / 1e3 / cells,
             (t2 - t1) / 1e6, (t2 - t1) / 1e3 / cells,
             (t2 - t0) / 1e6,
             (t4 - t3) / 1e6, (t4 - t3) / 1e3 / 16.0, quartOk,
             (t6 - t5) / 1e6, (t6 - t5) / 1e3 / cells, coarseOk,
-            (t8 - t7) / 1e6, (t8 - t7) / 1e3 / cells, sparseOk
+            (t8 - t7) / 1e6, (t8 - t7) / 1e3 / cells, sparseOk,
+            (t10 - t9) / 1e6, (t10 - t9) / 1e3 / cells, scanForestOk,
+            (t12 - t11) / 1e6, (t12 - t11) / 1e3 / cells, scanMushroomOk,
+            rejectedByMushroomPrefilter, cells
         );
     }
 }

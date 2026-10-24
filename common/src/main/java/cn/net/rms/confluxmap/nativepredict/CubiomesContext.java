@@ -65,6 +65,23 @@ public final class CubiomesContext implements AutoCloseable {
         return CubiomesNative.cfxBiomesSparseStrided(handle, scale, x, z, w, h, stride, out);
     }
 
+    /**
+     * Search-targeted sparse grid: cells that cannot be {@code targetBiomeId} (Overworld
+     * post-1.18 scale 16, by climate-parameter envelope) are rejected cheaply and reported
+     * as {@code -1}; every other cell carries its real biome id. Same supported (dimension,
+     * scale) combinations as {@link #biomesSparseStrided}.
+     */
+    public int biomesScanStrided(
+        final int scale, final int x, final int z, final int w, final int h, final int stride,
+        final int targetBiomeId, final int[] out
+    ) {
+        requireOpen();
+        requireCapacity(out, w, h);
+        return CubiomesNative.cfxBiomesScanStrided(
+            handle, scale, x, z, w, h, stride, targetBiomeId, out
+        );
+    }
+
     /** Nether-only strided biome grid sampled at one block Y. */
     public int biomesAtYStrided(
         final int blockY,
