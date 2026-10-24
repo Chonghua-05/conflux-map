@@ -192,6 +192,35 @@ final class PaperCorrectionService implements AutoCloseable {
         }
     }
 
+    /**
+     * Asynchronous captures can complete out of order, so a stale snapshot finishing after a
+     * newer one must never overwrite it: a commit is dropped when the cache already holds a
+     * strictly newer revision.
+     */
+    void putLiveIfNewer(
+        final PaperWorldDirectory.Entry world,
+        final int chunkX,
+        final int chunkZ,
+        final SummaryCodec.Chunk summary
+    ) {
+        if (world == null) {
+            return;
+        }
+        final SummaryCodec.Chunk existing = live.get(world.dimensionId(), chunkX, chunkZ);
+        if (existing != null && existing.revision() > summary.revision()) {
+            return;
+        }
+        putLive(world, chunkX, chunkZ, summary);
+    }
+
+    SummaryCodec.Chunk liveSummary(
+        final PaperWorldDirectory.Entry world,
+        final int chunkX,
+        final int chunkZ
+    ) {
+        return world == null ? null : live.get(world.dimensionId(), chunkX, chunkZ);
+    }
+
     void removeLive(
         final PaperWorldDirectory.Entry world,
         final int chunkX,

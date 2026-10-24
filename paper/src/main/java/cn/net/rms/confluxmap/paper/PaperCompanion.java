@@ -28,10 +28,17 @@ import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.Iterator;
 import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.UUID;
+import java.util.concurrent.ArrayBlockingQueue;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.RejectedExecutionException;
+import java.util.concurrent.ThreadPoolExecutor;
+import java.util.concurrent.TimeUnit;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
 import org.bukkit.Bukkit;
@@ -46,11 +53,11 @@ import org.bukkit.event.player.PlayerRegisterChannelEvent;
 import org.bukkit.event.world.ChunkLoadEvent;
 import org.bukkit.event.world.ChunkUnloadEvent;
 import org.bukkit.event.world.WorldLoadEvent;
+import org.bukkit.plugin.IllegalPluginAccessException;
 import org.bukkit.scheduler.BukkitTask;
 
 /** Owns one Paper server's companion lifecycle and platform adapters. */
 final class PaperCompanion implements Listener {
-    private static final int MAX_LIVE_SUMMARIES_PER_TICK = 2;
     private static final int MAX_LIVE_INSPECTIONS_PER_TICK = 128;
     /**
      * Unloaded-chunk overlays are rechecked once a second and dropped 30s after unload even if
@@ -80,6 +87,25 @@ final class PaperCompanion implements Listener {
     private final PaperServerConfigIo configIo;
     private final PaperWorldDirectory worlds = new PaperWorldDirectory();
     private final Map<ChunkKey, Chunk> liveChunks = new LinkedHashMap<>();
+    private final ExecutorService captureWorkers = new ThreadPoolExecutor(
+        2,
+        2,
+        0L,
+        TimeUnit.MILLISECONDS,
+        new ArrayBlockingQueue<>(PaperLiveCapturePolicy.MAX_IN_FLIGHT_CAPTURES),
+        runnable -> {
+            final Thread thread = new Thread(runnable, "ConfluxMap-paper-capture");
+            thread.setDaemon(true);
+            return thread;
+        }
+    );
+    /**
+     * Capture bookkeeping, main-thread only: the tick each chunk was last handed to a worker
+     * and the captures still being summarized. Summaries are computed from immutable snapshots
+     * on the worker pool and committed back on the main thread.
+     */
+    private final Map<ChunkKey, Long> captureTicks = new LinkedHashMap<>();
+    private final Set<ChunkKey> capturesInFlight = new LinkedHashSet<>();
     private long tickCount;
     private final Map<Integer, FlatBaseline> flatBaselines = new ConcurrentHashMap<>();
     private final Map<Integer, Map<FlatBaseline, Integer>> flatCandidates = new LinkedHashMap<>();
@@ -261,6 +287,14 @@ final class PaperCompanion implements Listener {
             corrections.close();
             corrections = null;
         }
+        capturesInFlight.clear();
+        captureTicks.clear();
+        captureWorkers.shutdownNow();
+        try {
+            captureWorkers.awaitTermination(5L, TimeUnit.SECONDS);
+        } catch (final InterruptedException e) {
+            Thread.currentThread().interrupt();
+        }
         if (datapackLangs != null) {
             datapackLangs.shutdown();
             datapackLangs = null;
@@ -314,9 +348,18 @@ final class PaperCompanion implements Listener {
             return;
         }
         final Chunk chunk = event.getChunk();
-        capture(entry, chunk);
         final ChunkKey key = new ChunkKey(entry, chunk.getX(), chunk.getZ());
+        // An unload capture is the chunk's last chance to record its final in-memory state, and
+        // it is only worth the main-thread cost while somebody is watching the area: unwatched
+        // chunks keep their previous summary until the region mtime or the removal deadline
+        // retires it, and the saved region file is the durable source anyway.
+        if (corrections.liveSummaryDemanded(
+            entry, chunk.getX(), chunk.getZ(), System.nanoTime()
+        )) {
+            captureAsync(entry, chunk);
+        }
         liveChunks.remove(key);
+        captureTicks.remove(key);
         pendingRemovals.onUnload(
             entry.index(),
             chunk.getX(),
@@ -503,7 +546,7 @@ final class PaperCompanion implements Listener {
             chunkLoadStates.onChunkLoad(entry, chunk);
         }
         if (captureNow && isEnabled()) {
-            capture(entry, chunk);
+            captureAsync(entry, chunk);
         }
     }
 
@@ -511,7 +554,9 @@ final class PaperCompanion implements Listener {
         final int configuredPerTick = Math.max(
             1, (config.maxChunkSummariesPerSecond + 19) / 20
         );
-        final int captureBudget = Math.min(MAX_LIVE_SUMMARIES_PER_TICK, configuredPerTick);
+        final int captureBudget = Math.min(
+            PaperLiveCapturePolicy.MAX_LIVE_SUMMARIES_PER_TICK, configuredPerTick
+        );
         final int available = liveChunks.size();
         final int inspectionBudget = Math.min(available, MAX_LIVE_INSPECTIONS_PER_TICK);
         final long nowNanos = System.nanoTime();
@@ -531,29 +576,114 @@ final class PaperCompanion implements Listener {
             )) {
                 continue;
             }
-            capture(entry.getKey().world(), entry.getValue());
+            if (!PaperLiveCapturePolicy.shouldScanCapture(
+                corrections.liveSummary(
+                    entry.getKey().world(), entry.getKey().chunkX(), entry.getKey().chunkZ()
+                ) != null,
+                ticksSinceCaptured(entry.getKey())
+            )) {
+                continue;
+            }
+            if (!captureAsync(entry.getKey().world(), entry.getValue())) {
+                continue;
+            }
             captured++;
+            if (System.nanoTime() - nowNanos >= PaperLiveCapturePolicy.SNAPSHOT_BUDGET_NANOS) {
+                break;
+            }
         }
     }
 
-    private void capture(final PaperWorldDirectory.Entry entry, final Chunk chunk) {
+    private long ticksSinceCaptured(final ChunkKey key) {
+        final Long capturedAt = captureTicks.get(key);
+        return capturedAt == null ? Long.MAX_VALUE : tickCount - capturedAt;
+    }
+
+    /**
+     * Takes the chunk snapshot on the main thread (the only part of a capture that must happen
+     * while the chunk is still loaded) and hands the immutable snapshot to a worker for
+     * summarization; the commit lands back on the main thread.
+     *
+     * @return whether a capture was scheduled
+     */
+    private boolean captureAsync(final PaperWorldDirectory.Entry entry, final Chunk chunk) {
         if (!isEnabled() || !chunk.isLoaded()) {
-            return;
+            return false;
+        }
+        final ChunkKey key = new ChunkKey(entry, chunk.getX(), chunk.getZ());
+        if (capturesInFlight.contains(key)
+            || capturesInFlight.size() >= PaperLiveCapturePolicy.MAX_IN_FLIGHT_CAPTURES) {
+            return false;
         }
         try {
             final ChunkSnapshot snapshot = chunk.getChunkSnapshot(true, true, false);
-            final SummaryCodec.Chunk summary = corrections.summarizeLive(
-                snapshot,
-                Math.max(1L, entry.world().getFullTime()),
-                entry.world().getMinHeight(),
-                entry.world().getMaxHeight()
+            final long revision = Math.max(1L, entry.world().getFullTime());
+            final int minHeight = entry.world().getMinHeight();
+            final int maxHeight = entry.world().getMaxHeight();
+            captureTicks.put(key, tickCount);
+            capturesInFlight.add(key);
+            try {
+                captureWorkers.execute(
+                    () -> summarizeCapture(entry, key, snapshot, revision, minHeight, maxHeight)
+                );
+            } catch (final RejectedExecutionException e) {
+                capturesInFlight.remove(key);
+                return false;
+            }
+            return true;
+        } catch (final RuntimeException e) {
+            plugin.getSLF4JLogger().warn(
+                "Could not capture loaded chunk {},{} in {}",
+                chunk.getX(), chunk.getZ(), entry.dimensionId(), e
             );
-            corrections.putLive(entry, chunk.getX(), chunk.getZ(), summary);
-            learnFlatBaseline(entry, summary);
+            return false;
+        }
+    }
+
+    private void summarizeCapture(
+        final PaperWorldDirectory.Entry entry,
+        final ChunkKey key,
+        final ChunkSnapshot snapshot,
+        final long revision,
+        final int minHeight,
+        final int maxHeight
+    ) {
+        final SummaryCodec.Chunk summary;
+        try {
+            summary = corrections.summarizeLive(snapshot, revision, minHeight, maxHeight);
         } catch (final RuntimeException e) {
             plugin.getSLF4JLogger().warn(
                 "Could not summarize loaded chunk {},{} in {}",
-                chunk.getX(), chunk.getZ(), entry.dimensionId(), e
+                key.chunkX(), key.chunkZ(), entry.dimensionId(), e
+            );
+            capturesInFlight.remove(key);
+            return;
+        }
+        try {
+            Bukkit.getScheduler().runTask(plugin, () -> {
+                capturesInFlight.remove(key);
+                commitCapture(entry, key, summary);
+            });
+        } catch (final IllegalPluginAccessException ignored) {
+            // The plugin is disabling and disable() clears the in-flight set wholesale.
+        }
+    }
+
+    private void commitCapture(
+        final PaperWorldDirectory.Entry entry,
+        final ChunkKey key,
+        final SummaryCodec.Chunk summary
+    ) {
+        if (!isEnabled()) {
+            return;
+        }
+        try {
+            corrections.putLiveIfNewer(entry, key.chunkX(), key.chunkZ(), summary);
+            learnFlatBaseline(entry, summary);
+        } catch (final RuntimeException e) {
+            plugin.getSLF4JLogger().warn(
+                "Could not store live summary for chunk {},{} in {}",
+                key.chunkX(), key.chunkZ(), entry.dimensionId(), e
             );
         }
     }

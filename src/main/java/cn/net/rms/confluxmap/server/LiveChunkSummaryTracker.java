@@ -29,7 +29,12 @@ import net.minecraft.world.chunk.WorldChunk;
 /** Tracks loaded chunks, refreshes requested summaries, and persists final unload snapshots. */
 final class LiveChunkSummaryTracker {
     private static final int MAX_REGION_FLUSHES_PER_TICK = 8;
-    private static final int MAX_LIVE_SUMMARIES_PER_TICK = 2;
+    /**
+     * Main-thread capture budget per tick. Fabric captures are cheap heightmap reads, and the
+     * summarizer is demand-gated, so this cap exists to bound the tick cost when many chunks
+     * are demanded at once (exploration bursts, dirty floods), not to throttle steady state.
+     */
+    private static final int MAX_LIVE_SUMMARIES_PER_TICK = 8;
     private static final int MAX_LIVE_INSPECTIONS_PER_TICK = 128;
     private static final long LIVE_DEMAND_TTL_NANOS = 2_000_000_000L;
 
