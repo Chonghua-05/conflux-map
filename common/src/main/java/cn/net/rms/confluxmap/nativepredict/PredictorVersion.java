@@ -12,7 +12,7 @@ public final class PredictorVersion {
     public static final String CUBIOMES_COMMIT_12 = "f75f0a360e9b";
 
     /** Must match {@code CFX_ABI} in {@code native/shim/confluxnative.c}. */
-    public static final int CFX_ABI = 12;
+    public static final int CFX_ABI = 13;
 
     /**
      * Bumped whenever baseline sampling or derivation (LOD expansion, canopy, kind rules) changes.

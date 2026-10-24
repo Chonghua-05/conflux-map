@@ -35,7 +35,7 @@
 #include "features/end_city.h"
 #include "terrain_features.h"
 
-#define CFX_ABI 12
+#define CFX_ABI 13
 #define CFX_NETHER_ROOF_Y 127
 
 #define CFX_OK              0
@@ -320,6 +320,65 @@ JNIEXPORT jint JNICALL Java_cn_net_rms_confluxmap_nativepredict_CubiomesNative_c
                 sampled[j*w+i] = getNetherBiome(
                     &ctx->g.nn, sampleX, floordiv(blockY, 4), sampleZ, NULL
                 );
+            }
+        }
+    }
+    (*env)->SetIntArrayRegion(env, out, 0, w * h, sampled);
+    free(sampled);
+    return CFX_OK;
+}
+
+/*
+ * Sparse coarse-biome sampling for wide-area search. cfxBiomesStrided materializes
+ * dense source rows and discards (stride-1)/stride of that work, which dominates any
+ * search grid whose stride exceeds the biome cell; here every output cell is exactly
+ * one independent biome-source query. Supported combinations only - Overworld
+ * post-1.18 at scale 16 (climate query, no terrain solve), Nether at scale 4, End at
+ * scale 4/16. Overworld scale 4 embeds the exact terrain surface solve (hundreds of
+ * microseconds per cell) and pre-1.18 Overworld biome stacks are layer-based, so both
+ * stay on the dense path; anything unsupported returns CFX_ERR_BAD_ARGS and the caller
+ * falls back.
+ */
+JNIEXPORT jint JNICALL Java_cn_net_rms_confluxmap_nativepredict_CubiomesNative_cfxBiomesSparseStrided(
+    JNIEnv *env, jclass clazz, jlong handle,
+    jint scale, jint x, jint z, jint w, jint h, jint stride, jintArray out
+)
+{
+    (void) clazz;
+    CfxContext *ctx = cfxHandle(handle);
+    if (ctx == NULL)
+        return CFX_ERR_BAD_HANDLE;
+    if (!cfxValidCells(w, h) || stride <= 0)
+        return CFX_ERR_BAD_SIZE;
+    if (!cfxValidScale(scale))
+        return CFX_ERR_BAD_ARGS;
+    const int supported =
+        (ctx->dim == DIM_OVERWORLD && ctx->mc >= MC_1_18 && scale == 16) ||
+        (ctx->dim == DIM_NETHER && scale == 4) ||
+        (ctx->dim == DIM_END && (scale == 4 || scale == 16));
+    if (!supported)
+        return CFX_ERR_BAD_ARGS;
+    const int64_t lastX = (int64_t) x + (int64_t) (w - 1) * stride;
+    const int64_t lastZ = (int64_t) z + (int64_t) (h - 1) * stride;
+    if (lastX < INT32_MIN || lastX > INT32_MAX
+        || lastZ < INT32_MIN || lastZ > INT32_MAX)
+        return CFX_ERR_BAD_ARGS;
+    if ((*env)->GetArrayLength(env, out) < w * h)
+        return CFX_ERR_BAD_SIZE;
+
+    int *sampled = malloc(sizeof(int) * (size_t) w * (size_t) h);
+    if (sampled == NULL)
+        return CFX_ERR_ALLOC;
+    int j, i;
+    for (j = 0; j < h; j++)
+    {
+        for (i = 0; i < w; i++)
+        {
+            const Range r = { scale, x + i * stride, z + j * stride, 1, 1, 0, 1 };
+            if (cfxGenerateBiomes(ctx, &sampled[j * w + i], r, CFX_NETHER_ROOF_Y) != CFX_OK)
+            {
+                free(sampled);
+                return CFX_ERR_GENERATION;
             }
         }
     }

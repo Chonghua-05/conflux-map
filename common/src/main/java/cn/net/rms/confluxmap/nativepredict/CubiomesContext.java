@@ -52,6 +52,19 @@ public final class CubiomesContext implements AutoCloseable {
         return CubiomesNative.cfxBiomesStrided(handle, scale, x, z, w, h, stride, out);
     }
 
+    /**
+     * Sparse strided coarse-biome grid for wide-area search: one independent biome-source
+     * query per output cell. Unsupported (dimension, scale) combinations return
+     * {@code CFX_ERR_BAD_ARGS}; callers fall back to {@link #biomesStrided}.
+     */
+    public int biomesSparseStrided(
+        final int scale, final int x, final int z, final int w, final int h, final int stride, final int[] out
+    ) {
+        requireOpen();
+        requireCapacity(out, w, h);
+        return CubiomesNative.cfxBiomesSparseStrided(handle, scale, x, z, w, h, stride, out);
+    }
+
     /** Nether-only strided biome grid sampled at one block Y. */
     public int biomesAtYStrided(
         final int blockY,

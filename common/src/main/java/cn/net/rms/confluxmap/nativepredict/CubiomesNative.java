@@ -64,6 +64,16 @@ final class CubiomesNative {
     /** Strided variant: adjacent output cells are {@code stride} coordinates apart at {@code scale}. */
     static native int cfxBiomesStrided(long handle, int scale, int x, int z, int w, int h, int stride, int[] out);
 
+    /**
+     * Sparse strided variant for wide-area search: every output cell is one independent
+     * biome-source query instead of the dense-row sweep {@link #cfxBiomesStrided} performs.
+     * Only Overworld post-1.18 scale 16, Nether scale 4 and End scale 4/16 are supported;
+     * other combinations return {@code CFX_ERR_BAD_ARGS} so callers fall back.
+     */
+    static native int cfxBiomesSparseStrided(
+        long handle, int scale, int x, int z, int w, int h, int stride, int[] out
+    );
+
     /** Nether-only strided biome grid sampled at the requested block Y. */
     static native int cfxBiomesAtYStrided(
         long handle, int blockY, int scale, int x, int z, int w, int h, int stride, int[] out

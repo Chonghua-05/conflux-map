@@ -65,6 +65,19 @@ public interface BaselineSampler {
         return false;
     }
 
+    /**
+     * Sparse strided coarse-biome sampling for wide-area search: each output cell is one
+     * independent biome-source query, instead of the dense-row sweep {@link #biomesStrided}
+     * performs (whose cost scales with {@code stride} per output cell). Overworld supports
+     * scale 16 on the post-1.18 climate model, Nether and End scale 4; implementations return
+     * false for unsupported (dimension, scale) combinations and callers fall back.
+     */
+    default boolean biomesSparseStrided(
+        final int scale, final int x, final int z, final int w, final int h, final int stride, final int[] out
+    ) {
+        return false;
+    }
+
     /** Overworld: floored heights for a w*h rectangle at 1:4 scale ({@code x4}/{@code z4} = blockX/4, blockZ/4). */
     boolean heights(int x4, int z4, int w, int h, int[] outY);
 

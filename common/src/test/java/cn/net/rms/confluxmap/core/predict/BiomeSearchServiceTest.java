@@ -1,6 +1,7 @@
 package cn.net.rms.confluxmap.core.predict;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 
 import cn.net.rms.confluxmap.core.model.ChunkSnapshot;
 import cn.net.rms.confluxmap.core.model.DimensionId;
@@ -326,6 +327,249 @@ class BiomeSearchServiceTest {
                 return false;
             }
         };
+    }
+
+    @Test
+    void coarseScale16HitIsRefinedToSurfaceGridCoordinates() {
+        final BaselineSampler sampler = new BaselineSampler() {
+            @Override
+            public boolean biomesSparseStrided(
+                final int scale, final int x, final int z, final int w, final int h, final int stride, final int[] out
+            ) {
+                if (scale != 16) {
+                    return false;
+                }
+                for (int row = 0; row < h; row++) {
+                    for (int column = 0; column < w; column++) {
+                        final int blockX = (x + column * stride) * 16;
+                        final int blockZ = (z + row * stride) * 16;
+                        out[row * w + column] = blockX == 0 && blockZ == 0 ? 7 : 1;
+                    }
+                }
+                return true;
+            }
+
+            @Override
+            public boolean overviewHeights(
+                final int blockX, final int blockZ, final int w, final int h, final int stride, final int[] outY
+            ) {
+                java.util.Arrays.fill(outY, 64);
+                return true;
+            }
+
+            @Override
+            public boolean surfaceBiomes(
+                final int blockX, final int blockZ, final int w, final int h, final int stride,
+                final int[] terrainY, final int[] outBiomeIds
+            ) {
+                for (int row = 0; row < h; row++) {
+                    for (int column = 0; column < w; column++) {
+                        final int sampleX = blockX + column * stride;
+                        final int sampleZ = blockZ + row * stride;
+                        outBiomeIds[row * w + column] = sampleX == 8 && sampleZ == 8 ? 7 : 1;
+                    }
+                }
+                return true;
+            }
+
+            @Override
+            public boolean biomes(
+                final int scale, final int x, final int z, final int w, final int h, final int[] out
+            ) {
+                return false;
+            }
+
+            @Override
+            public boolean heights(final int x4, final int z4, final int w, final int h, final int[] outY) {
+                return false;
+            }
+
+            @Override
+            public boolean endHeights(final int x4, final int z4, final int w, final int h, final int[] outY) {
+                return false;
+            }
+        };
+
+        assertEquals(List.of(
+            new BiomeCandidateSearch.Candidate(
+                8, 8, BiomeCandidateSearch.Source.PREDICTED
+            )
+        ), BiomeSearchService.samplePredicted(sampler, 7, 0, 0, 64, 1));
+    }
+
+    @Test
+    void coarseHitWithoutSurfaceConfirmationKeepsCoarseCoordinates() {
+        final BaselineSampler sampler = new BaselineSampler() {
+            @Override
+            public boolean biomesSparseStrided(
+                final int scale, final int x, final int z, final int w, final int h, final int stride, final int[] out
+            ) {
+                if (scale != 16) {
+                    return false;
+                }
+                for (int row = 0; row < h; row++) {
+                    for (int column = 0; column < w; column++) {
+                        final int blockX = (x + column * stride) * 16;
+                        final int blockZ = (z + row * stride) * 16;
+                        out[row * w + column] = blockX == 0 && blockZ == 0 ? 7 : 1;
+                    }
+                }
+                return true;
+            }
+
+            @Override
+            public boolean overviewHeights(
+                final int blockX, final int blockZ, final int w, final int h, final int stride, final int[] outY
+            ) {
+                java.util.Arrays.fill(outY, 64);
+                return true;
+            }
+
+            @Override
+            public boolean surfaceBiomes(
+                final int blockX, final int blockZ, final int w, final int h, final int stride,
+                final int[] terrainY, final int[] outBiomeIds
+            ) {
+                java.util.Arrays.fill(outBiomeIds, 1);
+                return true;
+            }
+
+            @Override
+            public boolean biomes(
+                final int scale, final int x, final int z, final int w, final int h, final int[] out
+            ) {
+                return false;
+            }
+
+            @Override
+            public boolean heights(final int x4, final int z4, final int w, final int h, final int[] outY) {
+                return false;
+            }
+
+            @Override
+            public boolean endHeights(final int x4, final int z4, final int w, final int h, final int[] outY) {
+                return false;
+            }
+        };
+
+        assertEquals(List.of(
+            new BiomeCandidateSearch.Candidate(
+                0, 0, BiomeCandidateSearch.Source.PREDICTED
+            )
+        ), BiomeSearchService.samplePredicted(sampler, 7, 0, 0, 64, 1));
+    }
+
+    @Test
+    void sparseScaleFourGridIsReturnedDirectlyWithoutSurfaceRefinement() {
+        final boolean[] surfaceTouched = {false};
+        final BaselineSampler sampler = new BaselineSampler() {
+            @Override
+            public boolean biomesSparseStrided(
+                final int scale, final int x, final int z, final int w, final int h, final int stride, final int[] out
+            ) {
+                if (scale != 4) {
+                    return false;
+                }
+                for (int row = 0; row < h; row++) {
+                    for (int column = 0; column < w; column++) {
+                        final int blockX = (x + column * stride) * 4;
+                        final int blockZ = (z + row * stride) * 4;
+                        out[row * w + column] = blockX == 64 && blockZ == 0 ? 7 : 1;
+                    }
+                }
+                return true;
+            }
+
+            @Override
+            public boolean overviewHeights(
+                final int blockX, final int blockZ, final int w, final int h, final int stride, final int[] outY
+            ) {
+                surfaceTouched[0] = true;
+                return false;
+            }
+
+            @Override
+            public boolean biomes(
+                final int scale, final int x, final int z, final int w, final int h, final int[] out
+            ) {
+                return false;
+            }
+
+            @Override
+            public boolean heights(final int x4, final int z4, final int w, final int h, final int[] outY) {
+                return false;
+            }
+
+            @Override
+            public boolean endHeights(final int x4, final int z4, final int w, final int h, final int[] outY) {
+                return false;
+            }
+        };
+
+        assertEquals(List.of(
+            new BiomeCandidateSearch.Candidate(
+                64, 0, BiomeCandidateSearch.Source.PREDICTED
+            )
+        ), BiomeSearchService.samplePredicted(sampler, 7, 0, 0, 64, 1));
+        assertFalse(surfaceTouched[0], "scale-4 sparse hits must not trigger surface refinement");
+    }
+
+    @Test
+    void coarseMissFallsBackToTheSurfacePath() {
+        final BaselineSampler sampler = new BaselineSampler() {
+            @Override
+            public boolean biomesSparseStrided(
+                final int scale, final int x, final int z, final int w, final int h, final int stride, final int[] out
+            ) {
+                java.util.Arrays.fill(out, 1);
+                return true;
+            }
+
+            @Override
+            public boolean overviewHeights(
+                final int blockX, final int blockZ, final int w, final int h, final int stride, final int[] outY
+            ) {
+                java.util.Arrays.fill(outY, 64);
+                return true;
+            }
+
+            @Override
+            public boolean surfaceBiomes(
+                final int blockX, final int blockZ, final int w, final int h, final int stride,
+                final int[] terrainY, final int[] outBiomeIds
+            ) {
+                for (int row = 0; row < h; row++) {
+                    for (int column = 0; column < w; column++) {
+                        final int sampleX = blockX + column * stride;
+                        outBiomeIds[row * w + column] = sampleX == 0 ? 7 : 1;
+                    }
+                }
+                return true;
+            }
+
+            @Override
+            public boolean biomes(
+                final int scale, final int x, final int z, final int w, final int h, final int[] out
+            ) {
+                return false;
+            }
+
+            @Override
+            public boolean heights(final int x4, final int z4, final int w, final int h, final int[] outY) {
+                return false;
+            }
+
+            @Override
+            public boolean endHeights(final int x4, final int z4, final int w, final int h, final int[] outY) {
+                return false;
+            }
+        };
+
+        assertEquals(List.of(
+            new BiomeCandidateSearch.Candidate(
+                0, 0, BiomeCandidateSearch.Source.PREDICTED
+            )
+        ), BiomeSearchService.samplePredicted(sampler, 7, 0, 0, 64, 1));
     }
 
     private static BaselineSampler constantSampler(final int biomeId) {

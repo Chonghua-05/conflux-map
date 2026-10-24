@@ -304,6 +304,43 @@ class PredictionNativeIntegrationTest {
     }
 
     @Test
+    void sparseStridedSamplingAgreesWithTheDenseStridedGrid() {
+        final int side = 24;
+        final int stride = 7;
+        final NativeBaselineSampler overworld = new NativeBaselineSampler(
+            mc21(), SEED, PredictionDimensions.OVERWORLD, 0
+        );
+        final int[] dense = new int[side * side];
+        final int[] sparse = new int[side * side];
+        assertTrue(overworld.biomesStrided(16, -40, 100, side, side, stride, dense));
+        assertTrue(overworld.biomesSparseStrided(16, -40, 100, side, side, stride, sparse));
+        assertArrayEquals(
+            dense,
+            sparse,
+            "sparse per-point sampling must agree with the dense-row sweep at identical coordinates"
+        );
+        assertFalse(
+            overworld.biomesSparseStrided(4, 0, 0, 2, 2, 1, new int[4]),
+            "Overworld scale 4 embeds the exact surface solve and must stay on the dense path"
+        );
+
+        final NativeBaselineSampler nether = new NativeBaselineSampler(
+            mc21(), SEED, PredictionDimensions.NETHER, 0
+        );
+        assertTrue(nether.biomesSparseStrided(4, 0, 0, 8, 8, 3, new int[64]));
+        assertFalse(
+            nether.biomesSparseStrided(16, 0, 0, 2, 2, 1, new int[4]),
+            "Nether has no 1:16 layer; the request must fail so callers fall back"
+        );
+
+        final NativeBaselineSampler end = new NativeBaselineSampler(
+            mc21(), SEED, PredictionDimensions.END, 0
+        );
+        assertTrue(end.biomesSparseStrided(4, 0, 0, 8, 8, 3, new int[64]));
+        assertTrue(end.biomesSparseStrided(16, 0, 0, 8, 8, 3, new int[64]));
+    }
+
+    @Test
     void overviewPipelineHasTheSameQualityContractAcrossVersionsAndLods() {
         assertOverviewQuality(mc17(), 0);
         assertOverviewQuality(mc17(), 4);
