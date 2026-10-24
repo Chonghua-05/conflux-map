@@ -8,7 +8,8 @@ import cn.net.rms.confluxmap.core.model.DimensionId;
  * aligned sparse grid of exact cubiomes columns. The overview keeps LOD3-4 spatially detailed;
  * the exact residual grid removes broad height drift without making a fullscreen viewport pay for
  * a complete world-generation column at every texel. End heights retain their
- * dimension-specific interpolation and pooling path.
+ * dimension-specific interpolation and pooling path. The biome-identity view bypasses all of
+ * the Overworld height work via {@link #sampleOverworldBiomes}.
  * <ul>
  *   <li>LOD0-1: final biomes are sampled at block scale, one lookup per output pixel.
  *   <li>LOD2: final biomes are sampled at native scale 4, one lookup per output pixel.
@@ -138,6 +139,114 @@ public final class LodSampling {
             );
         }
         return null;
+    }
+
+    /**
+     * Samples the Overworld biome-identity plane with no terrain work at all: every biome comes
+     * from a terrain-free native query and the unsolved height columns are replaced by one flat
+     * land plane, which is all the flat-color biome composer ever needs. The shape follows
+     * {@link BaselineSampler#terrainFreeBiomeScale()}:
+     * <ul>
+     *   <li>Scale 1 (pre-1.18 layer stacks): the height-aware pipeline's own per-LOD
+     *       {@code BIOME_SCALE}/{@code BIOME_STRIDE} sampling and LOD3-4 raw sub-samples, so
+     *       the biome ids stay bit-identical to the full pipeline - only the height passes drop
+     *       out. The shim's pre-1.18 {@code surfaceBiomes} delegates to the same layer-stack
+     *       queries at the same coordinates, which is what makes the ids provably unchanged.
+     *   <li>Scale 16 (post-1.18 climate model): one dense scale-16 climate grid, each output
+     *       pixel taking the biome of the climate cell containing its first block. Climate
+     *       answers exist at 16-block granularity only, so every LOD shares the same cells and
+     *       supersampling is dropped - a sub-sample inside one cell cannot differ from its
+     *       pixel. This is the cubiomes-viewer semantics: hillsides may show the climate biome
+     *       rather than the surface biome the height-aware pipeline would have resolved.
+     * </ul>
+     * Falls back to the full height-aware {@link #sample} when the sampler offers no
+     * terrain-free scale or the terrain-free query fails.
+     */
+    public static BaselineGrid sampleOverworldBiomes(
+        final BaselineSampler sampler,
+        final int lod,
+        final int tileOriginX,
+        final int tileOriginZ
+    ) {
+        final int terrainFreeScale = sampler.terrainFreeBiomeScale();
+        if (terrainFreeScale <= 0) {
+            return sample(sampler, false, lod, tileOriginX, tileOriginZ);
+        }
+        final BaselineGrid grid = terrainFreeScale >= 16
+            ? sampleClimateCellBiomes(sampler, lod, tileOriginX, tileOriginZ, terrainFreeScale)
+            : sampleTerrainFreeLayerBiomes(sampler, lod, tileOriginX, tileOriginZ);
+        if (grid == null) {
+            return sample(sampler, false, lod, tileOriginX, tileOriginZ);
+        }
+        fillFlatLandPlane(grid);
+        return grid;
+    }
+
+    /**
+     * Layer-stack shape: the standard per-LOD biome table plus the raw sub-biome sweep, both of
+     * which are pure biome-stack queries before 1.18.
+     */
+    private static BaselineGrid sampleTerrainFreeLayerBiomes(
+        final BaselineSampler sampler,
+        final int lod,
+        final int tileOriginX,
+        final int tileOriginZ
+    ) {
+        final BaselineGrid grid = new BaselineGrid(
+            lod, tileOriginX, tileOriginZ, BIOME_SUB_PER_AXIS[lod]
+        );
+        if (!sampleBiomes(sampler, lod, tileOriginX, tileOriginZ, grid)) {
+            return null;
+        }
+        if (grid.supersampled()) {
+            sampleRawSubBiomes(sampler, lod, tileOriginX, tileOriginZ, grid);
+        }
+        return grid;
+    }
+
+    /** Climate shape: one dense {@code climateScale} grid nearest-expanded to output pixels. */
+    private static BaselineGrid sampleClimateCellBiomes(
+        final BaselineSampler sampler,
+        final int lod,
+        final int tileOriginX,
+        final int tileOriginZ,
+        final int climateScale
+    ) {
+        final BaselineGrid grid = new BaselineGrid(
+            lod, tileOriginX, tileOriginZ, BaselineGrid.NO_SUPERSAMPLING
+        );
+        final int blocksPerPixel = 1 << lod;
+        final int cellMinX = Math.floorDiv(tileOriginX + P_MIN * blocksPerPixel, climateScale);
+        final int cellMinZ = Math.floorDiv(tileOriginZ + P_MIN * blocksPerPixel, climateScale);
+        final int cellMaxX = Math.floorDiv(tileOriginX + P_MAX * blocksPerPixel, climateScale);
+        final int cellMaxZ = Math.floorDiv(tileOriginZ + P_MAX * blocksPerPixel, climateScale);
+        final int cellsW = cellMaxX - cellMinX + 1;
+        final int cellsH = cellMaxZ - cellMinZ + 1;
+        final int[] cells = new int[cellsW * cellsH];
+        if (!sampler.biomes(climateScale, cellMinX, cellMinZ, cellsW, cellsH, cells)) {
+            return null;
+        }
+        for (int pz = P_MIN; pz <= P_MAX; pz++) {
+            final int cellZ = Math.floorDiv(tileOriginZ + pz * blocksPerPixel, climateScale) - cellMinZ;
+            for (int px = P_MIN; px <= P_MAX; px++) {
+                final int cellX = Math.floorDiv(tileOriginX + px * blocksPerPixel, climateScale) - cellMinX;
+                grid.biomeId[BaselineGrid.index(px, pz)] = cells[cellZ * cellsW + cellX];
+            }
+        }
+        return grid;
+    }
+
+    /**
+     * Stands in for the unsolved terrain: sea level exactly, so no column classifies as
+     * compatibility-fluid, and no column can derive as void. The biome-identity composer colors
+     * by biome id alone, so these heights exist only to keep the derived-grid shape valid.
+     */
+    private static void fillFlatLandPlane(final BaselineGrid grid) {
+        java.util.Arrays.fill(grid.terrainY, BaselineDeriver.WATER_LEVEL);
+        java.util.Arrays.fill(grid.baseSurfaceY, BaselineDeriver.WATER_LEVEL);
+        if (grid.supersampled()) {
+            java.util.Arrays.fill(grid.subBaseSurfaceY, BaselineDeriver.WATER_LEVEL);
+        }
     }
 
     /**
@@ -706,7 +815,11 @@ public final class LodSampling {
         return true;
     }
 
-    /** Coarse Nether pixels use raw 3D-biome samples rather than Overworld surface-biome queries. */
+    /**
+     * Coarse sub-samples straight from the biome source: Nether pixels use raw 3D-biome samples
+     * rather than Overworld surface-biome queries, and the pre-1.18 biome-identity view reuses it
+     * because its layer-stack queries need no heights to sub-sample.
+     */
     private static void sampleRawSubBiomes(
         final BaselineSampler sampler,
         final int lod,

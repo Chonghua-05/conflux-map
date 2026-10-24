@@ -136,7 +136,16 @@ class PredictionTileServiceTest {
             predictionTiles.requestTile(new TileKey(WORLD, DIM, "surface!biome!pred", 2, 0, 0));
             awaitIdle(predictionTiles, 10_000L);
 
+            // The biome tile owns its metadata slot: it answers the cursor biome readout on its
+            // own, while the surface readout waits for the terrain twin instead of trusting the
+            // biome view's terrain-free flat land plane.
             assertEquals(35, predictionTiles.predictedBiomeAt(DIM, 2, 0, 0).orElse(-1));
+            assertTrue(
+                predictionTiles.predictedSurfaceYAt(DIM, 2, 0, 0).isEmpty(),
+                "a terrain-free biome tile must not answer teleport heights"
+            );
+            predictionTiles.requestTile(new TileKey(WORLD, DIM, "surface!pred", 2, 0, 0));
+            awaitIdle(predictionTiles, 10_000L);
             assertTrue(predictionTiles.predictedSurfaceYAt(DIM, 2, 0, 0).isPresent());
 
             final PatchCodec.Sample correction = new PatchCodec.Sample(
@@ -223,6 +232,51 @@ class PredictionTileServiceTest {
             );
         } finally {
             releaseWorkers.countDown();
+            executors.shutdown(2000L);
+        }
+    }
+
+    @Test
+    void biomeViewMetadataStaysInItsOwnSlotWithoutNativePrediction(
+        @TempDir final Path tempDir
+    ) throws InterruptedException {
+        final SessionGuard sessionGuard = new SessionGuard();
+        final SessionGuard.Session session = sessionGuard.begin(WORLD, DIM);
+        final MapWorldService worlds = new MapWorldService();
+        worlds.switchSession(session);
+        final MapExecutors executors = new MapExecutors();
+        final TileService uploads = new TileService(
+            worlds, executors, new ConfluxConfig(), new DaylightModel()
+        );
+        final PredictionState state = new PredictionState();
+        state.setPresets(WorldPreset.FLAT, WorldPreset.DEFAULT);
+        state.setFlatBaseline(new FlatBaseline(1, 63, SurfaceKind.LAND.ordinal(), 11, 0));
+        final PredictionTileService predictionTiles = newService(
+            sessionGuard, state, executors, uploads
+        );
+        predictionTiles.bindCorrectionStore(new CorrectionStore(tempDir));
+
+        try {
+            predictionTiles.setViewport(DIM, 0, 0, 0, 0, 0);
+            predictionTiles.requestTile(new TileKey(WORLD, DIM, "surface!biome!pred", 0, 0, 0));
+            awaitIdle(predictionTiles);
+
+            assertTrue(
+                predictionTiles.predictedBiomeAt(DIM, 0, 0, 0).isPresent(),
+                "the biome tile's own slot must answer the cursor readout"
+            );
+            assertTrue(
+                predictionTiles.predictedSurfaceYAt(DIM, 0, 0, 0).isEmpty(),
+                "the terrain slot must stay empty until a terrain tile composes"
+            );
+
+            predictionTiles.requestTile(new TileKey(WORLD, DIM, "surface!pred", 0, 0, 0));
+            awaitIdle(predictionTiles);
+            assertEquals(
+                63, predictionTiles.predictedSurfaceYAt(DIM, 0, 0, 0).orElseThrow(),
+                "the terrain twin must still serve teleport heights from its own slot"
+            );
+        } finally {
             executors.shutdown(2000L);
         }
     }

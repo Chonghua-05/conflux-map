@@ -91,6 +91,17 @@ public interface BaselineSampler {
         return biomesSparseStrided(scale, x, z, w, h, stride, out);
     }
 
+    /**
+     * Finest native biome scale this sampler resolves without any terrain work, for the
+     * biome-identity view that never needs heights: 1 for the pre-1.18 layer stacks (any scale
+     * is a pure biome-stack query there), 16 for the post-1.18 Overworld climate model (scale
+     * 1/4 embed the full per-column surface solve), 0 when no terrain-free query exists and the
+     * caller must keep the height-aware pipeline.
+     */
+    default int terrainFreeBiomeScale() {
+        return 0;
+    }
+
     /** Overworld: floored heights for a w*h rectangle at 1:4 scale ({@code x4}/{@code z4} = blockX/4, blockZ/4). */
     boolean heights(int x4, int z4, int w, int h, int[] outY);
 

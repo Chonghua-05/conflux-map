@@ -2,6 +2,7 @@ package cn.net.rms.confluxmap.core.predict;
 
 import cn.net.rms.confluxmap.nativepredict.CubiomesContext;
 import cn.net.rms.confluxmap.nativepredict.CubiomesContexts;
+import cn.net.rms.confluxmap.nativepredict.McVersions;
 import cn.net.rms.confluxmap.nativepredict.NativeLib;
 
 /**
@@ -12,6 +13,8 @@ import cn.net.rms.confluxmap.nativepredict.NativeLib;
  * returns false, matching {@link BaselineSampler}'s contract.
  */
 public final class NativeBaselineSampler implements BaselineSampler {
+    private static final int CLIMATE_MODEL_MIN = McVersions.toCubiomes("1.18").orElseThrow();
+
     private final int mcVersion;
     private final long seed;
     private final int dim;
@@ -23,6 +26,17 @@ public final class NativeBaselineSampler implements BaselineSampler {
         this.seed = seed;
         this.dim = dim;
         this.flags = flags;
+    }
+
+    @Override
+    public int terrainFreeBiomeScale() {
+        if (dim != PredictionDimensions.OVERWORLD) {
+            return 0;
+        }
+        // Mirrors the shim's cfxGenerateBiomes gating: from 1.18 on, Overworld scale 1/4 embed
+        // the per-column surface solve, so the finest terrain-free query is the scale-16
+        // climate pass; the layer stacks before that never touch terrain at any scale.
+        return mcVersion >= CLIMATE_MODEL_MIN ? 16 : 1;
     }
 
     @Override

@@ -800,7 +800,12 @@ public final class PredictionTileService {
         );
     }
 
-    /** Predicted biome on the requested fullscreen layer, including Nether height planes. */
+    /**
+     * Predicted biome on the requested fullscreen layer, including Nether height planes. The
+     * answer prefers the layer's own metadata slot and falls back to the biome-identity tile's
+     * slot, so a cursor readout works in the biome view even though only its cheap biome tiles
+     * (never the terrain twins) composed there.
+     */
     public OptionalInt predictedBiomeAt(
         final DimensionId dimension,
         final MapLayer layer,
@@ -816,12 +821,16 @@ public final class PredictionTileService {
         }
         final TileMetadata metadata;
         synchronized (this) {
-            metadata = metadataTiles.get(lookup.key());
+            final TileMetadata own = metadataTiles.get(lookup.key());
+            metadata = own != null
+                ? own
+                : metadataTiles.get(BiomeTileKeys.toBiome(lookup.key()));
         }
         if (metadata == null) {
-            // GPU textures can outlive viewport metadata. Rehydrate this one tile lazily when the
-            // cursor returns to it; requestTile is idempotent while a composition is queued/running.
-            requestTile(lookup.requestKey());
+            // GPU textures can outlive viewport metadata. Rehydrate the biome tile lazily when
+            // the cursor returns to it; its composition is the cheap terrain-free one, and
+            // requestTile is idempotent while a composition is queued/running.
+            requestTile(BiomeTileKeys.toBiome(lookup.requestKey()));
             return OptionalInt.empty();
         }
         return OptionalInt.of(Byte.toUnsignedInt(metadata.biomes()[lookup.pixel()]));
@@ -1208,23 +1217,45 @@ public final class PredictionTileService {
                 final BaselineSampler sampler = new NativeBaselineSampler(
                     state.mcVersion(), seed, nativeDim, state.cubiomesFlags(key.dimension())
                 );
-                grid = key.dimension().equals(DimensionId.NETHER)
-                    ? LodSampling.sampleNetherRoof(sampler, lod, tileOriginX, tileOriginZ)
-                    : LodSampling.sample(sampler, end, lod, tileOriginX, tileOriginZ);
-                if (grid == null) {
-                    return null;
+                final boolean overworldBiomeView = BiomeTileKeys.isBiome(key)
+                    && key.dimension().equals(DimensionId.OVERWORLD);
+                if (overworldBiomeView) {
+                    // The biome-identity view never reads terrain: biomes come from the
+                    // terrain-free sampler path, and the canopy (a terrain-map color pass) is
+                    // dead work for the flat-color composer.
+                    grid = LodSampling.sampleOverworldBiomes(
+                        sampler, lod, tileOriginX, tileOriginZ
+                    );
+                    if (grid == null) {
+                        return null;
+                    }
+                    if (quadrants != null) {
+                        quadrants.applyBiomes(grid);
+                    }
+                    derived = BaselineDeriver.derive(grid);
+                    baselineMapColorId = Proto.MAP_COLOR_NONE;
+                    quadrantMask = null;
+                } else {
+                    grid = key.dimension().equals(DimensionId.NETHER)
+                        ? LodSampling.sampleNetherRoof(sampler, lod, tileOriginX, tileOriginZ)
+                        : LodSampling.sample(sampler, end, lod, tileOriginX, tileOriginZ);
+                    if (grid == null) {
+                        return null;
+                    }
+                    derived = BaselineDeriver.derive(grid);
+                    if (!BiomeTileKeys.isBiome(key)) {
+                        CanopyStylizer.apply(derived, grid, seed, lod, tileOriginX, tileOriginZ);
+                    }
+                    // Quadrant layouts (quadra-gen) overwrite their columns after derivation and
+                    // canopy, so synthetic trees cannot survive in a cleared or flat quadrant. The
+                    // companion's PatchBuilder masks its residual baseline with the same code.
+                    quadrantMask = quadrants == null ? null : quadrants.apply(grid, derived);
+                    // Terrain mode owns the roof material, while the separate biome composer below owns
+                    // biome identity. Treat the fixed Nether plane like a uniform bedrock superflat.
+                    baselineMapColorId = key.dimension().equals(DimensionId.NETHER)
+                        ? PredictionDimensions.NETHER_ROOF_MAP_COLOR_ID
+                        : Proto.MAP_COLOR_NONE;
                 }
-                derived = BaselineDeriver.derive(grid);
-                CanopyStylizer.apply(derived, grid, seed, lod, tileOriginX, tileOriginZ);
-                // Quadrant layouts (quadra-gen) overwrite their columns after derivation and
-                // canopy, so synthetic trees cannot survive in a cleared or flat quadrant. The
-                // companion's PatchBuilder masks its residual baseline with the same code.
-                quadrantMask = quadrants == null ? null : quadrants.apply(grid, derived);
-                // Terrain mode owns the roof material, while the separate biome composer below owns
-                // biome identity. Treat the fixed Nether plane like a uniform bedrock superflat.
-                baselineMapColorId = key.dimension().equals(DimensionId.NETHER)
-                    ? PredictionDimensions.NETHER_ROOF_MAP_COLOR_ID
-                    : Proto.MAP_COLOR_NONE;
             }
         }
 
@@ -1730,10 +1761,18 @@ public final class PredictionTileService {
     private record PixelLookup(TileKey key, TileKey requestKey, int pixel) {
     }
 
+    /**
+     * Metadata slot a composition publishes under: the tile's own layer, prediction suffix
+     * stripped but the biome-identity suffix kept. Biome tiles therefore own a separate slot
+     * from terrain tiles of the same base layer - their terrain-free surfaces would otherwise
+     * masquerade as teleport heights whenever they compose last.
+     */
     private static TileKey metadataKey(final TileKey key) {
-        final String realLayer = BiomeTileKeys.baseLayerId(key);
+        final String layer = PredictedTileKeys.isPredicted(key)
+            ? PredictedTileKeys.realLayerId(key.layerId())
+            : key.layerId();
         return new TileKey(
-            key.world(), key.dimension(), realLayer + PredictedTileKeys.SUFFIX,
+            key.world(), key.dimension(), layer + PredictedTileKeys.SUFFIX,
             key.lod(), key.tileX(), key.tileZ()
         );
     }
