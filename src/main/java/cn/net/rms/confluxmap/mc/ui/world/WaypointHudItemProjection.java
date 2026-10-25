@@ -50,8 +50,8 @@ final class WaypointHudItemProjection {
         final float centerY = (float) (screenHeight / 2.0 - up / forward * focalLength);
         // Same perspective multiplier the 3D label path uses, so both label flavors size identically.
         final float unitScale = (float) (
-            WaypointWorldRenderer.LABEL_BASE_SCALE
-                * WaypointWorldRenderer.labelWorldScaleMult(renderedDistance, easedTargetProgress)
+            WaypointLabelStyle.LABEL_BASE_SCALE
+                * WaypointLabelMetrics.labelWorldScaleMult(renderedDistance, easedTargetProgress)
                 * focalLength
                 / renderedDistance
                 * scalePercent / 100.0

@@ -130,17 +130,17 @@ public final class WaypointItemHudRenderer {
         for (final Label label : labels) {
             final WaypointRenderEntry waypoint = label.waypoint();
             final double dx = waypoint.x() - cameraPos.x;
-            final double dy = waypoint.y() + WaypointWorldRenderer.LABEL_Y_OFFSET - cameraPos.y;
+            final double dy = waypoint.y() + WaypointLabelMetrics.LABEL_Y_OFFSET - cameraPos.y;
             final double dz = waypoint.z() - cameraPos.z;
             final double anchorDistance = Math.sqrt(dx * dx + dy * dy + dz * dz);
-            final double renderedDistance = WaypointWorldRenderer.projectedLabelDistance(
+            final double renderedDistance = WaypointLabelMetrics.projectedLabelDistance(
                 anchorDistance, label.projectionDistance()
             );
             final float easedProgress = WaypointHudMotion.smoothStep(label.animationProgress());
             final float iconSize = MathHelper.lerp(
                 easedProgress,
-                WaypointWorldRenderer.LABEL_ICON_COLLAPSED_SIZE,
-                WaypointWorldRenderer.LABEL_ICON_EXPANDED_SIZE
+                WaypointLabelStyle.LABEL_ICON_COLLAPSED_SIZE,
+                WaypointLabelStyle.LABEL_ICON_EXPANDED_SIZE
             );
             WaypointHudItemProjection.project(
                 cameraYaw,
@@ -167,7 +167,7 @@ public final class WaypointItemHudRenderer {
     ) {
         final WaypointRenderEntry waypoint = label.waypoint();
         final float nearFade = (float) MathHelper.clamp(
-            label.distance3d() / WaypointWorldRenderer.LABEL_NEAR_FADE_BLOCKS,
+            label.distance3d() / WaypointLabelStyle.LABEL_NEAR_FADE_BLOCKS,
             0.0,
             1.0
         );
@@ -185,24 +185,24 @@ public final class WaypointItemHudRenderer {
         final int nameWidth = textRenderer.getWidth(name);
         final int distanceWidth = textRenderer.getWidth(distanceText);
         final float panelFullWidth = Math.max(nameWidth, distanceWidth)
-            + WaypointWorldRenderer.LABEL_PANEL_PADDING * 2f;
+            + WaypointLabelStyle.LABEL_PANEL_PADDING * 2f;
         final float panelReveal = MathHelper.clamp(
-            easedProgress / WaypointWorldRenderer.LABEL_TEXT_REVEAL_START, 0f, 1f
+            easedProgress / WaypointLabelStyle.LABEL_TEXT_REVEAL_START, 0f, 1f
         );
         final float panelWidth = panelFullWidth * panelReveal * unitScale;
         final float panelX = centerX + iconHalfSize
-            + WaypointWorldRenderer.LABEL_PANEL_GAP * unitScale;
+            + WaypointLabelStyle.LABEL_PANEL_GAP * unitScale;
         final float visibilityAlpha = nearFade * label.visibilityAlpha();
-        final float labelOpacity = WaypointWorldRenderer.labelOpacityFactor(config);
+        final float labelOpacity = WaypointLabelStyle.labelOpacityFactor(config);
         if (panelWidth > 0.5f) {
             fill(
                 draw,
                 panelX,
-                centerY - WaypointWorldRenderer.LABEL_PANEL_HEIGHT * unitScale / 2f,
+                centerY - WaypointLabelStyle.LABEL_PANEL_HEIGHT * unitScale / 2f,
                 panelX + panelWidth,
-                centerY + WaypointWorldRenderer.LABEL_PANEL_HEIGHT * unitScale / 2f,
-                WaypointWorldRenderer.withAlpha(
-                    WaypointWorldRenderer.LABEL_BACKGROUND_COLOR, visibilityAlpha * labelOpacity
+                centerY + WaypointLabelStyle.LABEL_PANEL_HEIGHT * unitScale / 2f,
+                WaypointLabelStyle.withAlpha(
+                    WaypointLabelStyle.LABEL_BACKGROUND_COLOR, visibilityAlpha * labelOpacity
                 )
             );
         }
@@ -214,8 +214,8 @@ public final class WaypointItemHudRenderer {
             centerY - iconHalfSize - unitScale,
             centerX + iconHalfSize + unitScale,
             centerY + iconHalfSize + unitScale,
-            WaypointWorldRenderer.withAlpha(
-                label.selected() ? 0xFFFFE066 : WaypointWorldRenderer.outlineColor(waypoint),
+            WaypointLabelStyle.withAlpha(
+                label.selected() ? 0xFFFFE066 : WaypointLabelStyle.outlineColor(waypoint),
                 plateAlpha
             )
         );
@@ -225,7 +225,7 @@ public final class WaypointItemHudRenderer {
             centerY - iconHalfSize,
             centerX + iconHalfSize,
             centerY + iconHalfSize,
-            WaypointWorldRenderer.withAlpha(waypoint.colorArgb() | 0xFF000000, plateAlpha)
+            WaypointLabelStyle.withAlpha(waypoint.colorArgb() | 0xFF000000, plateAlpha)
         );
         if (label.playerId() != null) {
             RadarMarkerRenderer.drawPlayerPortrait(
@@ -247,8 +247,8 @@ public final class WaypointItemHudRenderer {
         }
 
         final float textReveal = MathHelper.clamp(
-            (easedProgress - WaypointWorldRenderer.LABEL_TEXT_REVEAL_START)
-                / (1f - WaypointWorldRenderer.LABEL_TEXT_REVEAL_START),
+            (easedProgress - WaypointLabelStyle.LABEL_TEXT_REVEAL_START)
+                / (1f - WaypointLabelStyle.LABEL_TEXT_REVEAL_START),
             0f,
             1f
         );
@@ -256,8 +256,8 @@ public final class WaypointItemHudRenderer {
             return;
         }
         final float textX = iconSize / (2f * unitScale)
-            + WaypointWorldRenderer.LABEL_PANEL_GAP
-            + WaypointWorldRenderer.LABEL_PANEL_PADDING
+            + WaypointLabelStyle.LABEL_PANEL_GAP
+            + WaypointLabelStyle.LABEL_PANEL_PADDING
             + (1f - textReveal) * 4f;
         final float textAlpha = visibilityAlpha * textReveal * labelOpacity;
         draw.pushTransform();
@@ -268,14 +268,14 @@ public final class WaypointItemHudRenderer {
             name,
             textX,
             -9f,
-            WaypointWorldRenderer.withAlpha(WaypointWorldRenderer.LABEL_NAME_COLOR, textAlpha)
+            WaypointLabelStyle.withAlpha(WaypointLabelStyle.LABEL_NAME_COLOR, textAlpha)
         );
         draw.drawTextWithShadow(
             textRenderer,
             distanceText,
             textX,
             1f,
-            WaypointWorldRenderer.withAlpha(WaypointWorldRenderer.LABEL_DISTANCE_COLOR, textAlpha)
+            WaypointLabelStyle.withAlpha(WaypointLabelStyle.LABEL_DISTANCE_COLOR, textAlpha)
         );
         draw.popTransform();
     }

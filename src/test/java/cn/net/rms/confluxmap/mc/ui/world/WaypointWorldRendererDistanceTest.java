@@ -146,30 +146,30 @@ final class WaypointWorldRendererDistanceTest {
 
     @Test
     void configuredDistanceIsNotCappedByVanillaViewDistance() {
-        assertEquals(512.0, WaypointWorldRenderer.maxLabelDistance(512));
+        assertEquals(512.0, WaypointLabelMetrics.maxLabelDistance(512));
     }
 
     @Test
     void zeroConfiguredDistanceLeavesLabelsUnlimited() {
         assertEquals(
             Double.POSITIVE_INFINITY,
-            WaypointWorldRenderer.maxLabelDistance(0)
+            WaypointLabelMetrics.maxLabelDistance(0)
         );
     }
 
     @Test
     void beamDistanceStillFollowsVanillaViewDistance() {
-        assertEquals(128.0, WaypointWorldRenderer.beamVisibleDistance(8));
+        assertEquals(128.0, WaypointLabelMetrics.beamVisibleDistance(8));
     }
 
     @Test
     void farLabelIsProjectedInsideTheCameraFarPlane() {
-        final double projectionDistance = WaypointWorldRenderer.labelProjectionDistance(8);
+        final double projectionDistance = WaypointLabelMetrics.labelProjectionDistance(8);
 
         assertEquals(115.2, projectionDistance, 0.0001);
         assertEquals(
             projectionDistance,
-            WaypointWorldRenderer.projectedLabelDistance(512.0, projectionDistance)
+            WaypointLabelMetrics.projectedLabelDistance(512.0, projectionDistance)
         );
     }
 
@@ -177,9 +177,9 @@ final class WaypointWorldRendererDistanceTest {
     void nearbyLabelKeepsItsActualPosition() {
         assertEquals(
             64.0,
-            WaypointWorldRenderer.projectedLabelDistance(
+            WaypointLabelMetrics.projectedLabelDistance(
                 64.0,
-                WaypointWorldRenderer.labelProjectionDistance(8)
+                WaypointLabelMetrics.labelProjectionDistance(8)
             )
         );
     }

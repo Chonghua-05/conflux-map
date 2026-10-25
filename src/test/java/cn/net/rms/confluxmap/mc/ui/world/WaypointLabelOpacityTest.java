@@ -11,12 +11,12 @@ final class WaypointLabelOpacityTest {
         final ConfluxConfig config = new ConfluxConfig();
 
         config.waypointIconOpacity = ConfluxConfig.MAX_WAYPOINT_ICON_OPACITY;
-        assertEquals(1f, WaypointWorldRenderer.labelOpacityFactor(config));
+        assertEquals(1f, WaypointLabelStyle.labelOpacityFactor(config));
 
         config.waypointIconOpacity = 50;
-        assertEquals(0.5f, WaypointWorldRenderer.labelOpacityFactor(config));
+        assertEquals(0.5f, WaypointLabelStyle.labelOpacityFactor(config));
 
         config.waypointIconOpacity = ConfluxConfig.MIN_WAYPOINT_ICON_OPACITY;
-        assertEquals(0f, WaypointWorldRenderer.labelOpacityFactor(config));
+        assertEquals(0f, WaypointLabelStyle.labelOpacityFactor(config));
     }
 }

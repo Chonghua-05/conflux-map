@@ -8,7 +8,6 @@ import cn.net.rms.confluxmap.compat.MinecraftAccess;
 import cn.net.rms.confluxmap.core.config.ConfluxConfig;
 import cn.net.rms.confluxmap.core.model.DimensionId;
 import cn.net.rms.confluxmap.core.radar.ServerPlayerRadarState;
-import cn.net.rms.confluxmap.core.util.Argb;
 import cn.net.rms.confluxmap.core.waypoint.Waypoint;
 import cn.net.rms.confluxmap.core.waypoint.WaypointRenderCatalog;
 import cn.net.rms.confluxmap.core.waypoint.WaypointRenderEntry;
@@ -36,31 +35,9 @@ import java.util.UUID;
 import net.fabricmc.fabric.api.client.rendering.v1.WorldRenderContext;
 import net.fabricmc.fabric.api.client.rendering.v1.WorldRenderEvents;
 //#endif
-//#if MC>=260200
-//#if MC>=260300
-//$$ import net.minecraft.client.renderer.OrderedSubmitNodeCollector;
-//#endif
-//$$ import net.fabricmc.fabric.api.client.rendering.v1.FabricOrderedSubmitNodeCollector;
-//$$ import net.fabricmc.fabric.api.client.rendering.v1.SubmitRenderPhases;
-//#endif
 import net.minecraft.client.MinecraftClient;
-import net.minecraft.client.font.TextRenderer;
 //#if MC>=12109 && MC<260100
 //$$ import net.minecraft.client.render.command.OrderedRenderCommandQueue;
-//#endif
-//#if MC>=260100
-//$$ import net.minecraft.client.renderer.SubmitNodeCollector;
-//#endif
-//#if MC>=260200
-//$$ import net.minecraft.client.renderer.feature.CustomFeatureRenderer;
-//$$ import net.minecraft.client.renderer.feature.TextFeatureRenderer;
-//$$ import net.minecraft.client.renderer.rendertype.RenderTypes;
-//$$ import net.minecraft.network.chat.Component;
-//$$ import org.joml.Matrix4f;
-//$$ import org.joml.Quaternionf;
-//#if MC>=260300
-//$$ import com.mojang.blaze3d.vertex.VertexConsumer;
-//#endif
 //#endif
 import net.minecraft.client.render.Camera;
 //#if MC<260200
@@ -75,6 +52,13 @@ import net.minecraft.util.math.Vec3d;
  * have NO in-world presence"): a vertical translucent beam at each visible waypoint's
  * column, and a camera-facing name/distance label floating above it.
  *
+ * <p>This class is the version-conditional event plumbing and per-frame orchestration:
+ * it registers the render hooks, collects the waypoints to render (including highlight
+ * ghosts and selected-location synthetic entries), selects which labels exist, and
+ * animates the aim/select reveal. The beam geometry lives in {@link WaypointBeamPainter},
+ * the 3D label billboard in {@link WaypointLabelPainter}, and the shared distance/scale
+ * math and label styling in {@link WaypointLabelMetrics}/{@link WaypointLabelStyle}.
+ *
  * <p>On versions with the classic {@code WorldRenderEvents} (before 1.21.9) both the beam and
  * the HUD marker run at {@code WorldRenderEvents.END}, after the whole world pass: deferred
  * shader packs (Photon and family) finalize from {@code LevelRenderer.render}'s RETURN and
@@ -88,57 +72,20 @@ import net.minecraft.util.math.Vec3d;
  * installed fabric-api 0.46.1+1.17), {@link WorldRenderContext#consumers()} is {@code
  * null} at this phase and its matrix stack carries no pre-existing camera translation -
  * both are handled here: the beam is drawn with plain {@code Tessellator}/{@code
- * BufferBuilder} calls ({@link RenderUtil#fillTriangle3D}) instead of a vertex consumer,
+ * BufferBuilder} calls ({@code RenderUtil#fillTriangle3D}) instead of a vertex consumer,
  * and every position is explicitly translated by {@code worldPos - camera.getPos()}
  * before drawing. The label's text/background instead opens its own {@link
  * VertexConsumerProvider.Immediate} (the same one vanilla uses for entity nametags,
  * {@code client.getBufferBuilders().getEntityVertexConsumers()}) which works at any
  * phase and is flushed once at the end of this render pass.
  *
- * <p>The beam and HUD label have deliberately separate distance rules. Beam geometry only
- * exists inside the vanilla view distance. Labels use {@code config.waypointRenderDistance}
- * as their cutoff, including its unlimited mode, and far labels are pulled inside the camera's
- * far plane along the same sight line so they remain visible after their beam disappears.
- * Label size follows perspective: the legacy constant screen size at or inside the reference
- * distance, true inverse-distance shrink beyond it, and a far floor that keeps distant
- * navigation markers readable; aiming at or selecting a label zooms it back to full apparent
- * size ({@link #labelWorldScaleMult} is the single formula both the 3D text path and the
- * item-icon HUD path share).
+ * <p>The beam and HUD label have deliberately separate distance rules (see
+ * {@link WaypointLabelMetrics}). Label size follows perspective, and aiming at or
+ * selecting a label zooms it back to full apparent size.
  */
 public final class WaypointWorldRenderer {
     private static final int SELECTED_LOCATION_COLOR = 0xFFFFE066;
-    private static final double BEAM_HALF_WIDTH = 0.18;
-    private static final float BEAM_CORE_ALPHA = 0.55f;
-    /** Same near-camera fade-in constant as the label (waypoint-ux.md S6), applied to horizontal distance from the beam column. */
-    private static final double BEAM_NEAR_FADE_BLOCKS = 5.0;
-    /** Beam alpha never drops below this fraction of {@link #BEAM_CORE_ALPHA} even at the render-distance edge - "intensifies as you approach" without vanishing far away. */
-    private static final float BEAM_FAR_FLOOR = 0.30f;
 
-    static final double LABEL_Y_OFFSET = 1.5;
-    /** waypoint-ux.md S6 "distance fade-in": alpha ramps 0 -> 1 over the nearest ~5 blocks so the label doesn't pop in right next to the camera. */
-    static final double LABEL_NEAR_FADE_BLOCKS = 5.0;
-    static final float LABEL_BASE_SCALE = 0.06f;
-    /** Apparent label size stays at its maximum (the legacy constant screen size) at or closer than this. */
-    static final double LABEL_REFERENCE_DISTANCE = 12.0;
-    /** Perspective-shrink floor: apparent size never drops below this fraction of the maximum, however far. */
-    static final float LABEL_FAR_SCREEN_FLOOR = 0.60f;
-    /** Safety ceiling on the world-space multiplier so absurd view distances cannot blow up precision. */
-    static final float LABEL_MAX_SCALE_MULT = 170.0f;
-    static final float LABEL_ICON_COLLAPSED_SIZE = 12.0f;
-    static final float LABEL_ICON_EXPANDED_SIZE = 18.0f;
-    static final float LABEL_PANEL_HEIGHT = 20.0f;
-    static final float LABEL_PANEL_PADDING = 3.0f;
-    static final float LABEL_PANEL_GAP = 1.0f;
-    static final float LABEL_TEXT_REVEAL_START = 0.72f;
-    /** Leaves enough room before the world projection's far plane for the complete billboard. */
-    private static final double LABEL_FAR_PLANE_MARGIN = 0.90;
-    static final int LABEL_BACKGROUND_COLOR = 0xC0101010;
-    static final int LABEL_LOCAL_OUTLINE_COLOR = 0xFF101010;
-    static final int LABEL_SHARED_OUTLINE_COLOR = 0xFF55DDE0;
-    static final int LABEL_NAME_COLOR = 0xFFFFFFFF;
-    static final int LABEL_DISTANCE_COLOR = 0xFFC8C8C8;
-    /** LightmapTextureManager.pack(15, 15) - always fully lit, like other UI-ish world markers. */
-    private static final int LABEL_LIGHT = 0xF000F0;
     /**
      * Waypoint world-render diagnostics switch: {@code -Dconfluxmap.debugWaypointRender=true}
      * or {@code CONFLUXMAP_DEBUG_RENDER=1} (Gradle launches inherit env vars, not -D flags).
@@ -159,6 +106,7 @@ public final class WaypointWorldRenderer {
     private final WaypointHighlightState waypointHighlightState;
     private final ServerPlayerRadarState serverPlayerRadar;
     private final WaypointItemHudRenderer waypointItemHudRenderer;
+    private final WaypointLabelPainter labelPainter;
     private final Map<UUID, Float> labelAnimationProgress = new HashMap<>();
     private long lastAnimationNanos;
 
@@ -178,6 +126,7 @@ public final class WaypointWorldRenderer {
         this.waypointHighlightState = waypointHighlightState;
         this.serverPlayerRadar = serverPlayerRadar;
         this.waypointItemHudRenderer = waypointItemHudRenderer;
+        this.labelPainter = new WaypointLabelPainter(client, config);
     }
 
     //#if MC>=12109 && MC<12111
@@ -349,7 +298,9 @@ public final class WaypointWorldRenderer {
         //$$ final FabricOrderedSubmitNodeCollector beamSubmits =
         //$$     (FabricOrderedSubmitNodeCollector) context.submitNodeCollector();
         //#endif
-        final double maxDistance = beamVisibleDistance(MinecraftAccess.viewDistance(client));
+        final double maxDistance = WaypointLabelMetrics.beamVisibleDistance(
+            MinecraftAccess.viewDistance(client)
+        );
         if (maxDistance <= 0.0) {
             return;
         }
@@ -392,14 +343,14 @@ public final class WaypointWorldRenderer {
             final double horizontalDistance = Math.sqrt(dx * dx + dz * dz);
             final boolean selected = isSelected(waypoint, currentDimension);
             //#if MC>=260300
-            //$$ drawBeam(
+            //$$ WaypointBeamPainter.drawBeam(
             //$$     matrices, beamSubmits, cameraPos, worldX, worldZ, bottomY, topY,
             //$$     waypoint.colorArgb(), horizontalDistance, maxDistance,
             //$$     highlightVisibilityAlpha(selected, hasHighlight)
             //$$         * playerHighlightAlpha(waypoint, currentDimension)
             //$$ );
             //#else
-            drawBeam(
+            WaypointBeamPainter.drawBeam(
                 matrices, cameraPos, worldX, worldZ, bottomY, topY,
                 waypoint.colorArgb(), horizontalDistance, maxDistance,
                 highlightVisibilityAlpha(selected, hasHighlight)
@@ -480,8 +431,8 @@ public final class WaypointWorldRenderer {
         final float cameraPitch = camera.getPitch();
         final MatrixStack matrices = context.matrixStack();
         //#endif
-        final double maxDistance = maxLabelDistance(config.waypointRenderDistance);
-        final double labelProjectionDistance = labelProjectionDistance(
+        final double maxDistance = WaypointLabelMetrics.maxLabelDistance(config.waypointRenderDistance);
+        final double labelProjectionDistance = WaypointLabelMetrics.labelProjectionDistance(
             MinecraftAccess.viewDistance(client)
         );
         final List<WaypointRenderEntry> waypoints = waypointsForRender(currentDimension);
@@ -511,7 +462,7 @@ public final class WaypointWorldRenderer {
             final LabelCandidate first = labelSelection.candidates().get(0);
             debugRenderState("end-hud", camera, matrices, context.projectionMatrix(), new double[] {
                 first.waypoint().x() - cameraPos.x,
-                first.waypoint().y() + LABEL_Y_OFFSET - cameraPos.y,
+                first.waypoint().y() + WaypointLabelMetrics.LABEL_Y_OFFSET - cameraPos.y,
                 first.waypoint().z() - cameraPos.z
             });
             //#elseif MC<260200
@@ -554,7 +505,7 @@ public final class WaypointWorldRenderer {
                         continue;
                     }
                     //#if MC>=260200
-                    //$$ drawLabel(
+                    //$$ labelPainter.drawLabel(
                     //$$     matrices, context.submitNodeCollector(), cameraState.orientation,
                     //$$     cameraPos, waypoint.x(), waypoint.y(), waypoint.z(), waypoint,
                     //$$     renderDistance, labelProjectionDistance, progress,
@@ -563,7 +514,7 @@ public final class WaypointWorldRenderer {
                     //$$     candidate.selected()
                     //$$ );
                     //#elseif MC>=260100
-                    //$$ drawLabel(
+                    //$$ labelPainter.drawLabel(
                     //$$     matrices, immediate, context.submitNodeCollector(), camera,
                     //$$     cameraPos, waypoint.x(), waypoint.y(), waypoint.z(),
                     //$$     waypoint, renderDistance, labelProjectionDistance, progress,
@@ -572,7 +523,7 @@ public final class WaypointWorldRenderer {
                     //$$     candidate.selected()
                     //$$ );
                     //#elseif MC>=12111
-                    //$$ drawLabel(
+                    //$$ labelPainter.drawLabel(
                     //$$     matrices, immediate, context.commandQueue(), camera,
                     //$$     cameraPos, waypoint.x(), waypoint.y(), waypoint.z(),
                     //$$     waypoint, renderDistance, labelProjectionDistance, progress,
@@ -581,7 +532,7 @@ public final class WaypointWorldRenderer {
                     //$$     candidate.selected()
                     //$$ );
                     //#elseif MC>=12109
-                    //$$ drawLabel(
+                    //$$ labelPainter.drawLabel(
                     //$$     matrices, immediate, commandQueue, camera,
                     //$$     cameraPos, waypoint.x(), waypoint.y(), waypoint.z(),
                     //$$     waypoint, renderDistance, labelProjectionDistance, progress,
@@ -590,7 +541,7 @@ public final class WaypointWorldRenderer {
                     //$$     candidate.selected()
                     //$$ );
                     //#else
-                    drawLabel(
+                    labelPainter.drawLabel(
                         matrices, immediate, camera, cameraPos, waypoint.x(), waypoint.y(), waypoint.z(),
                         waypoint, renderDistance, labelProjectionDistance, progress,
                         highlightVisibilityAlpha(candidate.selected(), labelSelection.hasHighlight())
@@ -618,51 +569,6 @@ public final class WaypointWorldRenderer {
 
         waypointItemHudRenderer.publish(itemLabels);
         labelAnimationProgress.keySet().retainAll(visibleWaypointIds);
-    }
-
-    static double maxLabelDistance(final int configuredDistance) {
-        return configuredDistance > 0 ? configuredDistance : Double.POSITIVE_INFINITY;
-    }
-
-    static double beamVisibleDistance(final int viewDistanceChunks) {
-        return Math.max(0, viewDistanceChunks) * 16.0;
-    }
-
-    static double labelProjectionDistance(final int viewDistanceChunks) {
-        return Math.max(16.0, beamVisibleDistance(viewDistanceChunks) * LABEL_FAR_PLANE_MARGIN);
-    }
-
-    static double projectedLabelDistance(
-        final double actualDistance,
-        final double projectionDistance
-    ) {
-        return Math.min(Math.max(0.0, actualDistance), Math.max(0.0, projectionDistance));
-    }
-
-    /** Apparent (post-perspective) label size as a fraction of the legacy constant screen size. */
-    static float labelScreenScaleFactor(final double renderedDistance) {
-        return (float) MathHelper.clamp(
-            LABEL_REFERENCE_DISTANCE / Math.max(renderedDistance, 0.001),
-            LABEL_FAR_SCREEN_FLOOR, 1.0
-        );
-    }
-
-    /**
-     * World-space scale multiplier for a label anchored at {@code renderedDistance}. At or inside
-     * the reference distance it reproduces the legacy constant-screen-size growth (apparent size
-     * at its maximum); beyond it the multiplier holds at 1 - a true perspective object - and then
-     * grows only enough to hold the apparent size at {@link #LABEL_FAR_SCREEN_FLOOR} for far
-     * labels that were pulled closer to stay inside the far plane. {@code easedTargetProgress}
-     * (the eased aim/select animation, 0..1) lerps the apparent size back toward full so the
-     * magnify-on-target effect is not dampened by the distance shrink. The item-icon HUD path
-     * shares this so both label flavors size identically.
-     */
-    static float labelWorldScaleMult(final double renderedDistance, final float easedTargetProgress) {
-        final double perspective = labelScreenScaleFactor(renderedDistance);
-        final double screenFactor = MathHelper.lerp(easedTargetProgress, perspective, 1.0);
-        return (float) MathHelper.clamp(
-            (renderedDistance / LABEL_REFERENCE_DISTANCE) * screenFactor, 0.0, LABEL_MAX_SCALE_MULT
-        );
     }
 
     private List<WaypointRenderEntry> waypointsForRender(final DimensionId dimension) {
@@ -800,7 +706,7 @@ public final class WaypointWorldRenderer {
             candidates.add(new LabelCandidate(waypoint, playerDistanceSquared, selected));
 
             final double dx = waypoint.x() - cameraPos.x;
-            final double dy = waypoint.y() + LABEL_Y_OFFSET - cameraPos.y;
+            final double dy = waypoint.y() + WaypointLabelMetrics.LABEL_Y_OFFSET - cameraPos.y;
             final double dz = waypoint.z() - cameraPos.z;
             final double distance = Math.sqrt(dx * dx + dy * dy + dz * dz);
             if (distance <= 0.001) {
@@ -863,467 +769,6 @@ public final class WaypointWorldRenderer {
             labelAnimationProgress.put(waypointId, next);
         }
         return next;
-    }
-
-    /**
-     * Square-tube beam (deliverable A's "4-sided prism" option) spanning the dimension's
-     * full vertical range at the waypoint's X/Z, independent of the waypoint's own Y
-     * (waypoint-ux.md S6: this is a deliberate simplification the reference implementation
-     * also makes - a full-height column is trivial to draw and visible from anywhere at
-     * that X/Z). Drawn double-sided (no back-face culling, see the caller) so the tube
-     * reads correctly from inside or outside.
-     */
-    //#if MC>=260300
-    //$$ private void drawBeam(
-    //$$     final PoseStack matrices,
-    //$$     final FabricOrderedSubmitNodeCollector beamSubmits,
-    //$$     final Vec3 cameraPos,
-    //#else
-    private void drawBeam(
-        final MatrixStack matrices,
-        final Vec3d cameraPos,
-    //#endif
-        final double worldX,
-        final double worldZ,
-        final double bottomY,
-        final double topY,
-        final int colorArgb,
-        final double horizontalDistance,
-        final double maxDistance,
-        final float visibilityAlpha
-    ) {
-        final float nearFade = (float) MathHelper.clamp(horizontalDistance / BEAM_NEAR_FADE_BLOCKS, 0.0, 1.0);
-        final float farFactor = (float) MathHelper.clamp(1.0 - horizontalDistance / maxDistance, 0.0, 1.0);
-        final float intensify = BEAM_FAR_FLOOR + (1f - BEAM_FAR_FLOOR) * farFactor;
-        final float alpha = BEAM_CORE_ALPHA * nearFade * intensify * visibilityAlpha;
-        if (alpha <= 0.01f) {
-            return;
-        }
-        final int color = Argb.pack(Math.round(alpha * 255f), Argb.red(colorArgb), Argb.green(colorArgb), Argb.blue(colorArgb));
-
-        matrices.push();
-        matrices.translate(worldX - cameraPos.x, -cameraPos.y, worldZ - cameraPos.z);
-        final float h = (float) BEAM_HALF_WIDTH;
-        final float bottom = (float) bottomY;
-        final float top = (float) topY;
-        //#if MC>=260300
-        //$$ final PoseStack.Pose pose = matrices.last().copy();
-        //$$ submitBeamSide(beamSubmits, pose, -h, -h, h, -h, bottom, top, color);
-        //$$ submitBeamSide(beamSubmits, pose, h, -h, h, h, bottom, top, color);
-        //$$ submitBeamSide(beamSubmits, pose, h, h, -h, h, bottom, top, color);
-        //$$ submitBeamSide(beamSubmits, pose, -h, h, -h, -h, bottom, top, color);
-        //#else
-        drawBeamSide(matrices, -h, -h, h, -h, bottom, top, color);
-        drawBeamSide(matrices, h, -h, h, h, bottom, top, color);
-        drawBeamSide(matrices, h, h, -h, h, bottom, top, color);
-        drawBeamSide(matrices, -h, h, -h, -h, bottom, top, color);
-        //#endif
-        matrices.pop();
-    }
-
-    /** One side face of the beam tube, from local (x0,z0) to (x1,z1), spanning bottom..top. */
-    private void drawBeamSide(
-        final MatrixStack matrices,
-        final float x0, final float z0,
-        final float x1, final float z1,
-        final float bottom, final float top,
-        final int color
-    ) {
-        RenderUtil.fillTriangle3D(matrices, x0, bottom, z0, x1, bottom, z1, x1, top, z1, color);
-        RenderUtil.fillTriangle3D(matrices, x0, bottom, z0, x1, top, z1, x0, top, z0, color);
-    }
-
-    //#if MC>=260300
-    //$$ /**
-    //$$  * {@link #drawBeamSide} as a submitted custom-geometry node in the AFTER_TERRAIN phase:
-    //$$  * 26.3 keeps one render pass open across classic-translucent terrain, so geometry must be
-    //$$  * handed to vanilla's submit pipeline instead of drawing it on the spot. Consecutive nodes
-    //$$  * batch into a single staged draw through the dragon-rays RenderType, the same pipeline the
-    //$$  * immediate path draws with on older versions.
-    //$$  */
-    //$$ private static void submitBeamSide(
-    //$$     final FabricOrderedSubmitNodeCollector beamSubmits,
-    //$$     final PoseStack.Pose pose,
-    //$$     final float x0, final float z0,
-    //$$     final float x1, final float z1,
-    //$$     final float bottom, final float top,
-    //$$     final int color
-    //$$ ) {
-    //$$     beamSubmits.submitCustom(SubmitRenderPhases.AFTER_TERRAIN, new CustomFeatureRenderer.Submit(
-    //$$         pose, RenderTypes.dragonRays(),
-    //$$         (transform, vertices) -> {
-    //$$             emitBeamTriangle(transform, vertices, x0, bottom, z0, x1, bottom, z1, x1, top, z1, color);
-    //$$             emitBeamTriangle(transform, vertices, x0, bottom, z0, x1, top, z1, x0, top, z0, color);
-    //$$         }
-    //$$     ));
-    //$$ }
-    //$$
-    //$$ /** One triangle written twice with opposite winding, the double-sided emission the immediate path uses. */
-    //$$ private static void emitBeamTriangle(
-    //$$     final PoseStack.Pose pose,
-    //$$     final VertexConsumer vertices,
-    //$$     final float x0, final float y0, final float z0,
-    //$$     final float x1, final float y1, final float z1,
-    //$$     final float x2, final float y2, final float z2,
-    //$$     final int color
-    //$$ ) {
-    //$$     vertices.addVertex(pose, x0, y0, z0).setColor(color);
-    //$$     vertices.addVertex(pose, x1, y1, z1).setColor(color);
-    //$$     vertices.addVertex(pose, x2, y2, z2).setColor(color);
-    //$$     vertices.addVertex(pose, x2, y2, z2).setColor(color);
-    //$$     vertices.addVertex(pose, x1, y1, z1).setColor(color);
-    //$$     vertices.addVertex(pose, x0, y0, z0).setColor(color);
-    //$$ }
-    //#endif
-
-    /** Camera-facing marker with an interruptible, right-expanding detail panel. */
-    //#if MC>=260200
-    //$$ private void drawLabel(
-    //$$     final PoseStack matrices,
-    //$$     final SubmitNodeCollector submits,
-    //$$     final Quaternionf cameraRotation,
-    //#else
-    private void drawLabel(
-        final MatrixStack matrices,
-        final VertexConsumerProvider.Immediate immediate,
-    //#if MC>=260100
-        //$$ final SubmitNodeCollector submits,
-    //#elseif MC>=12109
-        //$$ final OrderedRenderCommandQueue commandQueue,
-    //#endif
-        final Camera camera,
-    //#endif
-        final Vec3d cameraPos,
-        final double worldX,
-        final double worldY,
-        final double worldZ,
-        final WaypointRenderEntry waypoint,
-        final double distance3d,
-        final double projectionDistance,
-        final float animationProgress,
-        final float visibilityAlpha,
-        final boolean selected
-    ) {
-        final float nearFade = (float) MathHelper.clamp(distance3d / LABEL_NEAR_FADE_BLOCKS, 0.0, 1.0);
-        if (nearFade <= 0.01f) {
-            return;
-        }
-        final float labelOpacity = labelOpacityFactor(config);
-        final double anchorX = worldX - cameraPos.x;
-        final double anchorY = worldY + LABEL_Y_OFFSET - cameraPos.y;
-        final double anchorZ = worldZ - cameraPos.z;
-        final double anchorDistance = Math.sqrt(
-            anchorX * anchorX + anchorY * anchorY + anchorZ * anchorZ
-        );
-        final double renderedDistance = projectedLabelDistance(anchorDistance, projectionDistance);
-        final double projectionScale = anchorDistance > 0.001
-            ? renderedDistance / anchorDistance
-            : 1.0;
-
-        final float easedProgress = WaypointHudMotion.smoothStep(animationProgress);
-        // Perspective sizing: apparent size peaks at the legacy constant-screen-size look at or
-        // inside the reference distance and shrinks with true 1/d perspective beyond it, floored
-        // far away; the aim/select animation zooms the label back to full apparent size. Scaling
-        // against the projected distance also keeps pulling a far marker closer (far-plane
-        // clamping) from enlarging it.
-        final float scaleMult = labelWorldScaleMult(renderedDistance, easedProgress);
-        // Applied last so the user factor is a plain multiplier on apparent size at every distance.
-        final float scale = LABEL_BASE_SCALE * scaleMult * config.waypointLabelScalePercent / 100f;
-
-        final TextRenderer textRenderer = client.textRenderer;
-        final String name = waypoint.name();
-        final String distanceText = Math.round(distance3d) + " m";
-        final int nameWidth = textRenderer.getWidth(name);
-        final int distanceWidth = textRenderer.getWidth(distanceText);
-        final float panelFullWidth = Math.max(nameWidth, distanceWidth) + LABEL_PANEL_PADDING * 2f;
-        final float iconSize = MathHelper.lerp(
-            easedProgress, LABEL_ICON_COLLAPSED_SIZE, LABEL_ICON_EXPANDED_SIZE
-        );
-        final float iconHalfSize = iconSize / 2f;
-        final float panelX = iconHalfSize + LABEL_PANEL_GAP;
-        final float panelReveal = MathHelper.clamp(easedProgress / LABEL_TEXT_REVEAL_START, 0f, 1f);
-        final float panelWidth = panelFullWidth * panelReveal;
-
-        //#if MC>=260100 && MC<260200
-        //$$ // 26.1 collects item submits separately so they render in the current frame.
-        //#endif
-        matrices.push();
-        matrices.translate(
-            anchorX * projectionScale,
-            anchorY * projectionScale,
-            anchorZ * projectionScale
-        );
-        //#if MC>=260300
-        //$$ // 26.3 dropped mulPose(Quaternionf); rotate through a matrix.
-        //$$ matrices.mulPose(new Matrix4f().rotation(cameraRotation));
-        //#elseif MC>=260200
-        //$$ matrices.mulPose(cameraRotation);
-        //#else
-        matrices.multiply(camera.getRotation());
-        //#endif
-        //#if MC>=12100
-        //$$ matrices.scale(scale, -scale, scale);
-        //#else
-        matrices.scale(-scale, -scale, scale);
-        //#endif
-
-        //#if MC>=260300
-        //$$ final OrderedSubmitNodeCollector plates = submits.order(0);
-        //$$ final OrderedSubmitNodeCollector text = submits.order(1);
-        //#elseif MC>=260200
-        //$$ final FabricOrderedSubmitNodeCollector plates =
-        //$$     (FabricOrderedSubmitNodeCollector) submits.order(0);
-        //$$ final FabricOrderedSubmitNodeCollector text =
-        //$$     (FabricOrderedSubmitNodeCollector) submits.order(1);
-        //#endif
-
-        if (panelWidth > 0.5f) {
-            //#if MC>=260200
-            //$$ submitRect(
-            //$$     plates, matrices, panelX, -LABEL_PANEL_HEIGHT / 2f,
-            //$$     panelWidth, LABEL_PANEL_HEIGHT,
-            //$$     withAlpha(LABEL_BACKGROUND_COLOR, nearFade * visibilityAlpha * labelOpacity)
-            //$$ );
-            //#else
-            RenderUtil.fillRect3D(
-                matrices, panelX, -LABEL_PANEL_HEIGHT / 2f,
-                panelWidth, LABEL_PANEL_HEIGHT,
-                withAlpha(LABEL_BACKGROUND_COLOR, nearFade * visibilityAlpha * labelOpacity)
-            );
-            //#endif
-        }
-        //#if MC>=260200
-        //$$ drawIcon(
-        //$$     matrices, textRenderer, plates, text, submits, waypoint, iconHalfSize,
-        //$$     nearFade * labelOpacity * visibilityAlpha,
-        //$$     selected
-        //$$ );
-        //#elseif MC>=260100
-        //$$ drawIcon(
-        //$$     matrices, textRenderer, immediate, submits, waypoint, iconHalfSize,
-        //$$     nearFade * labelOpacity * visibilityAlpha,
-        //$$     selected
-        //$$ );
-        //#elseif MC>=12109
-        //$$ drawIcon(
-        //$$     matrices, textRenderer, immediate, commandQueue, waypoint, iconHalfSize,
-        //$$     nearFade * labelOpacity * visibilityAlpha,
-        //$$     selected
-        //$$ );
-        //#else
-        drawIcon(
-            matrices, textRenderer, immediate, waypoint, iconHalfSize,
-            nearFade * labelOpacity * visibilityAlpha,
-            selected
-        );
-        //#endif
-
-        final float textReveal = MathHelper.clamp(
-            (easedProgress - LABEL_TEXT_REVEAL_START) / (1f - LABEL_TEXT_REVEAL_START), 0f, 1f
-        );
-        if (textReveal > 0.01f) {
-            final float textX = panelX + LABEL_PANEL_PADDING + (1f - textReveal) * 4f;
-            final float textAlpha = nearFade * textReveal * visibilityAlpha * labelOpacity;
-            //#if MC>=260200
-            //$$ submitText(
-            //$$     text, matrices, name, textX, -9f,
-            //$$     withAlpha(LABEL_NAME_COLOR, textAlpha)
-            //$$ );
-            //$$ submitText(
-            //$$     text, matrices, distanceText, textX, 1f,
-            //$$     withAlpha(LABEL_DISTANCE_COLOR, textAlpha)
-            //$$ );
-            //#else
-            RenderUtil.drawSeeThroughText(
-                textRenderer, name, textX, -9f, withAlpha(LABEL_NAME_COLOR, textAlpha),
-                matrices, immediate, LABEL_LIGHT
-            );
-            RenderUtil.drawSeeThroughText(
-                textRenderer, distanceText, textX, 1f, withAlpha(LABEL_DISTANCE_COLOR, textAlpha),
-                matrices, immediate, LABEL_LIGHT
-            );
-            //#endif
-        }
-        matrices.pop();
-    }
-
-    //#if MC>=260200
-    //$$ private void drawIcon(
-    //$$     final PoseStack matrices,
-    //$$     final Font textRenderer,
-    //#if MC>=260300
-    //$$     final OrderedSubmitNodeCollector plates,
-    //$$     final OrderedSubmitNodeCollector text,
-    //#else
-    //$$     final FabricOrderedSubmitNodeCollector plates,
-    //$$     final FabricOrderedSubmitNodeCollector text,
-    //#endif
-    //$$     final SubmitNodeCollector submits,
-    //#else
-    private void drawIcon(
-        final MatrixStack matrices,
-        final TextRenderer textRenderer,
-        final VertexConsumerProvider.Immediate immediate,
-    //#if MC>=260100
-        //$$ final SubmitNodeCollector submits,
-    //#elseif MC>=12109
-        //$$ final OrderedRenderCommandQueue commandQueue,
-    //#endif
-    //#endif
-        final WaypointRenderEntry waypoint,
-        final float halfSize,
-        final float alpha,
-        final boolean selected
-    ) {
-        final float size = halfSize * 2f;
-        //#if MC>=260200
-        //$$ submitRect(
-        //$$     plates, matrices, -halfSize - 1f, -halfSize - 1f, size + 2f, size + 2f,
-        //$$     withAlpha(selected ? 0xFFFFE066 : outlineColor(waypoint), alpha)
-        //$$ );
-        //$$ submitRect(
-        //$$     plates, matrices, -halfSize, -halfSize, size, size,
-        //$$     withAlpha(waypoint.colorArgb() | 0xFF000000, alpha)
-        //$$ );
-        //#else
-        RenderUtil.fillRect3D(
-            matrices, -halfSize - 1f, -halfSize - 1f, size + 2f, size + 2f,
-            withAlpha(selected ? 0xFFFFE066 : outlineColor(waypoint), alpha)
-        );
-        RenderUtil.fillRect3D(
-            matrices, -halfSize, -halfSize, size, size,
-            withAlpha(waypoint.colorArgb() | 0xFF000000, alpha)
-        );
-        //#endif
-
-        final String markerText = WaypointMarkerRenderer.markerText(
-            waypoint.name(),
-            waypoint.markerLabel()
-        );
-        final int initialWidth = textRenderer.getWidth(markerText);
-        final float available = Math.max(1f, size - 3f);
-        final float textScale = Math.min(1f, available / Math.max(initialWidth, textRenderer.fontHeight));
-        matrices.push();
-        matrices.scale(textScale, textScale, 1f);
-        //#if MC>=260200
-        //$$ submitText(
-        //$$     text, matrices, markerText, -initialWidth / 2f, -textRenderer.lineHeight / 2f,
-        //$$     withAlpha(WaypointMarkerRenderer.textColorFor(waypoint.colorArgb()), alpha)
-        //$$ );
-        //#else
-        RenderUtil.drawSeeThroughText(
-            textRenderer, markerText, -initialWidth / 2f, -textRenderer.fontHeight / 2f,
-            withAlpha(WaypointMarkerRenderer.textColorFor(waypoint.colorArgb()), alpha),
-            matrices, immediate, LABEL_LIGHT
-        );
-        //#endif
-        matrices.pop();
-    }
-
-    //#if MC>=260200
-    //#if MC>=260300
-    //$$ private static void submitRect(
-    //$$     final OrderedSubmitNodeCollector submits,
-    //$$     final PoseStack matrices,
-    //$$     final float x,
-    //$$     final float y,
-    //$$     final float width,
-    //$$     final float height,
-    //$$     final int color
-    //$$ ) {
-    //$$     // 26.3 removed RenderTypes.textBackgroundSeeThrough and rebuilt the text Submit
-    //$$     // records around Content objects; the collector's own background submit replaces
-    //$$     // the custom-geometry path entirely.
-    //$$     submits.submitTextBackground(
-    //$$         matrices, x, y, x + width, y + height, color,
-    //$$         Font.DisplayMode.SEE_THROUGH, LABEL_LIGHT
-    //$$     );
-    //$$ }
-    //$$
-    //$$ private static void submitText(
-    //$$     final OrderedSubmitNodeCollector submits,
-    //$$     final PoseStack matrices,
-    //$$     final String text,
-    //$$     final float x,
-    //$$     final float y,
-    //$$     final int color
-    //$$ ) {
-    //$$     submits.submitText(
-    //$$         matrices, x, y, Component.literal(text).getVisualOrderText(),
-    //$$         false, Font.DisplayMode.SEE_THROUGH, LABEL_LIGHT, color, 0, 0
-    //$$     );
-    //$$ }
-    //#else
-    //$$ private static void submitRect(
-    //$$     final FabricOrderedSubmitNodeCollector submits,
-    //$$     final PoseStack matrices,
-    //$$     final float x,
-    //$$     final float y,
-    //$$     final float width,
-    //$$     final float height,
-    //$$     final int color
-    //$$ ) {
-    //$$     submits.submitCustom(
-    //$$         SubmitRenderPhases.ALWAYS_ON_TOP,
-    //$$         new CustomFeatureRenderer.Submit(
-    //$$             matrices.last().copy(),
-    //$$             RenderTypes.textBackgroundSeeThrough(),
-    //$$             (pose, vertices) -> {
-    //$$                 vertices.addVertex(pose, x, y + height, 0f).setColor(color).setLight(LABEL_LIGHT);
-    //$$                 vertices.addVertex(pose, x + width, y + height, 0f).setColor(color).setLight(LABEL_LIGHT);
-    //$$                 vertices.addVertex(pose, x + width, y, 0f).setColor(color).setLight(LABEL_LIGHT);
-    //$$                 vertices.addVertex(pose, x, y, 0f).setColor(color).setLight(LABEL_LIGHT);
-    //$$             }
-    //$$         )
-    //$$     );
-    //$$ }
-    //$$
-    //$$ private static void submitText(
-    //$$     final FabricOrderedSubmitNodeCollector submits,
-    //$$     final PoseStack matrices,
-    //$$     final String text,
-    //$$     final float x,
-    //$$     final float y,
-    //$$     final int color
-    //$$ ) {
-    //$$     submits.submitCustom(
-    //$$         SubmitRenderPhases.ALWAYS_ON_TOP,
-    //$$         new TextFeatureRenderer.Submit(
-    //$$             new Matrix4f(matrices.last().pose()),
-    //$$             x,
-    //$$             y,
-    //$$             Component.literal(text).getVisualOrderText(),
-    //$$             false,
-    //$$             Font.DisplayMode.SEE_THROUGH,
-    //$$             LABEL_LIGHT,
-    //$$             color,
-    //$$             0,
-    //$$             0
-    //$$         )
-    //$$     );
-    //$$ }
-    //#endif
-    //#endif
-
-    /**
-     * User opacity for the whole in-world waypoint label: icon plates, the expanded panel
-     * background, and the panel text. The panel background keeps its own base alpha
-     * ({@link #LABEL_BACKGROUND_COLOR}); this factor scales whatever the base produces.
-     */
-    static float labelOpacityFactor(final ConfluxConfig config) {
-        return config.waypointIconOpacity / (float) ConfluxConfig.MAX_WAYPOINT_ICON_OPACITY;
-    }
-
-    static int withAlpha(final int argb, final float alpha) {
-        final int a = Math.round(Argb.alpha(argb) * MathHelper.clamp(alpha, 0f, 1f));
-        return (a << 24) | (argb & 0x00FFFFFF);
-    }
-
-    static int outlineColor(final WaypointRenderEntry waypoint) {
-        if (!waypoint.shared()) {
-            return LABEL_LOCAL_OUTLINE_COLOR;
-        }
-        return LABEL_SHARED_OUTLINE_COLOR;
     }
 
     //#if MC>=12109 && MC<12111

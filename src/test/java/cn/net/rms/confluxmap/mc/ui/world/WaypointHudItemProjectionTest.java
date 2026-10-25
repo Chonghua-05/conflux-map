@@ -61,8 +61,8 @@ final class WaypointHudItemProjectionTest {
             1920, 1080, 70.0, 6.0, 0f, 12f, 100
         ).orElseThrow().size();
         final float reference = WaypointHudItemProjection.project(
-            0f, 0f, 0.0, 0.0, WaypointWorldRenderer.LABEL_REFERENCE_DISTANCE,
-            1920, 1080, 70.0, WaypointWorldRenderer.LABEL_REFERENCE_DISTANCE, 0f, 12f, 100
+            0f, 0f, 0.0, 0.0, WaypointLabelMetrics.LABEL_REFERENCE_DISTANCE,
+            1920, 1080, 70.0, WaypointLabelMetrics.LABEL_REFERENCE_DISTANCE, 0f, 12f, 100
         ).orElseThrow().size();
 
         assertEquals(reference, close, 0.001f);
@@ -71,8 +71,8 @@ final class WaypointHudItemProjectionTest {
     @Test
     void shrinksWithInverseDistanceBeyondTheReferenceDistance() {
         final float reference = WaypointHudItemProjection.project(
-            0f, 0f, 0.0, 0.0, WaypointWorldRenderer.LABEL_REFERENCE_DISTANCE,
-            1920, 1080, 70.0, WaypointWorldRenderer.LABEL_REFERENCE_DISTANCE, 0f, 12f, 100
+            0f, 0f, 0.0, 0.0, WaypointLabelMetrics.LABEL_REFERENCE_DISTANCE,
+            1920, 1080, 70.0, WaypointLabelMetrics.LABEL_REFERENCE_DISTANCE, 0f, 12f, 100
         ).orElseThrow().size();
         final float beyond = WaypointHudItemProjection.project(
             0f, 0f, 0.0, 0.0, 15.0,
@@ -85,8 +85,8 @@ final class WaypointHudItemProjectionTest {
     @Test
     void neverShrinksBelowTheFarFloor() {
         final float reference = WaypointHudItemProjection.project(
-            0f, 0f, 0.0, 0.0, WaypointWorldRenderer.LABEL_REFERENCE_DISTANCE,
-            1920, 1080, 70.0, WaypointWorldRenderer.LABEL_REFERENCE_DISTANCE, 0f, 12f, 100
+            0f, 0f, 0.0, 0.0, WaypointLabelMetrics.LABEL_REFERENCE_DISTANCE,
+            1920, 1080, 70.0, WaypointLabelMetrics.LABEL_REFERENCE_DISTANCE, 0f, 12f, 100
         ).orElseThrow().size();
         final float far = WaypointHudItemProjection.project(
             0f, 0f, 0.0, 0.0, 100.0,
@@ -97,15 +97,15 @@ final class WaypointHudItemProjectionTest {
             1920, 1080, 70.0, 460.0, 0f, 12f, 100
         ).orElseThrow().size();
 
-        assertEquals(reference * WaypointWorldRenderer.LABEL_FAR_SCREEN_FLOOR, far, 0.001f);
+        assertEquals(reference * WaypointLabelMetrics.LABEL_FAR_SCREEN_FLOOR, far, 0.001f);
         assertEquals(far, veryFar, 0.001f);
     }
 
     @Test
     void targetZoomIsNotDampenedByThePerspectiveShrink() {
         final float reference = WaypointHudItemProjection.project(
-            0f, 0f, 0.0, 0.0, WaypointWorldRenderer.LABEL_REFERENCE_DISTANCE,
-            1920, 1080, 70.0, WaypointWorldRenderer.LABEL_REFERENCE_DISTANCE, 0f, 12f, 100
+            0f, 0f, 0.0, 0.0, WaypointLabelMetrics.LABEL_REFERENCE_DISTANCE,
+            1920, 1080, 70.0, WaypointLabelMetrics.LABEL_REFERENCE_DISTANCE, 0f, 12f, 100
         ).orElseThrow().size();
         final float targeted = WaypointHudItemProjection.project(
             0f, 0f, 0.0, 0.0, 100.0,

@@ -75,9 +75,9 @@ final class WaypointHudProjectionTest {
     //$$
     //$$ @Test
     //$$ void modernLabelQuadFacesTheCamera() throws Exception {
-    //$$     final String source = Files.readString(preprocessedSource());
+    //$$     final String source = Files.readString(preprocessedLabelPainterSource());
     //$$     final String drawLabel = methodBody(
-    //$$         source, "\n    private void drawLabel("
+    //$$         source, "\n    void drawLabel("
     //$$     );
     //$$
     //$$     assertTrue(
@@ -146,8 +146,8 @@ final class WaypointHudProjectionTest {
     //#if MC>=260200
     //$$ @Test
     //$$ void submittedLabelTextRendersAfterEveryOpaquePlate() throws Exception {
-    //$$     final String source = Files.readString(preprocessedSource());
-    //$$     final String drawLabel = methodBody(source, "\n    private void drawLabel(");
+    //$$     final String source = Files.readString(preprocessedLabelPainterSource());
+    //$$     final String drawLabel = methodBody(source, "\n    void drawLabel(");
     //$$
     //$$     assertTrue(
     //$$         drawLabel.contains("final FabricOrderedSubmitNodeCollector plates =")
@@ -163,7 +163,7 @@ final class WaypointHudProjectionTest {
     //$$
     //$$ @Test
     //$$ void submittedHudRendersAfterTheWaterMask() throws Exception {
-    //$$     final String source = Files.readString(preprocessedSource());
+    //$$     final String source = Files.readString(preprocessedLabelPainterSource());
     //$$     final String submitRect = methodBody(source, "\n    private static void submitRect(");
     //$$     final String submitText = methodBody(source, "\n    private static void submitText(");
     //$$
@@ -192,8 +192,8 @@ final class WaypointHudProjectionTest {
     //$$
     //$$ @Test
     //$$ void submittedHudOmitsTheVerticalRelationBadge() throws Exception {
-    //$$     final String source = Files.readString(preprocessedSource());
-    //$$     final String drawIcon = methodBody(source, "\n    private void drawIcon(");
+    //$$     final String source = Files.readString(preprocessedLabelPainterSource());
+    //$$     final String drawIcon = methodBody(source, "\n    void drawIcon(");
     //$$
     //$$     assertFalse(
     //$$         drawIcon.contains("WaypointVerticalRelation"),
@@ -256,6 +256,10 @@ final class WaypointHudProjectionTest {
     //$$     return current.resolve(
     //$$         "preprocessed/main/java/cn/net/rms/confluxmap/mc/ui/world/WaypointWorldRenderer.java"
     //$$     );
+    //$$ }
+    //$$
+    //$$ private static Path preprocessedLabelPainterSource() throws URISyntaxException {
+    //$$     return preprocessedSource().getParent().resolve("WaypointLabelPainter.java");
     //$$ }
     //$$
     //$$ private static Path preprocessedRenderUtilSource() throws URISyntaxException {
