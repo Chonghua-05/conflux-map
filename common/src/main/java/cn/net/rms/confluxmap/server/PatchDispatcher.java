@@ -9,6 +9,8 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.function.Consumer;
 import java.util.function.LongSupplier;
+import org.apache.logging.log4j.LogManager;
+import org.apache.logging.log4j.Logger;
 
 /**
  * Per-player patch delivery queue. Tiles from MAP_VIEW_REQ are enqueued in arrival order and
@@ -21,6 +23,8 @@ import java.util.function.LongSupplier;
  * <p>Thread-safe: requests enqueue from the network thread while the server tick drains.
  */
 public final class PatchDispatcher {
+    private static final Logger LOGGER = LogManager.getLogger(PatchDispatcher.class);
+
     /** One tile's pending work; identity includes its negotiated residual/absolute source mode. */
     public record TileJob(
         int reqId,
@@ -212,6 +216,11 @@ public final class PatchDispatcher {
                     head.encoded = MsgCodec.encode(head.built.patch());
                 } catch (final ProtoException e) {
                     // An unencodable patch is a server-side bug; drop the job rather than wedge the queue.
+                    LOGGER.warn(
+                        "[ConfluxMap] companion: dropped unencodable patch for dim {} tile {},{} lod {} ({})",
+                        head.job.dimIndex(), head.job.tileX(), head.job.tileZ(), head.job.lod(),
+                        e.getMessage()
+                    );
                     heads.remove();
                     continue;
                 }

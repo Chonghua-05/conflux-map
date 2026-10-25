@@ -46,6 +46,8 @@ import java.util.concurrent.ConcurrentLinkedQueue;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicLong;
 import net.minecraft.nbt.NbtCompound;
 import net.minecraft.server.MinecraftServer;
@@ -72,6 +74,9 @@ public final class RegionSummaryService {
     /** Hard global bound: a worst-case LOD0 page can approach the protocol's 576 KiB body cap. */
     private static final int REGION_PAGE_CACHE_LIMIT = 64;
     private static final int REGION_BASELINE_CACHE_LIMIT = 8;
+    /** Bounds the live-chunk invalidation backlog between ticks; a CLQ would otherwise grow unbounded
+     * while worldgen mutates far more regions per tick than the drain can republish. */
+    private static final int CHANGED_REGIONS_LIMIT = 4_096;
     private static final AtomicLong NEXT_REGION_WORK_ID = new AtomicLong();
 
     @FunctionalInterface
@@ -92,6 +97,9 @@ public final class RegionSummaryService {
         new MapRegionInvalidationPublisher();
     private final RegionPatchBuilder regionPatchBuilder = new RegionPatchBuilder();
     private final ConcurrentLinkedQueue<ChangedRegion> changedRegions = new ConcurrentLinkedQueue<>();
+    /** Mirrors changedRegions.size(); ConcurrentLinkedQueue.size() is O(n) on the chunk hot path. */
+    private final AtomicInteger changedRegionCount = new AtomicInteger();
+    private final AtomicBoolean changedRegionOverflowLogged = new AtomicBoolean();
     private final LiveChunkSummaryTracker liveChunks;
     private final ExecutorService progressiveWorker = Executors.newSingleThreadExecutor(runnable -> {
         final Thread thread = new Thread(runnable, "ConfluxMap-progressive-patches");
@@ -562,6 +570,7 @@ public final class RegionSummaryService {
         invalidations.clear();
         regionInvalidations.clear();
         changedRegions.clear();
+        changedRegionCount.set(0);
         channels.clear();
         synchronized (progressiveTasks) {
             for (final ProgressiveRegionPatch task : progressiveTasks.values()) {
@@ -658,6 +667,11 @@ public final class RegionSummaryService {
                 try {
                     encoded = MsgCodec.encode(response);
                 } catch (final ProtoException e) {
+                    ConfluxMapMod.LOGGER.warn(
+                        "[ConfluxMap] companion: dropped unencodable region patch for dim {} region {},{} lod {} ({})",
+                        job.dimIndex(), job.request().regionX(), job.request().regionZ(),
+                        job.lod(), e.getMessage()
+                    );
                     jobs.remove();
                     continue;
                 }
@@ -1245,7 +1259,10 @@ public final class RegionSummaryService {
             final Map.Entry<ProgressiveKey, ProgressiveRegionPatch> entry = iterator.next();
             final ProgressiveKey key = entry.getKey();
             final ProgressiveRegionPatch task = entry.getValue();
-            final boolean watched = watched(key.world().getServer(), key);
+            final MinecraftServer taskServer = key.world().getServer();
+            // A world unloaded mid-session reports a null server; nobody can still watch it,
+            // so it must count as unwatched instead of NPE-ing the eviction scan.
+            final boolean watched = taskServer != null && watched(taskServer, key);
             final boolean expired = !watched
                 && nowNanos - task.lastRequestedAtNanos() > PROGRESSIVE_IDLE_TTL_NANOS;
             final boolean capacityVictim = forCapacity
@@ -1433,11 +1450,26 @@ public final class RegionSummaryService {
 
     private void onRegionChanged(final String dimension, final int regionX, final int regionZ) {
         changedRegions.add(new ChangedRegion(dimension, regionX, regionZ));
+        if (changedRegionCount.incrementAndGet() > CHANGED_REGIONS_LIMIT) {
+            // Invalidate signals coalesce per region, so dropping the oldest entry keeps the
+            // freshest mutations represented; dropping the newest would strand regions that
+            // keep changing under sustained worldgen load.
+            if (changedRegions.poll() != null) {
+                changedRegionCount.decrementAndGet();
+            }
+            if (changedRegionOverflowLogged.compareAndSet(false, true)) {
+                ConfluxMapMod.LOGGER.warn(
+                    "[ConfluxMap] companion: live-chunk change backlog exceeded {} regions; dropping oldest changes until the tick drain catches up",
+                    CHANGED_REGIONS_LIMIT
+                );
+            }
+        }
     }
 
     private void drainChangedRegions(final MinecraftServer server) {
         ChangedRegion changed;
         while ((changed = changedRegions.poll()) != null) {
+            changedRegionCount.decrementAndGet();
             final int dimIndex = Dimensions.indexOf(server, DimensionId.parse(changed.dimension()));
             if (dimIndex >= 0) {
                 invalidations.invalidateRegion(dimIndex, changed.regionX(), changed.regionZ());
