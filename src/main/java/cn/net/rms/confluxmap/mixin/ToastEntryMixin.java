@@ -1,5 +1,6 @@
 package cn.net.rms.confluxmap.mixin;
 
+import cn.net.rms.confluxmap.ConfluxMapMod;
 import cn.net.rms.confluxmap.compat.GuiTransforms;
 import cn.net.rms.confluxmap.core.config.HudAmbient;
 import cn.net.rms.confluxmap.mc.ui.hud.ToastHudBounds;
@@ -21,6 +22,7 @@ import net.minecraft.client.util.math.MatrixStack;
 //#endif
 //#endif
 import org.spongepowered.asm.mixin.Mixin;
+import org.spongepowered.asm.mixin.Unique;
 import org.spongepowered.asm.mixin.injection.At;
 import org.spongepowered.asm.mixin.injection.Redirect;
 
@@ -38,6 +40,10 @@ import org.spongepowered.asm.mixin.injection.Redirect;
 @Mixin(targets = "net.minecraft.client.toast.ToastManager$Entry")
 //#endif
 public abstract class ToastEntryMixin {
+    /** Per-toast and per-frame; the first fault disables bounds capture for the session. */
+    @Unique
+    private static boolean confluxmap$toastCaptureFaulted;
+
     //#if MC>=260100
     //$$ @Redirect(
     //$$     method = "extractRenderState",
@@ -54,7 +60,18 @@ public abstract class ToastEntryMixin {
     //$$     final Font font,
     //$$     final long time
     //$$ ) {
-    //$$     ToastHudBounds.include(toast.width(), toast.height(), GuiTransforms.ambient(context));
+    //$$     if (!confluxmap$toastCaptureFaulted) {
+    //$$         try {
+    //$$             ToastHudBounds.include(
+    //$$                 toast.width(), toast.height(), GuiTransforms.ambient(context)
+    //$$             );
+    //$$         } catch (final Throwable fault) {
+    //$$             confluxmap$toastCaptureFaulted = true;
+    //$$             ConfluxMapMod.LOGGER.error(
+    //$$                 "toast bounds capture disabled after a fault", fault
+    //$$             );
+    //$$         }
+    //$$     }
     //$$     toast.extractRenderState(context, font, time);
     //$$ }
     //#elseif MC>=12103
@@ -73,9 +90,18 @@ public abstract class ToastEntryMixin {
     //$$     final TextRenderer textRenderer,
     //$$     final long time
     //$$ ) {
-    //$$     ToastHudBounds.include(
-    //$$         toast.getWidth(), toast.getHeight(), GuiTransforms.ambient(context)
-    //$$     );
+    //$$     if (!confluxmap$toastCaptureFaulted) {
+    //$$         try {
+    //$$             ToastHudBounds.include(
+    //$$                 toast.getWidth(), toast.getHeight(), GuiTransforms.ambient(context)
+    //$$             );
+    //$$         } catch (final Throwable fault) {
+    //$$             confluxmap$toastCaptureFaulted = true;
+    //$$             ConfluxMapMod.LOGGER.error(
+    //$$                 "toast bounds capture disabled after a fault", fault
+    //$$             );
+    //$$         }
+    //$$     }
     //$$     toast.draw(context, textRenderer, time);
     //$$ }
     //#elseif MC>=12000
@@ -95,9 +121,18 @@ public abstract class ToastEntryMixin {
     //$$     final ToastManager manager,
     //$$     final long time
     //$$ ) {
-    //$$     ToastHudBounds.include(
-    //$$         toast.getWidth(), toast.getHeight(), GuiTransforms.ambient(context)
-    //$$     );
+    //$$     if (!confluxmap$toastCaptureFaulted) {
+    //$$         try {
+    //$$             ToastHudBounds.include(
+    //$$                 toast.getWidth(), toast.getHeight(), GuiTransforms.ambient(context)
+    //$$             );
+    //$$         } catch (final Throwable fault) {
+    //$$             confluxmap$toastCaptureFaulted = true;
+    //$$             ConfluxMapMod.LOGGER.error(
+    //$$                 "toast bounds capture disabled after a fault", fault
+    //$$             );
+    //$$         }
+    //$$     }
     //$$     return toast.draw(context, manager, time);
     //$$ }
     //#else
@@ -117,11 +152,20 @@ public abstract class ToastEntryMixin {
         final ToastManager manager,
         final long time
     ) {
-        // 1.17-era toasts are positioned on the model-view stack, so the element's own stack alone
-        // would not say where the toast landed.
-        final HudAmbient pose =
-            GuiTransforms.ambient(matrices).then(GuiTransforms.modelViewAmbient());
-        ToastHudBounds.include(toast.getWidth(), toast.getHeight(), pose);
+        if (!confluxmap$toastCaptureFaulted) {
+            try {
+                // 1.17-era toasts are positioned on the model-view stack, so the element's own
+                // stack alone would not say where the toast landed.
+                final HudAmbient pose =
+                    GuiTransforms.ambient(matrices).then(GuiTransforms.modelViewAmbient());
+                ToastHudBounds.include(toast.getWidth(), toast.getHeight(), pose);
+            } catch (final Throwable fault) {
+                confluxmap$toastCaptureFaulted = true;
+                ConfluxMapMod.LOGGER.error(
+                    "toast bounds capture disabled after a fault", fault
+                );
+            }
+        }
         return toast.draw(matrices, manager, time);
     }
     //#endif

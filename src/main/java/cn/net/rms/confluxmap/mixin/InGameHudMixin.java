@@ -5,6 +5,7 @@ import com.mojang.blaze3d.systems.RenderSystem;
 import net.minecraft.client.gui.DrawableHelper;
 //#endif
 import cn.net.rms.confluxmap.ConfluxMapClient;
+import cn.net.rms.confluxmap.ConfluxMapMod;
 import cn.net.rms.confluxmap.compat.GuiTransforms;
 import cn.net.rms.confluxmap.compat.MinecraftAccess;
 import cn.net.rms.confluxmap.core.config.ConfluxConfig;
@@ -68,6 +69,23 @@ public abstract class InGameHudMixin {
     @Unique
     private boolean confluxmap$scoreboardTransformed;
 
+    /**
+     * These callbacks run every HUD frame, so each guarded feature latches on its first fault:
+     * the fault is logged once and the feature degrades to vanilla behavior instead of throwing
+     * into the vanilla render path (or storming the log) on every following frame.
+     */
+    @Unique
+    private static boolean confluxmap$waypointItemsFaulted;
+
+    @Unique
+    private static boolean confluxmap$hudFrameFaulted;
+
+    @Unique
+    private static boolean confluxmap$scoreboardShiftFaulted;
+
+    @Unique
+    private static boolean confluxmap$scoreboardCaptureFaulted;
+
     //#if MC<12104
     @Inject(method = "renderCrosshair", at = @At("HEAD"))
     //#if MC>=12100
@@ -94,39 +112,68 @@ public abstract class InGameHudMixin {
     ) {
     //#endif
         final ConfluxMapClient app = ConfluxMapClient.get();
-        if (app == null) {
+        if (app == null || confluxmap$waypointItemsFaulted) {
             return;
         }
-        //#if MC>=12100
-        //$$ app.waypointItemHudRenderer().renderBeforeCrosshair(context, tickCounter);
-        //#elseif MC>=12000
-        //$$ app.waypointItemHudRenderer().renderBeforeCrosshair(context);
-        //#else
-        app.waypointItemHudRenderer().renderBeforeCrosshair(matrices);
-        //#endif
-        //#if MC<11900
-        // 1.17-1.18 bind the GUI icons before entering renderCrosshair. Rendering an item here
-        // replaces that binding with the item atlas, so restore the texture vanilla expects.
-        RenderSystem.setShaderTexture(0, DrawableHelper.GUI_ICONS_TEXTURE);
-        //#endif
+        try {
+            //#if MC>=12100
+            //$$ app.waypointItemHudRenderer().renderBeforeCrosshair(context, tickCounter);
+            //#elseif MC>=12000
+            //$$ app.waypointItemHudRenderer().renderBeforeCrosshair(context);
+            //#else
+            app.waypointItemHudRenderer().renderBeforeCrosshair(matrices);
+            //#endif
+        } catch (final Throwable fault) {
+            confluxmap$waypointItemsFaulted = true;
+            ConfluxMapMod.LOGGER.error(
+                "waypoint item HUD rendering disabled after a fault", fault
+            );
+        } finally {
+            //#if MC<11900
+            // 1.17-1.18 bind the GUI icons before entering renderCrosshair. Rendering an item
+            // here replaces that binding with the item atlas, so restore the texture vanilla
+            // expects - on the fault path too, where the binding may already be replaced.
+            RenderSystem.setShaderTexture(0, DrawableHelper.GUI_ICONS_TEXTURE);
+            //#endif
+        }
     }
     //#endif
 
     //#if MC>=260100
     //$$ @Inject(method = "extractRenderState", at = @At("HEAD"))
     //$$ private void confluxmap$beginHudFrame(final CallbackInfo ci) {
-    //$$     final Minecraft client = Minecraft.getInstance();
-    //$$     ScoreboardHudBounds.beginFrame(
-    //$$         client.getWindow().getGuiScaledWidth(), client.getWindow().getGuiScaledHeight()
-    //$$     );
+    //$$     if (confluxmap$hudFrameFaulted) {
+    //$$         return;
+    //$$     }
+    //$$     try {
+    //$$         final Minecraft client = Minecraft.getInstance();
+    //$$         ScoreboardHudBounds.beginFrame(
+    //$$             client.getWindow().getGuiScaledWidth(), client.getWindow().getGuiScaledHeight()
+    //$$         );
+    //$$     } catch (final Throwable fault) {
+    //$$         confluxmap$hudFrameFaulted = true;
+    //$$         ConfluxMapMod.LOGGER.error(
+    //$$             "scoreboard bounds tracking disabled after a fault", fault
+    //$$         );
+    //$$     }
     //$$ }
     //#elseif MC<260100
     @Inject(method = "render", at = @At("HEAD"))
     private void confluxmap$beginHudFrame(final CallbackInfo ci) {
-        final MinecraftClient client = MinecraftClient.getInstance();
-        ScoreboardHudBounds.beginFrame(
-            client.getWindow().getScaledWidth(), client.getWindow().getScaledHeight()
-        );
+        if (confluxmap$hudFrameFaulted) {
+            return;
+        }
+        try {
+            final MinecraftClient client = MinecraftClient.getInstance();
+            ScoreboardHudBounds.beginFrame(
+                client.getWindow().getScaledWidth(), client.getWindow().getScaledHeight()
+            );
+        } catch (final Throwable fault) {
+            confluxmap$hudFrameFaulted = true;
+            ConfluxMapMod.LOGGER.error(
+                "scoreboard bounds tracking disabled after a fault", fault
+            );
+        }
     }
     //#endif
 
@@ -163,51 +210,61 @@ public abstract class InGameHudMixin {
     ) {
     //#endif
         confluxmap$scoreboardTransformed = false;
-        //#if MC>=260100
-        //$$ final HudTransform transform =
-        //$$     confluxmap$scoreboardTransform(context.guiWidth(), context.guiHeight());
-        //#elseif MC>=12000
-        //$$ final HudTransform transform = confluxmap$scoreboardTransform(
-        //$$     context.getScaledWindowWidth(), context.getScaledWindowHeight()
-        //$$ );
-        //#else
-        final MinecraftClient client = MinecraftClient.getInstance();
-        final HudTransform transform = confluxmap$scoreboardTransform(
-            client.getWindow().getScaledWidth(), client.getWindow().getScaledHeight()
-        );
-        //#endif
-        ScoreboardHudBounds.recordAppliedTransform(transform);
-        if (transform.isIdentity()) {
+        if (confluxmap$scoreboardShiftFaulted) {
             return;
         }
-        // Another mod may already have scaled the sidebar around this injection, which would
-        // scale this transform's translation with it; rebasing cancels that out.
-        //#if MC>=260100
-        //$$ final HudTransform pushed =
-        //$$     transform.rebased(GuiTransforms.ambient(context));
-        //$$ context.pose().pushMatrix();
-        //$$ context.pose().translate(pushed.translateX(), pushed.translateY());
-        //$$ context.pose().scale(pushed.scale(), pushed.scale());
-        //#elseif MC>=12108
-        //$$ final HudTransform pushed =
-        //$$     transform.rebased(GuiTransforms.ambient(context));
-        //$$ context.getMatrices().pushMatrix();
-        //$$ context.getMatrices().translate(pushed.translateX(), pushed.translateY());
-        //$$ context.getMatrices().scale(pushed.scale(), pushed.scale());
-        //#elseif MC>=12000
-        //$$ final HudTransform pushed =
-        //$$     transform.rebased(GuiTransforms.ambient(context));
-        //$$ context.getMatrices().push();
-        //$$ context.getMatrices().translate(pushed.translateX(), pushed.translateY(), 0);
-        //$$ context.getMatrices().scale(pushed.scale(), pushed.scale(), 1f);
-        //#else
-        final HudTransform pushed =
-            transform.rebased(GuiTransforms.ambient(matrices));
-        matrices.push();
-        matrices.translate(pushed.translateX(), pushed.translateY(), 0);
-        matrices.scale(pushed.scale(), pushed.scale(), 1f);
-        //#endif
-        confluxmap$scoreboardTransformed = true;
+        try {
+            //#if MC>=260100
+            //$$ final HudTransform transform =
+            //$$     confluxmap$scoreboardTransform(context.guiWidth(), context.guiHeight());
+            //#elseif MC>=12000
+            //$$ final HudTransform transform = confluxmap$scoreboardTransform(
+            //$$     context.getScaledWindowWidth(), context.getScaledWindowHeight()
+            //$$ );
+            //#else
+            final MinecraftClient client = MinecraftClient.getInstance();
+            final HudTransform transform = confluxmap$scoreboardTransform(
+                client.getWindow().getScaledWidth(), client.getWindow().getScaledHeight()
+            );
+            //#endif
+            ScoreboardHudBounds.recordAppliedTransform(transform);
+            if (transform.isIdentity()) {
+                return;
+            }
+            // Another mod may already have scaled the sidebar around this injection, which would
+            // scale this transform's translation with it; rebasing cancels that out.
+            //#if MC>=260100
+            //$$ final HudTransform pushed =
+            //$$     transform.rebased(GuiTransforms.ambient(context));
+            //$$ context.pose().pushMatrix();
+            //$$ context.pose().translate(pushed.translateX(), pushed.translateY());
+            //$$ context.pose().scale(pushed.scale(), pushed.scale());
+            //#elseif MC>=12108
+            //$$ final HudTransform pushed =
+            //$$     transform.rebased(GuiTransforms.ambient(context));
+            //$$ context.getMatrices().pushMatrix();
+            //$$ context.getMatrices().translate(pushed.translateX(), pushed.translateY());
+            //$$ context.getMatrices().scale(pushed.scale(), pushed.scale());
+            //#elseif MC>=12000
+            //$$ final HudTransform pushed =
+            //$$     transform.rebased(GuiTransforms.ambient(context));
+            //$$ context.getMatrices().push();
+            //$$ context.getMatrices().translate(pushed.translateX(), pushed.translateY(), 0);
+            //$$ context.getMatrices().scale(pushed.scale(), pushed.scale(), 1f);
+            //#else
+            final HudTransform pushed =
+                transform.rebased(GuiTransforms.ambient(matrices));
+            matrices.push();
+            matrices.translate(pushed.translateX(), pushed.translateY(), 0);
+            matrices.scale(pushed.scale(), pushed.scale(), 1f);
+            //#endif
+            confluxmap$scoreboardTransformed = true;
+        } catch (final Throwable fault) {
+            confluxmap$scoreboardShiftFaulted = true;
+            ConfluxMapMod.LOGGER.error(
+                "scoreboard HUD shift disabled after a fault", fault
+            );
+        }
     }
 
     @Inject(
@@ -245,16 +302,26 @@ public abstract class InGameHudMixin {
         if (!confluxmap$scoreboardTransformed) {
             return;
         }
-        //#if MC>=260100
-        //$$ context.pose().popMatrix();
-        //#elseif MC>=12108
-        //$$ context.getMatrices().popMatrix();
-        //#elseif MC>=12000
-        //$$ context.getMatrices().pop();
-        //#else
-        matrices.pop();
-        //#endif
-        confluxmap$scoreboardTransformed = false;
+        try {
+            //#if MC>=260100
+            //$$ context.pose().popMatrix();
+            //#elseif MC>=12108
+            //$$ context.getMatrices().popMatrix();
+            //#elseif MC>=12000
+            //$$ context.getMatrices().pop();
+            //#else
+            matrices.pop();
+            //#endif
+        } catch (final Throwable fault) {
+            if (!confluxmap$scoreboardShiftFaulted) {
+                confluxmap$scoreboardShiftFaulted = true;
+                ConfluxMapMod.LOGGER.error(
+                    "scoreboard HUD shift disabled after a fault", fault
+                );
+            }
+        } finally {
+            confluxmap$scoreboardTransformed = false;
+        }
     }
 
     @Unique
@@ -317,10 +384,20 @@ public abstract class InGameHudMixin {
     //$$     final int y2,
     //$$     final int color
     //$$ ) {
-    //$$     final HudAmbient pose = GuiTransforms.ambient(context);
-    //$$     ScoreboardHudBounds.include(
-    //$$         pose.applyX(x1), pose.applyY(y1), pose.applyX(x2), pose.applyY(y2)
-    //$$     );
+    //$$     if (!confluxmap$scoreboardCaptureFaulted) {
+    //$$         try {
+    //$$             final HudAmbient pose = GuiTransforms.ambient(context);
+    //$$             ScoreboardHudBounds.include(
+    //$$                 pose.applyX(x1), pose.applyY(y1), pose.applyX(x2), pose.applyY(y2)
+    //$$             );
+    //$$         } catch (final Throwable fault) {
+    //$$             confluxmap$scoreboardCaptureFaulted = true;
+    //$$             ConfluxMapMod.LOGGER.error(
+    //$$                 "scoreboard bounds capture disabled after a fault at {},{}-{},{}",
+    //$$                 x1, y1, x2, y2, fault
+    //$$             );
+    //$$         }
+    //$$     }
     //$$     context.fill(x1, y1, x2, y2, color);
     //$$ }
     //#elseif MC>=12000
@@ -345,10 +422,20 @@ public abstract class InGameHudMixin {
     //$$     final int y2,
     //$$     final int color
     //$$ ) {
-    //$$     final HudAmbient pose = GuiTransforms.ambient(context);
-    //$$     ScoreboardHudBounds.include(
-    //$$         pose.applyX(x1), pose.applyY(y1), pose.applyX(x2), pose.applyY(y2)
-    //$$     );
+    //$$     if (!confluxmap$scoreboardCaptureFaulted) {
+    //$$         try {
+    //$$             final HudAmbient pose = GuiTransforms.ambient(context);
+    //$$             ScoreboardHudBounds.include(
+    //$$                 pose.applyX(x1), pose.applyY(y1), pose.applyX(x2), pose.applyY(y2)
+    //$$             );
+    //$$         } catch (final Throwable fault) {
+    //$$             confluxmap$scoreboardCaptureFaulted = true;
+    //$$             ConfluxMapMod.LOGGER.error(
+    //$$                 "scoreboard bounds capture disabled after a fault at {},{}-{},{}",
+    //$$                 x1, y1, x2, y2, fault
+    //$$             );
+    //$$         }
+    //$$     }
     //$$     context.fill(x1, y1, x2, y2, color);
     //$$ }
     //#else
@@ -369,10 +456,20 @@ public abstract class InGameHudMixin {
         final int y2,
         final int color
     ) {
-        final HudAmbient pose = GuiTransforms.ambient(matrices);
-        ScoreboardHudBounds.include(
-            pose.applyX(x1), pose.applyY(y1), pose.applyX(x2), pose.applyY(y2)
-        );
+        if (!confluxmap$scoreboardCaptureFaulted) {
+            try {
+                final HudAmbient pose = GuiTransforms.ambient(matrices);
+                ScoreboardHudBounds.include(
+                    pose.applyX(x1), pose.applyY(y1), pose.applyX(x2), pose.applyY(y2)
+                );
+            } catch (final Throwable fault) {
+                confluxmap$scoreboardCaptureFaulted = true;
+                ConfluxMapMod.LOGGER.error(
+                    "scoreboard bounds capture disabled after a fault at {},{}-{},{}",
+                    x1, y1, x2, y2, fault
+                );
+            }
+        }
         DrawableHelper.fill(matrices, x1, y1, x2, y2, color);
     }
     //#endif

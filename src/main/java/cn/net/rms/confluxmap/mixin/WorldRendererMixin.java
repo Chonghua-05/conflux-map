@@ -1,6 +1,7 @@
 package cn.net.rms.confluxmap.mixin;
 
 //#if MC>=12109 && MC<12111
+//$$ import cn.net.rms.confluxmap.ConfluxMapMod;
 //$$ import cn.net.rms.confluxmap.mc.ui.world.WaypointWorldRenderer;
 //$$ import net.minecraft.client.render.command.OrderedRenderCommandQueueImpl;
 //$$ import net.minecraft.client.render.command.RenderDispatcher;
@@ -10,6 +11,7 @@ package cn.net.rms.confluxmap.mixin;
 //$$ import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
 //$$ import org.spongepowered.asm.mixin.Final;
 //$$ import org.spongepowered.asm.mixin.Shadow;
+//$$ import org.spongepowered.asm.mixin.Unique;
 //#endif
 import net.minecraft.client.render.WorldRenderer;
 import org.spongepowered.asm.mixin.Mixin;
@@ -27,6 +29,10 @@ public abstract class WorldRendererMixin {
     //$$ @Shadow @Final
     //$$ private RenderDispatcher entityRenderDispatcher;
     //$$
+    //$$ /** Per-frame callbacks; the first fault disables waypoint rendering for the session. */
+    //$$ @Unique
+    //$$ private static boolean confluxmap$waypointWorldRenderFaulted;
+    //$$
     //$$ /**
     //$$  * The section render state draws one layer group per call, in OPAQUE, TRANSLUCENT, TRIPWIRE
     //$$  * order, so ordinal 1 is the point matching Fabric's BEFORE_TRANSLUCENT on other versions.
@@ -41,12 +47,31 @@ public abstract class WorldRendererMixin {
     //$$     )
     //$$ )
     //$$ private void confluxmap$beforeTranslucent(final CallbackInfo ci) {
-    //$$     WaypointWorldRenderer.onBeforeTranslucent(new MatrixStack());
+    //$$     if (confluxmap$waypointWorldRenderFaulted) {
+    //$$         return;
+    //$$     }
+    //$$     try {
+    //$$         WaypointWorldRenderer.onBeforeTranslucent(new MatrixStack());
+    //$$     } catch (final Throwable fault) {
+    //$$         confluxmap$waypointWorldRenderFaulted = true;
+    //$$         ConfluxMapMod.LOGGER.error(
+    //$$             "waypoint world rendering disabled after a fault", fault
+    //$$         );
+    //$$     }
     //$$ }
     //$$
     //$$ @Inject(method = "method_62214", at = @At("TAIL"))
     //$$ private void confluxmap$endMain(final CallbackInfo ci) {
-    //$$     WaypointWorldRenderer.onEndMain(new MatrixStack(), entityRenderCommandQueue);
+    //$$     if (!confluxmap$waypointWorldRenderFaulted) {
+    //$$         try {
+    //$$             WaypointWorldRenderer.onEndMain(new MatrixStack(), entityRenderCommandQueue);
+    //$$         } catch (final Throwable fault) {
+    //$$             confluxmap$waypointWorldRenderFaulted = true;
+    //$$             ConfluxMapMod.LOGGER.error(
+    //$$                 "waypoint world rendering disabled after a fault", fault
+    //$$             );
+    //$$         }
+    //$$     }
     //$$     entityRenderDispatcher.render();
     //$$ }
     //#endif

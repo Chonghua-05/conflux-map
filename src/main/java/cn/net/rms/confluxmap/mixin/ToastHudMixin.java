@@ -4,6 +4,7 @@ package cn.net.rms.confluxmap.mixin;
 import com.mojang.blaze3d.systems.RenderSystem;
 //#endif
 import cn.net.rms.confluxmap.ConfluxMapClient;
+import cn.net.rms.confluxmap.ConfluxMapMod;
 import cn.net.rms.confluxmap.compat.GuiTransforms;
 import cn.net.rms.confluxmap.compat.MinecraftAccess;
 import cn.net.rms.confluxmap.core.config.ConfluxConfig;
@@ -44,6 +45,10 @@ public abstract class ToastHudMixin {
     @Unique
     private boolean confluxmap$toastsShifted;
 
+    /** Runs every frame while toasts show; the first fault disables the shift for the session. */
+    @Unique
+    private static boolean confluxmap$toastShiftFaulted;
+
     @Inject(
         //#if MC>=260100
         //$$ method = "extractRenderState",
@@ -63,43 +68,53 @@ public abstract class ToastHudMixin {
     private void confluxmap$beforeToasts(final MatrixStack matrices, final CallbackInfo ci) {
     //#endif
         confluxmap$toastsShifted = false;
-        //#if MC>=260100
-        //$$ final int screenWidth = context.guiWidth();
-        //$$ final int screenHeight = context.guiHeight();
-        //$$ final HudAmbient ambient = GuiTransforms.ambient(context);
-        //#elseif MC>=12000
-        //$$ final int screenWidth = context.getScaledWindowWidth();
-        //$$ final int screenHeight = context.getScaledWindowHeight();
-        //$$ final HudAmbient ambient = GuiTransforms.ambient(context);
-        //#else
-        final MinecraftClient client = MinecraftClient.getInstance();
-        final int screenWidth = client.getWindow().getScaledWidth();
-        final int screenHeight = client.getWindow().getScaledHeight();
-        // The shift is pushed onto the model-view stack below, so that is the transform it has to
-        // be rebased against.
-        final HudAmbient ambient = GuiTransforms.modelViewAmbient();
-        //#endif
-        ToastHudBounds.beginFrame(screenWidth, screenHeight);
-        final float shift = confluxmap$verticalPush(ambient, screenWidth, screenHeight);
-        if (shift == 0f) {
+        if (confluxmap$toastShiftFaulted) {
             return;
         }
-        //#if MC>=260100
-        //$$ context.pose().pushMatrix();
-        //$$ context.pose().translate(0, shift);
-        //#elseif MC>=12108
-        //$$ context.getMatrices().pushMatrix();
-        //$$ context.getMatrices().translate(0, shift);
-        //#elseif MC>=12000
-        //$$ context.getMatrices().push();
-        //$$ context.getMatrices().translate(0, shift, 0);
-        //#else
-        final MatrixStack modelView = RenderSystem.getModelViewStack();
-        modelView.push();
-        modelView.translate(0, shift, 0);
-        RenderSystem.applyModelViewMatrix();
-        //#endif
-        confluxmap$toastsShifted = true;
+        try {
+            //#if MC>=260100
+            //$$ final int screenWidth = context.guiWidth();
+            //$$ final int screenHeight = context.guiHeight();
+            //$$ final HudAmbient ambient = GuiTransforms.ambient(context);
+            //#elseif MC>=12000
+            //$$ final int screenWidth = context.getScaledWindowWidth();
+            //$$ final int screenHeight = context.getScaledWindowHeight();
+            //$$ final HudAmbient ambient = GuiTransforms.ambient(context);
+            //#else
+            final MinecraftClient client = MinecraftClient.getInstance();
+            final int screenWidth = client.getWindow().getScaledWidth();
+            final int screenHeight = client.getWindow().getScaledHeight();
+            // The shift is pushed onto the model-view stack below, so that is the transform it
+            // has to be rebased against.
+            final HudAmbient ambient = GuiTransforms.modelViewAmbient();
+            //#endif
+            ToastHudBounds.beginFrame(screenWidth, screenHeight);
+            final float shift = confluxmap$verticalPush(ambient, screenWidth, screenHeight);
+            if (shift == 0f) {
+                return;
+            }
+            //#if MC>=260100
+            //$$ context.pose().pushMatrix();
+            //$$ context.pose().translate(0, shift);
+            //#elseif MC>=12108
+            //$$ context.getMatrices().pushMatrix();
+            //$$ context.getMatrices().translate(0, shift);
+            //#elseif MC>=12000
+            //$$ context.getMatrices().push();
+            //$$ context.getMatrices().translate(0, shift, 0);
+            //#else
+            final MatrixStack modelView = RenderSystem.getModelViewStack();
+            modelView.push();
+            modelView.translate(0, shift, 0);
+            RenderSystem.applyModelViewMatrix();
+            //#endif
+            confluxmap$toastsShifted = true;
+        } catch (final Throwable fault) {
+            confluxmap$toastShiftFaulted = true;
+            ConfluxMapMod.LOGGER.error(
+                "toast HUD shift disabled after a fault", fault
+            );
+        }
     }
 
     @Inject(
@@ -123,18 +138,28 @@ public abstract class ToastHudMixin {
         if (!confluxmap$toastsShifted) {
             return;
         }
-        //#if MC>=260100
-        //$$ context.pose().popMatrix();
-        //#elseif MC>=12108
-        //$$ context.getMatrices().popMatrix();
-        //#elseif MC>=12000
-        //$$ context.getMatrices().pop();
-        //#else
-        final MatrixStack modelView = RenderSystem.getModelViewStack();
-        modelView.pop();
-        RenderSystem.applyModelViewMatrix();
-        //#endif
-        confluxmap$toastsShifted = false;
+        try {
+            //#if MC>=260100
+            //$$ context.pose().popMatrix();
+            //#elseif MC>=12108
+            //$$ context.getMatrices().popMatrix();
+            //#elseif MC>=12000
+            //$$ context.getMatrices().pop();
+            //#else
+            final MatrixStack modelView = RenderSystem.getModelViewStack();
+            modelView.pop();
+            RenderSystem.applyModelViewMatrix();
+            //#endif
+        } catch (final Throwable fault) {
+            if (!confluxmap$toastShiftFaulted) {
+                confluxmap$toastShiftFaulted = true;
+                ConfluxMapMod.LOGGER.error(
+                    "toast HUD shift disabled after a fault", fault
+                );
+            }
+        } finally {
+            confluxmap$toastsShifted = false;
+        }
     }
 
     /** Returns the translation to push, in the coordinates of the matrix {@code ambient} sits on. */

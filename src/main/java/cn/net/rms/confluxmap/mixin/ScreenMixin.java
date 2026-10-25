@@ -1,6 +1,7 @@
 package cn.net.rms.confluxmap.mixin;
 
 import cn.net.rms.confluxmap.ConfluxMapClient;
+import cn.net.rms.confluxmap.ConfluxMapMod;
 import cn.net.rms.confluxmap.compat.MinecraftAccess;
 import cn.net.rms.confluxmap.core.survey.SurveyReminderClickPayload;
 import cn.net.rms.confluxmap.core.waypoint.chat.WaypointChatClickPayload;
@@ -90,49 +91,60 @@ public abstract class ScreenMixin {
         final MinecraftClient client,
         final Screen parent
     ) {
-        final String clickValue = clickEvent == null ? null : Texts.clickValue(clickEvent);
-        if (SurveyReminderClickPayload.isDismiss(clickValue)) {
-            if (clickEvent.getAction() == ClickEvent.Action.COPY_TO_CLIPBOARD) {
-                final ConfluxMapClient confluxMap = ConfluxMapClient.get();
-                if (confluxMap != null) {
-                    confluxMap.dismissSurveyReminder();
+        try {
+            final String clickValue = clickEvent == null ? null : Texts.clickValue(clickEvent);
+            if (SurveyReminderClickPayload.isDismiss(clickValue)) {
+                if (clickEvent.getAction() == ClickEvent.Action.COPY_TO_CLIPBOARD) {
+                    final ConfluxMapClient confluxMap = ConfluxMapClient.get();
+                    if (confluxMap != null) {
+                        confluxMap.dismissSurveyReminder();
+                    }
                 }
+                return true;
             }
-            return true;
-        }
-        if (clickValue == null || !WaypointChatClickPayload.hasPrivatePrefix(clickValue)) {
-            return false;
-        }
+            if (clickValue == null || !WaypointChatClickPayload.hasPrivatePrefix(clickValue)) {
+                return false;
+            }
 
-        // Reserved payloads never reach vanilla's clipboard or command click handling.
-        if (clickEvent.getAction() != ClickEvent.Action.COPY_TO_CLIPBOARD) {
-            return true;
-        }
+            // Reserved payloads never reach vanilla's clipboard or command click handling.
+            if (clickEvent.getAction() != ClickEvent.Action.COPY_TO_CLIPBOARD) {
+                return true;
+            }
 
-        final Optional<WaypointChatClickPayload.Decoded> decoded =
-            WaypointChatClickPayload.decode(clickValue);
-        if (!decoded.isPresent()) {
-            return true;
-        }
-        final Optional<WaypointChatCodec.Candidate> candidate = WaypointChatCodec.parse(
-            decoded.get().message(), decoded.get().receivedDimension()
-        );
-        if (!candidate.isPresent()) {
-            return true;
-        }
+            final Optional<WaypointChatClickPayload.Decoded> decoded =
+                WaypointChatClickPayload.decode(clickValue);
+            if (!decoded.isPresent()) {
+                return true;
+            }
+            final Optional<WaypointChatCodec.Candidate> candidate = WaypointChatCodec.parse(
+                decoded.get().message(), decoded.get().receivedDimension()
+            );
+            if (!candidate.isPresent()) {
+                return true;
+            }
 
-        if (client.world == null) {
+            if (client.world == null) {
+                return true;
+            }
+            final WaypointChatCodec.Candidate waypoint = candidate.get();
+            MinecraftAccess.setScreen(client, WaypointEditScreen.forCreate(
+                parent,
+                waypoint.dimensionId(),
+                waypoint.name(),
+                waypoint.x(),
+                waypoint.y(),
+                waypoint.z()
+            ));
+            return true;
+        } catch (final Throwable fault) {
+            // A reserved payload must not fall through to vanilla handling even on a fault,
+            // so swallow the click like the unparseable-payload paths above do.
+            ConfluxMapMod.LOGGER.error(
+                "reserved chat click handling failed for action {}; swallowing the click",
+                clickEvent == null ? "none" : clickEvent.getAction(),
+                fault
+            );
             return true;
         }
-        final WaypointChatCodec.Candidate waypoint = candidate.get();
-        MinecraftAccess.setScreen(client, WaypointEditScreen.forCreate(
-            parent,
-            waypoint.dimensionId(),
-            waypoint.name(),
-            waypoint.x(),
-            waypoint.y(),
-            waypoint.z()
-        ));
-        return true;
     }
 }

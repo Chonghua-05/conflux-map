@@ -1,6 +1,7 @@
 package cn.net.rms.confluxmap.mixin;
 
 import cn.net.rms.confluxmap.ConfluxMapClient;
+import cn.net.rms.confluxmap.ConfluxMapMod;
 import cn.net.rms.confluxmap.compat.GuiTransforms;
 import cn.net.rms.confluxmap.compat.MinecraftAccess;
 import cn.net.rms.confluxmap.core.config.ConfluxConfig;
@@ -55,6 +56,10 @@ import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
 @Mixin(InGameHud.class)
 //#endif
 public abstract class StatusEffectHudMixin {
+    /** Per-frame while effects show; the first fault disables the shift for the session. */
+    @Unique
+    private static boolean confluxmap$statusEffectShiftFaulted;
+
     //#if MC>=12100
     //$$ @WrapMethod(
         //#if MC>=260100
@@ -69,20 +74,44 @@ public abstract class StatusEffectHudMixin {
     //$$     final DeltaTracker tickCounter,
     //$$     final Operation<Void> original
     //$$ ) {
-    //$$     final float shift = confluxmap$horizontalPush(
-    //$$         GuiTransforms.ambient(context), context.guiWidth(), context.guiHeight()
-    //$$     );
+    //$$     if (confluxmap$statusEffectShiftFaulted) {
+    //$$         original.call(context, tickCounter);
+    //$$         return;
+    //$$     }
+    //$$     float shift = 0f;
+    //$$     try {
+    //$$         shift = confluxmap$horizontalPush(
+    //$$             GuiTransforms.ambient(context), context.guiWidth(), context.guiHeight()
+    //$$         );
+    //$$     } catch (final Throwable fault) {
+    //$$         confluxmap$statusEffectShiftFaulted = true;
+    //$$         ConfluxMapMod.LOGGER.error(
+    //$$             "status effect HUD shift disabled after a fault", fault
+    //$$         );
+    //$$     }
     //#else
     //$$ private void confluxmap$renderStatusEffects(
     //$$     final DrawContext context,
     //$$     final RenderTickCounter tickCounter,
     //$$     final Operation<Void> original
     //$$ ) {
-    //$$     final float shift = confluxmap$horizontalPush(
-    //$$         GuiTransforms.ambient(context),
-    //$$         context.getScaledWindowWidth(),
-    //$$         context.getScaledWindowHeight()
-    //$$     );
+    //$$     if (confluxmap$statusEffectShiftFaulted) {
+    //$$         original.call(context, tickCounter);
+    //$$         return;
+    //$$     }
+    //$$     float shift = 0f;
+    //$$     try {
+    //$$         shift = confluxmap$horizontalPush(
+    //$$             GuiTransforms.ambient(context),
+    //$$             context.getScaledWindowWidth(),
+    //$$             context.getScaledWindowHeight()
+    //$$         );
+    //$$     } catch (final Throwable fault) {
+    //$$         confluxmap$statusEffectShiftFaulted = true;
+    //$$         ConfluxMapMod.LOGGER.error(
+    //$$             "status effect HUD shift disabled after a fault", fault
+    //$$         );
+    //$$     }
     //#endif
     //$$     if (shift == 0f) {
     //$$         original.call(context, tickCounter);
@@ -149,41 +178,51 @@ public abstract class StatusEffectHudMixin {
     private void confluxmap$beforeStatusEffects(final MatrixStack matrices, final CallbackInfo ci) {
     //#endif
         confluxmap$statusEffectsShifted = false;
-        //#if MC>=260100
-        //$$ final float shift = confluxmap$horizontalPush(
-        //$$     GuiTransforms.ambient(context), context.guiWidth(), context.guiHeight()
-        //$$ );
-        //#elseif MC>=12000
-        //$$ final float shift = confluxmap$horizontalPush(
-        //$$     GuiTransforms.ambient(context),
-        //$$     context.getScaledWindowWidth(),
-        //$$     context.getScaledWindowHeight()
-        //$$ );
-        //#else
-        final MinecraftClient client = MinecraftClient.getInstance();
-        final float shift = confluxmap$horizontalPush(
-            GuiTransforms.ambient(matrices),
-            client.getWindow().getScaledWidth(),
-            client.getWindow().getScaledHeight()
-        );
-        //#endif
-        if (shift == 0f) {
+        if (confluxmap$statusEffectShiftFaulted) {
             return;
         }
-        //#if MC>=260100
-        //$$ context.pose().pushMatrix();
-        //$$ context.pose().translate(shift, 0);
-        //#elseif MC>=12108
-        //$$ context.getMatrices().pushMatrix();
-        //$$ context.getMatrices().translate(shift, 0);
-        //#elseif MC>=12000
-        //$$ context.getMatrices().push();
-        //$$ context.getMatrices().translate(shift, 0, 0);
-        //#else
-        matrices.push();
-        matrices.translate(shift, 0, 0);
-        //#endif
-        confluxmap$statusEffectsShifted = true;
+        try {
+            //#if MC>=260100
+            //$$ final float shift = confluxmap$horizontalPush(
+            //$$     GuiTransforms.ambient(context), context.guiWidth(), context.guiHeight()
+            //$$ );
+            //#elseif MC>=12000
+            //$$ final float shift = confluxmap$horizontalPush(
+            //$$     GuiTransforms.ambient(context),
+            //$$     context.getScaledWindowWidth(),
+            //$$     context.getScaledWindowHeight()
+            //$$ );
+            //#else
+            final MinecraftClient client = MinecraftClient.getInstance();
+            final float shift = confluxmap$horizontalPush(
+                GuiTransforms.ambient(matrices),
+                client.getWindow().getScaledWidth(),
+                client.getWindow().getScaledHeight()
+            );
+            //#endif
+            if (shift == 0f) {
+                return;
+            }
+            //#if MC>=260100
+            //$$ context.pose().pushMatrix();
+            //$$ context.pose().translate(shift, 0);
+            //#elseif MC>=12108
+            //$$ context.getMatrices().pushMatrix();
+            //$$ context.getMatrices().translate(shift, 0);
+            //#elseif MC>=12000
+            //$$ context.getMatrices().push();
+            //$$ context.getMatrices().translate(shift, 0, 0);
+            //#else
+            matrices.push();
+            matrices.translate(shift, 0, 0);
+            //#endif
+            confluxmap$statusEffectsShifted = true;
+        } catch (final Throwable fault) {
+            confluxmap$statusEffectShiftFaulted = true;
+            ConfluxMapMod.LOGGER.error(
+                "status effect HUD shift disabled after a fault", fault
+            );
+        }
     }
 
     @Inject(
@@ -223,16 +262,26 @@ public abstract class StatusEffectHudMixin {
         if (!confluxmap$statusEffectsShifted) {
             return;
         }
-        //#if MC>=260100
-        //$$ context.pose().popMatrix();
-        //#elseif MC>=12108
-        //$$ context.getMatrices().popMatrix();
-        //#elseif MC>=12000
-        //$$ context.getMatrices().pop();
-        //#else
-        matrices.pop();
-        //#endif
-        confluxmap$statusEffectsShifted = false;
+        try {
+            //#if MC>=260100
+            //$$ context.pose().popMatrix();
+            //#elseif MC>=12108
+            //$$ context.getMatrices().popMatrix();
+            //#elseif MC>=12000
+            //$$ context.getMatrices().pop();
+            //#else
+            matrices.pop();
+            //#endif
+        } catch (final Throwable fault) {
+            if (!confluxmap$statusEffectShiftFaulted) {
+                confluxmap$statusEffectShiftFaulted = true;
+                ConfluxMapMod.LOGGER.error(
+                    "status effect HUD shift disabled after a fault", fault
+                );
+            }
+        } finally {
+            confluxmap$statusEffectsShifted = false;
+        }
     }
     //#endif
 

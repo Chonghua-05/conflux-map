@@ -1,5 +1,6 @@
 package cn.net.rms.confluxmap.mixin;
 
+import cn.net.rms.confluxmap.ConfluxMapMod;
 import cn.net.rms.confluxmap.compat.Dimensions;
 import cn.net.rms.confluxmap.mc.chat.WaypointChatMessageRewriter;
 import cn.net.rms.confluxmap.mc.world.ClientWorldIdentityHandler;
@@ -15,6 +16,7 @@ import net.minecraft.client.gui.hud.ChatHud;
 //#endif
 import net.minecraft.text.Text;
 import org.spongepowered.asm.mixin.Mixin;
+import org.spongepowered.asm.mixin.Unique;
 import org.spongepowered.asm.mixin.injection.At;
 import org.spongepowered.asm.mixin.injection.Inject;
 import org.spongepowered.asm.mixin.injection.ModifyVariable;
@@ -22,6 +24,10 @@ import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
 
 @Mixin(ChatHud.class)
 public abstract class ChatHudMixin {
+    /** Rewriting runs for every chat message, so the first fault disables it for the session. */
+    @Unique
+    private static boolean confluxmap$rewriteFaulted;
+
     @Inject(
         //#if MC>=260100
         //$$ method = "addMessage(Lnet/minecraft/network/chat/Component;"
@@ -74,13 +80,22 @@ public abstract class ChatHudMixin {
     )
     private Text confluxmap$rewriteWaypointMessage(final Text original) {
         final MinecraftClient client = MinecraftClient.getInstance();
-        if (client.world == null) {
+        if (client.world == null || confluxmap$rewriteFaulted) {
             return original;
         }
 
-        return WaypointChatMessageRewriter.rewrite(
-            original,
-            Dimensions.of(client.world)
-        );
+        try {
+            return WaypointChatMessageRewriter.rewrite(
+                original,
+                Dimensions.of(client.world)
+            );
+        } catch (final Throwable fault) {
+            confluxmap$rewriteFaulted = true;
+            ConfluxMapMod.LOGGER.error(
+                "waypoint chat rewrite disabled after a fault; messages pass through unrewritten",
+                fault
+            );
+            return original;
+        }
     }
 }
