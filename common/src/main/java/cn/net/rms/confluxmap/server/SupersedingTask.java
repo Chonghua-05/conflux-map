@@ -1,4 +1,4 @@
-package cn.net.rms.confluxmap.paper;
+package cn.net.rms.confluxmap.server;
 
 import java.util.Objects;
 import java.util.concurrent.Callable;
@@ -6,18 +6,18 @@ import java.util.concurrent.Executor;
 import java.util.concurrent.RejectedExecutionException;
 
 /** Runs asynchronous work while publishing only the newest submitted generation. */
-final class PaperSupersedingTask<T> {
+public final class SupersedingTask<T> {
     private final Executor executor;
     private Callable<T> pending;
     private T completed;
     private Exception failure;
     private boolean scheduled;
 
-    PaperSupersedingTask(final Executor executor) {
+    public SupersedingTask(final Executor executor) {
         this.executor = Objects.requireNonNull(executor, "executor");
     }
 
-    synchronized boolean submit(final Callable<T> job) {
+    public synchronized boolean submit(final Callable<T> job) {
         Objects.requireNonNull(job, "job");
         pending = job;
         completed = null;
@@ -36,11 +36,11 @@ final class PaperSupersedingTask<T> {
         }
     }
 
-    synchronized T completed() {
+    public synchronized T completed() {
         return completed;
     }
 
-    synchronized Exception failure() {
+    public synchronized Exception failure() {
         return failure;
     }
 

@@ -13,14 +13,14 @@ import cn.net.rms.confluxmap.core.net.MapRegionViewReqC2S;
 import cn.net.rms.confluxmap.core.net.MapSyncSubscribeC2S;
 import cn.net.rms.confluxmap.core.net.MapViewReqC2S;
 import cn.net.rms.confluxmap.core.net.Message;
-import cn.net.rms.confluxmap.core.net.MsgCodec;
 import cn.net.rms.confluxmap.core.net.Proto;
-import cn.net.rms.confluxmap.core.net.ProtoException;
 import cn.net.rms.confluxmap.core.net.SummaryCodec;
 import cn.net.rms.confluxmap.core.predict.FlatBaseline;
 import cn.net.rms.confluxmap.core.util.ChunkRegionSlice;
 import cn.net.rms.confluxmap.server.LiveChunkSummaryCache;
 import cn.net.rms.confluxmap.server.ChunkColumnSummarizer;
+import cn.net.rms.confluxmap.server.CorrectionSlotQueue;
+import cn.net.rms.confluxmap.server.EncodedResponse;
 import cn.net.rms.confluxmap.server.PatchBuilder;
 import cn.net.rms.confluxmap.server.PlayerBudget;
 import cn.net.rms.confluxmap.server.RegionPatchBuilder;
@@ -33,13 +33,11 @@ import java.util.List;
 import java.util.Map;
 import java.util.UUID;
 import java.util.concurrent.ArrayBlockingQueue;
-import java.util.concurrent.Callable;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.ThreadPoolExecutor;
 import java.util.concurrent.TimeUnit;
 import java.util.function.Function;
-import java.util.function.Supplier;
 import org.slf4j.Logger;
 
 /** Paper transport-neutral correction engine with asynchronous, non-generating Anvil reads. */
@@ -52,24 +50,6 @@ final class PaperCorrectionService implements AutoCloseable {
         void send(Message message);
 
         void sendEncoded(Message message, byte[] payload);
-    }
-
-    private record Completed(
-        Message message,
-        byte[] payload,
-        int dimIndex,
-        int lod,
-        int tileX,
-        int tileZ,
-        int patchMode,
-        long receivedNanos,
-        long buildStartedNanos,
-        int requestBytes,
-        long ioNanos,
-        long computeNanos,
-        long encodeNanos,
-        SyncPerformanceMonitor.CumulativeWork cumulativeWork
-    ) {
     }
 
     private record ProgressiveKey(
@@ -97,25 +77,20 @@ final class PaperCorrectionService implements AutoCloseable {
     ) {
     }
 
-    private static final class JobSlot {
-        volatile Completed completed;
-        PaperSupersedingTask<Completed> worker;
-        Callable<Completed> asyncJob;
-        Supplier<Completed> immediateJob;
-    }
-
     private static final class PlayerChannel {
         final PlayerBudget budget;
-        final Map<TileQueueKey, JobSlot> tiles = new LinkedHashMap<>();
-        final Map<RegionQueueKey, JobSlot> regions = new LinkedHashMap<>();
+        final CorrectionSlotQueue<TileQueueKey> tiles;
+        final CorrectionSlotQueue<RegionQueueKey> regions;
         final SyncPerformanceMonitor performance = new SyncPerformanceMonitor();
         volatile MessageSender sender;
 
-        PlayerChannel(final ServerConfig config) {
+        PlayerChannel(final ServerConfig config, final ExecutorService workers) {
             budget = new PlayerBudget(
                 config.maxBytesPerSecondPerPlayer,
                 config.minRequestIntervalMs
             );
+            tiles = new CorrectionSlotQueue<>(config.maxPendingTilesPerPlayer, workers);
+            regions = new CorrectionSlotQueue<>(config.maxPendingTilesPerPlayer, workers);
         }
     }
 
@@ -267,7 +242,7 @@ final class PaperCorrectionService implements AutoCloseable {
                 request.dimIndex(), request.lod(), tile.tileX(), tile.tileZ(), forceAbsolute
             );
             if (request.lod() >= PROGRESSIVE_MIN_LOD) {
-                if (!enqueueCompleted(channel.tiles, key, () -> {
+                if (!channel.tiles.enqueueCompleted(key, () -> {
                     try {
                         return progressiveTile(request, tile, now, itemBytes, forceAbsolute);
                     } catch (final RuntimeException e) {
@@ -282,7 +257,7 @@ final class PaperCorrectionService implements AutoCloseable {
                 }
                 continue;
             }
-            if (!enqueue(channel.tiles, key, () -> {
+            if (!channel.tiles.enqueue(key, () -> {
                 try {
                     return buildTile(request, tile, now, itemBytes, forceAbsolute);
                 } catch (final RuntimeException e) {
@@ -353,7 +328,7 @@ final class PaperCorrectionService implements AutoCloseable {
             final RegionQueueKey key = new RegionQueueKey(
                 request.dimIndex(), request.lod(), region.slice()
             );
-            if (!enqueue(channel.regions, key, () -> {
+            if (!channel.regions.enqueue(key, () -> {
                 try {
                     return buildRegion(
                         request, region, now, itemBytes, forceAbsolute, correctionProfile
@@ -436,8 +411,8 @@ final class PaperCorrectionService implements AutoCloseable {
             if (regionInvalidation != null) {
                 sender.send(regionInvalidation);
             }
-            drain(channel, channel.tiles, sender, now);
-            drain(channel, channel.regions, sender, now);
+            channel.tiles.drain(channel.budget, sender::sendEncoded, channel.performance, now);
+            channel.regions.drain(channel.budget, sender::sendEncoded, channel.performance, now);
         }
     }
 
@@ -463,7 +438,7 @@ final class PaperCorrectionService implements AutoCloseable {
             && liveDemand.contains(world.index(), chunkX, chunkZ, nowNanos);
     }
 
-    private Completed buildTile(
+    private EncodedResponse buildTile(
         final MapViewReqC2S request,
         final MapViewReqC2S.TileReq tile,
         final long receivedNanos,
@@ -506,7 +481,7 @@ final class PaperCorrectionService implements AutoCloseable {
             result.mode(), result.revision(), result.presence(), result.body()
         );
         final long computeNanos = Math.max(0L, System.nanoTime() - started);
-        return encoded(
+        return EncodedResponse.of(
             response,
             request.dimIndex(),
             request.lod(),
@@ -522,7 +497,7 @@ final class PaperCorrectionService implements AutoCloseable {
         );
     }
 
-    private Completed progressiveTile(
+    private EncodedResponse progressiveTile(
         final MapViewReqC2S request,
         final MapViewReqC2S.TileReq tile,
         final long receivedNanos,
@@ -585,7 +560,7 @@ final class PaperCorrectionService implements AutoCloseable {
             request.reqId(), request.dimIndex(), request.lod(), tile.tileX(), tile.tileZ(),
             result.mode(), result.revision(), result.presence(), result.body()
         );
-        return encoded(
+        return EncodedResponse.of(
             response,
             request.dimIndex(),
             request.lod(),
@@ -601,7 +576,7 @@ final class PaperCorrectionService implements AutoCloseable {
         );
     }
 
-    private Completed partialTile(
+    private EncodedResponse partialTile(
         final MapViewReqC2S request,
         final MapViewReqC2S.TileReq tile,
         final long receivedNanos,
@@ -613,13 +588,13 @@ final class PaperCorrectionService implements AutoCloseable {
             new byte[Proto.PATCH_PRESENCE_BYTES],
             cn.net.rms.confluxmap.core.net.PatchCodec.encode(List.of())
         );
-        return encoded(
+        return EncodedResponse.of(
             response, request.dimIndex(), request.lod(), tile.tileX(), tile.tileZ(),
             Proto.PATCH_MODE_PARTIAL, receivedNanos, requestBytes, 0L, 0L
         );
     }
 
-    private Completed unavailableTile(
+    private EncodedResponse unavailableTile(
         final MapViewReqC2S request,
         final MapViewReqC2S.TileReq tile,
         final long receivedNanos,
@@ -630,13 +605,13 @@ final class PaperCorrectionService implements AutoCloseable {
             Proto.PATCH_MODE_UNAVAILABLE, 0L,
             new byte[Proto.PATCH_PRESENCE_BYTES], new byte[0]
         );
-        return encoded(
+        return EncodedResponse.of(
             response, request.dimIndex(), request.lod(), tile.tileX(), tile.tileZ(),
             Proto.PATCH_MODE_UNAVAILABLE, receivedNanos, requestBytes, 0L, 0L
         );
     }
 
-    private Completed buildRegion(
+    private EncodedResponse buildRegion(
         final MapRegionViewReqC2S request,
         final MapRegionViewReqC2S.RegionReq regionRequest,
         final long receivedNanos,
@@ -682,7 +657,7 @@ final class PaperCorrectionService implements AutoCloseable {
             result.mode(), result.revision(), result.body()
         );
         final long computeNanos = Math.max(0L, System.nanoTime() - started);
-        return encoded(
+        return EncodedResponse.of(
             response,
             request.dimIndex(),
             request.lod(),
@@ -719,7 +694,7 @@ final class PaperCorrectionService implements AutoCloseable {
         );
     }
 
-    private Completed unavailableRegion(
+    private EncodedResponse unavailableRegion(
         final MapRegionViewReqC2S request,
         final MapRegionViewReqC2S.RegionReq region,
         final long receivedNanos,
@@ -734,7 +709,7 @@ final class PaperCorrectionService implements AutoCloseable {
             Proto.PATCH_MODE_UNAVAILABLE, 0L, new byte[0]
         );
         final int regionsPerTile = 1 << request.lod();
-        return encoded(
+        return EncodedResponse.of(
             response,
             request.dimIndex(),
             request.lod(),
@@ -746,76 +721,6 @@ final class PaperCorrectionService implements AutoCloseable {
             0L,
             0L
         );
-    }
-
-    private Completed encoded(
-        final Message response,
-        final int dimIndex,
-        final int lod,
-        final int tileX,
-        final int tileZ,
-        final int mode,
-        final long receivedNanos,
-        final int requestBytes,
-        final long ioNanos,
-        final long computeNanos
-    ) {
-        return encoded(
-            response,
-            dimIndex,
-            lod,
-            tileX,
-            tileZ,
-            mode,
-            receivedNanos,
-            requestBytes,
-            receivedNanos,
-            ioNanos,
-            computeNanos,
-            SyncPerformanceMonitor.CumulativeWork.NONE
-        );
-    }
-
-    private Completed encoded(
-        final Message response,
-        final int dimIndex,
-        final int lod,
-        final int tileX,
-        final int tileZ,
-        final int mode,
-        final long receivedNanos,
-        final int requestBytes,
-        final long buildStartedNanos,
-        final long ioNanos,
-        final long computeNanos,
-        final SyncPerformanceMonitor.CumulativeWork cumulativeWork
-    ) {
-        final long started = System.nanoTime();
-        try {
-            final byte[] payload = MsgCodec.encode(response);
-            return new Completed(
-                response, payload, dimIndex, lod, tileX, tileZ, mode, receivedNanos,
-                buildStartedNanos,
-                requestBytes, ioNanos, computeNanos,
-                Math.max(0L, System.nanoTime() - started), cumulativeWork
-            );
-        } catch (final ProtoException e) {
-            logger.warn("Failed to encode Paper correction response", e);
-            final ErrorS2C error = new ErrorS2C(
-                ErrorS2C.ERR_MALFORMED_REQUEST,
-                "map correction response exceeded protocol limits"
-            );
-            try {
-                return new Completed(
-                    error, MsgCodec.encode(error), dimIndex, lod, tileX, tileZ,
-                    Proto.PATCH_MODE_UNAVAILABLE, receivedNanos, buildStartedNanos,
-                    requestBytes, ioNanos, computeNanos,
-                    Math.max(0L, System.nanoTime() - started), cumulativeWork
-                );
-            } catch (final ProtoException impossible) {
-                throw new IllegalStateException(impossible);
-            }
-        }
     }
 
     private void changed(
@@ -835,29 +740,15 @@ final class PaperCorrectionService implements AutoCloseable {
             }
         }
         for (final PlayerChannel channel : channels.values()) {
-            synchronized (channel.tiles) {
-                for (final Map.Entry<TileQueueKey, JobSlot> entry
-                    : channel.tiles.entrySet()) {
-                    final TileQueueKey key = entry.getKey();
-                    final int regionsPerTile = 1 << key.lod();
-                    if (key.dimIndex() == world.index()
-                        && Math.floorDiv(regionX, regionsPerTile) == key.tileX()
-                        && Math.floorDiv(regionZ, regionsPerTile) == key.tileZ()) {
-                        restartAfterLiveChange(entry.getValue());
-                    }
-                }
-            }
-            synchronized (channel.regions) {
-                for (final Map.Entry<RegionQueueKey, JobSlot> entry
-                    : channel.regions.entrySet()) {
-                    final RegionQueueKey key = entry.getKey();
-                    if (key.dimIndex() == world.index()
-                        && key.slice().regionX() == regionX
-                        && key.slice().regionZ() == regionZ) {
-                        restartAfterLiveChange(entry.getValue());
-                    }
-                }
-            }
+            channel.tiles.restartMatching(key -> {
+                final int regionsPerTile = 1 << key.lod();
+                return key.dimIndex() == world.index()
+                    && Math.floorDiv(regionX, regionsPerTile) == key.tileX()
+                    && Math.floorDiv(regionZ, regionsPerTile) == key.tileZ();
+            });
+            channel.regions.restartMatching(key -> key.dimIndex() == world.index()
+                && key.slice().regionX() == regionX
+                && key.slice().regionZ() == regionZ);
         }
     }
 
@@ -907,118 +798,10 @@ final class PaperCorrectionService implements AutoCloseable {
 
     private PlayerChannel channel(final UUID playerId, final MessageSender sender) {
         final PlayerChannel channel = channels.computeIfAbsent(
-            playerId, ignored -> new PlayerChannel(config)
+            playerId, ignored -> new PlayerChannel(config, workers)
         );
         channel.sender = sender;
         return channel;
-    }
-
-    private <K> boolean enqueue(
-        final Map<K, JobSlot> queue,
-        final K key,
-        final Callable<Completed> job
-    ) {
-        final JobSlot slot;
-        synchronized (queue) {
-            JobSlot existing = queue.get(key);
-            if (existing == null) {
-                if (queue.size() >= config.maxPendingTilesPerPlayer) {
-                    return false;
-                }
-                existing = new JobSlot();
-                existing.worker = new PaperSupersedingTask<>(workers);
-                queue.put(key, existing);
-            }
-            slot = existing;
-            slot.completed = null;
-            slot.asyncJob = job;
-            slot.immediateJob = null;
-            if (!slot.worker.submit(job)) {
-                if (queue.get(key) == slot) {
-                    queue.remove(key);
-                }
-                return false;
-            }
-        }
-        return true;
-    }
-
-    private void restartAfterLiveChange(final JobSlot slot) {
-        if (slot.immediateJob != null) {
-            slot.completed = slot.immediateJob.get();
-            return;
-        }
-        slot.completed = null;
-        if (slot.worker != null && slot.asyncJob != null
-            && !slot.worker.submit(slot.asyncJob)) {
-            logger.warn("Paper correction worker rejected a live-change restart");
-        }
-    }
-
-    private <K> boolean enqueueCompleted(
-        final Map<K, JobSlot> queue,
-        final K key,
-        final Supplier<Completed> job
-    ) {
-        synchronized (queue) {
-            JobSlot slot = queue.get(key);
-            if (slot == null) {
-                if (queue.size() >= config.maxPendingTilesPerPlayer) {
-                    return false;
-                }
-                slot = new JobSlot();
-                queue.put(key, slot);
-            }
-            slot.asyncJob = null;
-            slot.immediateJob = job;
-            slot.completed = job.get();
-            return true;
-        }
-    }
-
-    private <K> void drain(
-        final PlayerChannel channel,
-        final Map<K, JobSlot> queue,
-        final MessageSender sender,
-        final long nowNanos
-    ) {
-        synchronized (queue) {
-            final Iterator<Map.Entry<K, JobSlot>> iterator = queue.entrySet().iterator();
-            while (iterator.hasNext()) {
-                final JobSlot slot = iterator.next().getValue();
-                final Exception failure = slot.worker == null ? null : slot.worker.failure();
-                if (failure != null) {
-                    logger.warn("Paper correction job failed", failure);
-                    iterator.remove();
-                    continue;
-                }
-                final Completed completed = slot.completed != null
-                    ? slot.completed
-                    : slot.worker == null ? null : slot.worker.completed();
-                if (completed == null
-                    || !channel.budget.allowBytes(completed.payload().length, nowNanos)) {
-                    return;
-                }
-                sender.sendEncoded(completed.message(), completed.payload());
-                iterator.remove();
-                final long delivered = System.nanoTime();
-                channel.performance.record(new SyncPerformanceMonitor.Delivery(
-                    completed.dimIndex(), completed.lod(), completed.tileX(), completed.tileZ(),
-                    completed.receivedNanos(), completed.requestBytes(), completed.patchMode(),
-                    completed.payload().length,
-                    Math.max(
-                        0L,
-                        completed.buildStartedNanos() - completed.receivedNanos()
-                    ),
-                    completed.encodeNanos(),
-                    delivered,
-                    new SyncPerformanceMonitor.DirectWork(
-                        completed.ioNanos(), completed.computeNanos()
-                    ),
-                    completed.cumulativeWork()
-                ));
-            }
-        }
     }
 
     @Override

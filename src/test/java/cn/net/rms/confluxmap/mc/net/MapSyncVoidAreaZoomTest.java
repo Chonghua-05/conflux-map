@@ -27,11 +27,14 @@ import cn.net.rms.confluxmap.core.task.MapExecutors;
 import cn.net.rms.confluxmap.core.task.SessionGuard;
 import cn.net.rms.confluxmap.core.tile.TileService;
 import cn.net.rms.confluxmap.core.util.TileMath;
+import cn.net.rms.confluxmap.server.CorrectionSlotQueue;
+import cn.net.rms.confluxmap.server.EncodedResponse;
 import cn.net.rms.confluxmap.server.PatchBuilder;
-import cn.net.rms.confluxmap.server.PatchDispatcher;
 import cn.net.rms.confluxmap.server.PlayerBudget;
 import cn.net.rms.confluxmap.server.ServerConfig;
 import cn.net.rms.confluxmap.server.SummaryTile;
+import cn.net.rms.confluxmap.server.SyncPerformanceMonitor;
+import cn.net.rms.confluxmap.server.TileJob;
 import java.nio.file.Path;
 import java.util.ArrayDeque;
 import java.util.ArrayList;
@@ -44,7 +47,7 @@ import org.junit.jupiter.api.io.TempDir;
  * End-to-end simulation of the field report "a 1400x1400 emptied (bedrock-floor) area syncs
  * completely at zoom level 2 but leaks predicted terrain at zoom level 1": the real
  * {@link MapSyncClient} browses the same world area at LOD 2 first and then at LOD 1, against a
- * server built from the real {@link PatchBuilder}/{@link PatchDispatcher} over a synthetic world
+ * server built from the real {@link PatchBuilder}/{@link CorrectionSlotQueue} over a synthetic world
  * whose baseline prediction matches the terrain everywhere except the void rectangle.
  *
  * <p>After each phase every void-covered pixel of every viewport tile at that LOD must hold a
@@ -269,50 +272,71 @@ class MapSyncVoidAreaZoomTest {
 
     /**
      * Mirrors {@code RegionSummaryService.request}'s admission control and job building with the
-     * real {@link PatchDispatcher} and real {@link PatchBuilder} residual path; only the summary
+     * real {@link CorrectionSlotQueue} and real {@link PatchBuilder} residual path; only the summary
      * regions and the baseline grid are synthetic, and they agree everywhere outside the void.
      */
+    private record TileKey(int dimIndex, int lod, int tileX, int tileZ) {
+    }
+
     private static final class FakeVoidWorldServer {
         final ServerConfig config;
-        final PatchDispatcher dispatcher;
+        final PlayerBudget budget;
+        final CorrectionSlotQueue<TileKey> tiles;
+        final SyncPerformanceMonitor performance = new SyncPerformanceMonitor();
         final PatchBuilder patchBuilder = new PatchBuilder();
         int requestCount;
         int errorCount;
 
         FakeVoidWorldServer(final ServerConfig config) {
             this.config = config;
-            this.dispatcher = new PatchDispatcher(
-                new PlayerBudget(config.maxBytesPerSecondPerPlayer, config.minRequestIntervalMs),
-                config.maxPendingTilesPerPlayer
+            this.budget = new PlayerBudget(
+                config.maxBytesPerSecondPerPlayer, config.minRequestIntervalMs
             );
+            this.tiles = new CorrectionSlotQueue<>(config.maxPendingTilesPerPlayer, Runnable::run);
         }
 
         void handle(final MapViewReqC2S request, final long nowNanos, final MapSyncClient client) throws ProtoException {
             requestCount++;
             if (request.lod() > Proto.DEFAULT_MAX_PATCH_LOD || request.tiles().size() > config.maxTilesPerRequest
-                || request.dimIndex() < 0 || !dispatcher.budget().beginRequest(nowNanos)) {
+                || request.dimIndex() < 0 || !budget.beginRequest(nowNanos)) {
                 deliverError(client);
                 return;
             }
-            final List<PatchDispatcher.TileJob> jobs = new ArrayList<>(request.tiles().size());
+            int overflow = 0;
             for (final MapViewReqC2S.TileReq tile : request.tiles()) {
-                jobs.add(new PatchDispatcher.TileJob(
-                    request.reqId(), request.dimIndex(), request.lod(), tile.tileX(), tile.tileZ(), tile.sinceRevision()
-                ));
+                final TileJob job = new TileJob(
+                    request.reqId(), request.dimIndex(), request.lod(),
+                    tile.tileX(), tile.tileZ(), tile.sinceRevision()
+                );
+                if (!tiles.enqueue(
+                    new TileKey(job.dimIndex(), job.lod(), job.tileX(), job.tileZ()),
+                    () -> encode(job)
+                )) {
+                    overflow++;
+                }
             }
-            if (dispatcher.submit(jobs) > 0) {
+            if (overflow > 0) {
                 deliverError(client);
             }
             tickDrain(nowNanos, client);
         }
 
         void tickDrain(final long nowNanos, final MapSyncClient client) {
-            dispatcher.drain(nowNanos, this::buildPatch, message -> deliver((MapPatchS2C) message, client));
+            tiles.drain(budget, (message, payload) -> deliver(
+                (MapPatchS2C) message, payload, client
+            ), performance, nowNanos);
         }
 
-        private void deliver(final MapPatchS2C patch, final MapSyncClient client) {
+        private EncodedResponse encode(final TileJob job) {
+            final MapPatchS2C patch = buildPatch(job);
+            return EncodedResponse.of(
+                patch, job.dimIndex(), job.lod(), job.tileX(), job.tileZ(), patch.mode(),
+                0L, 0, 0L, 0L
+            );
+        }
+
+        private void deliver(final MapPatchS2C patch, final byte[] encoded, final MapSyncClient client) {
             try {
-                final byte[] encoded = MsgCodec.encode(patch);
                 client.onPatch((MapPatchS2C) MsgCodec.decode(encoded), encoded.length);
             } catch (final ProtoException e) {
                 throw new AssertionError("server produced an unencodable patch", e);
@@ -325,7 +349,7 @@ class MapSyncVoidAreaZoomTest {
             client.onError(payload.length);
         }
 
-        private MapPatchS2C buildPatch(final PatchDispatcher.TileJob job) {
+        private MapPatchS2C buildPatch(final TileJob job) {
             final SummaryTile summary = readTile(job.lod(), job.tileX(), job.tileZ());
             final PatchBuilder.Result result =
                 patchBuilder.build(summary, job.sinceRevision(), baseline(job.lod(), job.tileX(), job.tileZ()), false);

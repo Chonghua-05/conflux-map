@@ -25,9 +25,12 @@ import cn.net.rms.confluxmap.core.store.MapWorldService;
 import cn.net.rms.confluxmap.core.task.MapExecutors;
 import cn.net.rms.confluxmap.core.task.SessionGuard;
 import cn.net.rms.confluxmap.core.tile.TileService;
-import cn.net.rms.confluxmap.server.PatchDispatcher;
+import cn.net.rms.confluxmap.server.CorrectionSlotQueue;
+import cn.net.rms.confluxmap.server.EncodedResponse;
 import cn.net.rms.confluxmap.server.PlayerBudget;
 import cn.net.rms.confluxmap.server.ServerConfig;
+import cn.net.rms.confluxmap.server.SyncPerformanceMonitor;
+import cn.net.rms.confluxmap.server.TileJob;
 import java.nio.file.Path;
 import java.util.ArrayDeque;
 import java.util.ArrayList;
@@ -141,6 +144,9 @@ class MapSyncLargeViewportTest {
         return ((long) x << 32) ^ (z & 0xFFFFFFFFL);
     }
 
+    private record TileKey(int dimIndex, int lod, int tileX, int tileZ) {
+    }
+
     private static final class Fixture {
         final FakeCompanionServer server;
         final MapSyncClient client;
@@ -227,11 +233,13 @@ class MapSyncLargeViewportTest {
 
     /**
      * Mirrors {@code RegionSummaryService.request}'s admission control while delegating queueing
-     * and paced delivery to the real {@link PatchDispatcher}; only patch building is synthetic.
+     * and paced delivery to the real {@link CorrectionSlotQueue}; only patch building is synthetic.
      */
     private static final class FakeCompanionServer {
         final ServerConfig config;
-        final PatchDispatcher dispatcher;
+        final PlayerBudget budget;
+        final CorrectionSlotQueue<TileKey> tiles;
+        final SyncPerformanceMonitor performance = new SyncPerformanceMonitor();
         final int samplesPerPatch;
         final boolean structuredResidual;
         final Set<Long> served = new HashSet<>();
@@ -246,10 +254,10 @@ class MapSyncLargeViewportTest {
             final boolean structuredResidual
         ) {
             this.config = config;
-            this.dispatcher = new PatchDispatcher(
-                new PlayerBudget(config.maxBytesPerSecondPerPlayer, config.minRequestIntervalMs),
-                config.maxPendingTilesPerPlayer
+            this.budget = new PlayerBudget(
+                config.maxBytesPerSecondPerPlayer, config.minRequestIntervalMs
             );
+            this.tiles = new CorrectionSlotQueue<>(config.maxPendingTilesPerPlayer, Runnable::run);
             this.samplesPerPatch = samplesPerPatch;
             this.structuredResidual = structuredResidual;
         }
@@ -257,29 +265,45 @@ class MapSyncLargeViewportTest {
         void handle(final MapViewReqC2S request, final long nowNanos, final MapSyncClient client) throws ProtoException {
             requestCount++;
             if (request.lod() > Proto.DEFAULT_MAX_PATCH_LOD || request.tiles().size() > config.maxTilesPerRequest
-                || request.dimIndex() < 0 || !dispatcher.budget().beginRequest(nowNanos)) {
+                || request.dimIndex() < 0 || !budget.beginRequest(nowNanos)) {
                 deliverError(client);
                 return;
             }
-            final List<PatchDispatcher.TileJob> jobs = new ArrayList<>(request.tiles().size());
+            int overflow = 0;
             for (final MapViewReqC2S.TileReq tile : request.tiles()) {
-                jobs.add(new PatchDispatcher.TileJob(
-                    request.reqId(), request.dimIndex(), request.lod(), tile.tileX(), tile.tileZ(), tile.sinceRevision()
-                ));
+                final TileJob job = new TileJob(
+                    request.reqId(), request.dimIndex(), request.lod(),
+                    tile.tileX(), tile.tileZ(), tile.sinceRevision()
+                );
+                if (!tiles.enqueue(
+                    new TileKey(job.dimIndex(), job.lod(), job.tileX(), job.tileZ()),
+                    () -> encode(job)
+                )) {
+                    overflow++;
+                }
             }
-            if (dispatcher.submit(jobs) > 0) {
+            if (overflow > 0) {
                 deliverError(client);
             }
             tickDrain(nowNanos, client);
         }
 
         void tickDrain(final long nowNanos, final MapSyncClient client) {
-            dispatcher.drain(nowNanos, this::buildPatch, message -> deliver((MapPatchS2C) message, client));
+            tiles.drain(budget, (message, payload) -> deliver(
+                (MapPatchS2C) message, payload, client
+            ), performance, nowNanos);
         }
 
-        private void deliver(final MapPatchS2C patch, final MapSyncClient client) {
+        private EncodedResponse encode(final TileJob job) {
+            final MapPatchS2C patch = buildPatch(job);
+            return EncodedResponse.of(
+                patch, job.dimIndex(), job.lod(), job.tileX(), job.tileZ(), patch.mode(),
+                0L, 0, 0L, 0L
+            );
+        }
+
+        private void deliver(final MapPatchS2C patch, final byte[] encoded, final MapSyncClient client) {
             try {
-                final byte[] encoded = MsgCodec.encode(patch);
                 if (patch.mode() == Proto.PATCH_MODE_ABSOLUTE) {
                     minAbsolutePatchBytes = Math.min(minAbsolutePatchBytes, encoded.length);
                 }
@@ -297,7 +321,7 @@ class MapSyncLargeViewportTest {
             client.onError(payload.length);
         }
 
-        private MapPatchS2C buildPatch(final PatchDispatcher.TileJob job) {
+        private MapPatchS2C buildPatch(final TileJob job) {
             final byte[] presence = new byte[Proto.PATCH_PRESENCE_BYTES];
             java.util.Arrays.fill(presence, (byte) 0xFF);
             if (job.sinceRevision() >= 1L) {

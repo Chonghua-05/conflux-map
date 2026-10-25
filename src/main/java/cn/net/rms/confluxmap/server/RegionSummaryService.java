@@ -39,12 +39,14 @@ import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.UUID;
+import java.util.concurrent.ArrayBlockingQueue;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionException;
 import java.util.concurrent.ConcurrentLinkedQueue;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
+import java.util.concurrent.ThreadPoolExecutor;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
@@ -60,10 +62,11 @@ import net.minecraft.world.chunk.WorldChunk;
 /**
  * Serves summary-backed corrections without asking the world chunk manager to generate chunks.
  *
- * <p>Delivery is queued per player ({@link PatchDispatcher}): a request's tiles are enqueued,
- * as many as the byte budget allows are sent inline, and the remainder drains on subsequent
- * server ticks as the token bucket refills. Only queue overflow is answered with
- * {@code ERR_RATE_LIMITED}; a temporarily exhausted byte budget never drops tiles.
+ * <p>Delivery is queued per player ({@link CorrectionSlotQueue}): a request's tiles are enqueued
+ * and built on the anvil worker pool — chunk NBT reads and patch encoding never touch the server
+ * thread — and each server tick drains as many encoded results as the player's byte budget
+ * allows. Only queue overflow is answered with {@code ERR_RATE_LIMITED}; a temporarily exhausted
+ * byte budget never drops tiles.
  */
 public final class RegionSummaryService {
     private static final int PROGRESSIVE_MIN_LOD = 3;
@@ -111,6 +114,19 @@ public final class RegionSummaryService {
         thread.setDaemon(true);
         return thread;
     });
+    /** Builds and encodes LOD&lt;3 tile patches off the server thread, mirroring the Paper companion. */
+    private final ExecutorService anvilWorkers = new ThreadPoolExecutor(
+        2,
+        2,
+        0L,
+        TimeUnit.MILLISECONDS,
+        new ArrayBlockingQueue<>(1_024),
+        runnable -> {
+            final Thread thread = new Thread(runnable, "ConfluxMap-fabric-anvil");
+            thread.setDaemon(true);
+            return thread;
+        }
+    );
     /** Access-ordered global task cache; identical player requests reuse the same validated scan. */
     private final LinkedHashMap<ProgressiveKey, ProgressiveRegionPatch> progressiveTasks =
         new LinkedHashMap<>(16, 0.75f, true);
@@ -232,23 +248,27 @@ public final class RegionSummaryService {
     private record RegionJobKey(int dimIndex, int lod, ChunkRegionSlice slice) {
     }
 
+    private record TileQueueKey(
+        int dimIndex, int lod, int tileX, int tileZ, boolean forceAbsolute
+    ) {
+    }
+
     private record ChangedRegion(String dimension, int regionX, int regionZ) {
     }
 
     private static final class PlayerChannel {
-        final PatchDispatcher dispatcher;
+        final PlayerBudget budget;
+        final CorrectionSlotQueue<TileQueueKey> tiles;
         final LinkedHashMap<RegionJobKey, RegionJob> regionQueue = new LinkedHashMap<>();
         final SyncPerformanceMonitor performance;
         volatile MessageSender sender;
 
-        PlayerChannel(final PlayerBudget budget, final int maxPendingTiles) {
-            performance = new SyncPerformanceMonitor();
-            dispatcher = new PatchDispatcher(
-                budget,
-                maxPendingTiles,
-                System::nanoTime,
-                performance::record
+        PlayerChannel(final ServerConfig config, final ExecutorService tileWorkers) {
+            budget = new PlayerBudget(
+                config.maxBytesPerSecondPerPlayer, config.minRequestIntervalMs
             );
+            tiles = new CorrectionSlotQueue<>(config.maxPendingTilesPerPlayer, tileWorkers);
+            performance = new SyncPerformanceMonitor();
         }
     }
 
@@ -331,29 +351,43 @@ public final class RegionSummaryService {
         final PlayerChannel channel = channels.computeIfAbsent(clientId, ignored -> newPlayerChannel());
         channel.sender = sender;
         if (request.lod() > lodCeiling() || request.tiles().size() > config.maxTilesPerRequest
-            || request.dimIndex() < 0 || !channel.dispatcher.budget().beginRequest(now)) {
+            || request.dimIndex() < 0 || !channel.budget.beginRequest(now)) {
             sender.send(new ErrorS2C(ErrorS2C.ERR_RATE_LIMITED, "map correction request is rate limited"));
             return;
         }
-        final List<PatchDispatcher.TileJob> jobs = new ArrayList<>(request.tiles().size());
+        final SummaryDiskCache disk = diskFor(server);
         final int requestTiles = request.tiles().size();
         final int bytesPerTile = requestTiles == 0 ? 0 : Math.max(0, requestPayloadBytes) / requestTiles;
         int remainingBytes = requestTiles == 0 ? 0 : Math.max(0, requestPayloadBytes) % requestTiles;
+        int overflow = 0;
         for (final MapViewReqC2S.TileReq tile : request.tiles()) {
             final int tileRequestBytes = bytesPerTile + (remainingBytes-- > 0 ? 1 : 0);
-            jobs.add(new PatchDispatcher.TileJob(
+            final TileQueueKey key = new TileQueueKey(
+                request.dimIndex(), request.lod(), tile.tileX(), tile.tileZ(), forceAbsolute
+            );
+            final TileJob job = new TileJob(
                 request.reqId(), request.dimIndex(), request.lod(), tile.tileX(), tile.tileZ(),
                 tile.sinceRevision(), now, tileRequestBytes, forceAbsolute
-            ));
+            );
+            final boolean queued;
+            if (request.lod() >= PROGRESSIVE_MIN_LOD) {
+                queued = channel.tiles.enqueueCompleted(
+                    key, () -> progressiveResponse(server, disk, job)
+                );
+            } else {
+                queued = channel.tiles.enqueue(key, () -> buildResponse(server, disk, job));
+            }
+            if (!queued) {
+                overflow++;
+            }
         }
-        final int overflow = channel.dispatcher.submit(jobs);
         if (overflow > 0) {
             sender.send(new ErrorS2C(ErrorS2C.ERR_RATE_LIMITED, "map correction queue is full"));
         }
         invalidations.acknowledge(clientId, request);
         regionInvalidations.acknowledge(clientId, request);
         liveChunks.nominate(request, now);
-        drain(server, channel, now);
+        drain(channel, now);
     }
 
     public void requestRegions(
@@ -429,7 +463,7 @@ public final class RegionSummaryService {
             || request.regions().size() > Proto.MAX_REGION_PAGES_PER_REQ
             || request.regions().size() > config.maxTilesPerRequest
             || request.dimIndex() < 0 || worldAt(server, request.dimIndex()) == null
-            || !channel.dispatcher.budget().beginRequest(now)) {
+            || !channel.budget.beginRequest(now)) {
             sender.send(new ErrorS2C(
                 ErrorS2C.ERR_RATE_LIMITED, "map region correction request is rate limited"
             ));
@@ -531,8 +565,8 @@ public final class RegionSummaryService {
             if (regionInvalidation != null && channel.sender != null) {
                 channel.sender.send(regionInvalidation);
             }
-            if (channel.dispatcher.queued() > 0 && channel.sender != null) {
-                drain(server, channel, now);
+            if (channel.sender != null) {
+                drain(channel, now);
             }
             if (!channel.regionQueue.isEmpty() && channel.sender != null) {
                 drainRegions(server, channel, now);
@@ -546,7 +580,7 @@ public final class RegionSummaryService {
         liveChunks.unwatch(player);
         final PlayerChannel channel = channels.remove(player);
         if (channel != null) {
-            channel.dispatcher.clear();
+            channel.tiles.clear();
             synchronized (channel.regionQueue) {
                 channel.regionQueue.clear();
             }
@@ -592,32 +626,26 @@ public final class RegionSummaryService {
         }
         progressiveScanWorker.shutdownNow();
         progressiveWorker.shutdownNow();
+        anvilWorkers.shutdownNow();
         try {
             progressiveScanWorker.awaitTermination(2L, TimeUnit.SECONDS);
             progressiveWorker.awaitTermination(2L, TimeUnit.SECONDS);
+            anvilWorkers.awaitTermination(2L, TimeUnit.SECONDS);
         } catch (final InterruptedException e) {
             Thread.currentThread().interrupt();
         }
     }
 
-    private void drain(final MinecraftServer server, final PlayerChannel channel, final long nowNanos) {
+    private void drain(final PlayerChannel channel, final long nowNanos) {
         final MessageSender sender = channel.sender;
-        if (sender == null) {
+        if (sender == null || channel.tiles.isEmpty()) {
             return;
         }
-        final SummaryDiskCache disk = diskFor(server);
-        channel.dispatcher.drainTimed(
-            nowNanos,
-            job -> buildJob(server, disk, job),
-            sender::sendEncoded
-        );
+        channel.tiles.drain(channel.budget, sender::sendEncoded, channel.performance, nowNanos);
     }
 
     private PlayerChannel newPlayerChannel() {
-        return new PlayerChannel(
-            new PlayerBudget(config.maxBytesPerSecondPerPlayer, config.minRequestIntervalMs),
-            config.maxPendingTilesPerPlayer
-        );
+        return new PlayerChannel(config, anvilWorkers);
     }
 
     private void drainRegions(
@@ -679,7 +707,7 @@ public final class RegionSummaryService {
                     0L, System.nanoTime() - encodeStartedNanos
                 );
                 if (budgeted
-                    && !channel.dispatcher.budget().allowBytes(encoded.length, nowNanos)) {
+                    && !channel.budget.allowBytes(encoded.length, nowNanos)) {
                     return;
                 }
                 sender.sendEncoded(response, encoded);
@@ -1022,20 +1050,22 @@ public final class RegionSummaryService {
         return cn.net.rms.confluxmap.core.util.TileMath.MAX_LOD;
     }
 
-    private PatchDispatcher.BuiltPatch buildJob(
+    /** Worker-thread tile build: reads Anvil NBT, builds, and encodes, never touching the server thread. */
+    private EncodedResponse buildResponse(
         final MinecraftServer server,
         final SummaryDiskCache disk,
-        final PatchDispatcher.TileJob job
+        final TileJob job
     ) {
         long ioNanos = 0L;
         long computeNanos = 0L;
+        final long buildStartedNanos = System.nanoTime();
         try {
             final ServerWorld world = worldAt(server, job.dimIndex());
             if (world == null || !config.shareCorrections) {
-                return unavailable(job, ioNanos, computeNanos);
+                return unavailable(job, ioNanos, computeNanos, buildStartedNanos);
             }
             if (job.lod() >= PROGRESSIVE_MIN_LOD) {
-                return progressiveJob(world, disk, job);
+                return progressiveJob(world, disk, job, buildStartedNanos);
             }
             final SummaryTile summary;
             long started = System.nanoTime();
@@ -1057,26 +1087,38 @@ public final class RegionSummaryService {
                 job.reqId(), job.dimIndex(), job.lod(), job.tileX(), job.tileZ(),
                 result.mode(), result.revision(), result.presence(), result.body()
             );
-            return new PatchDispatcher.BuiltPatch(
-                patch,
-                new SyncPerformanceMonitor.DirectWork(ioNanos, computeNanos),
-                SyncPerformanceMonitor.CumulativeWork.NONE
+            return EncodedResponse.of(
+                patch, job.dimIndex(), job.lod(), job.tileX(), job.tileZ(), result.mode(),
+                job.receivedAtNanos(), job.requestBytes(), buildStartedNanos,
+                ioNanos, computeNanos, SyncPerformanceMonitor.CumulativeWork.NONE
             );
         } catch (final Exception e) {
             ConfluxMapMod.LOGGER.warn(
                 "[ConfluxMap] companion: patch build failed for tile {},{} lod {} ({})",
                 job.tileX(), job.tileZ(), job.lod(), e.getMessage()
             );
-            return unavailable(job, ioNanos, computeNanos);
+            return unavailable(job, ioNanos, computeNanos, buildStartedNanos);
         }
     }
 
-    private PatchDispatcher.BuiltPatch progressiveJob(
-        final ServerWorld world,
-        final SummaryDiskCache disk,
-        final PatchDispatcher.TileJob job
+    /** Immediate progressive response, answered from the shared scan cache on the calling thread. */
+    private EncodedResponse progressiveResponse(
+        final MinecraftServer server, final SummaryDiskCache disk, final TileJob job
     ) {
         final long responseStartedNanos = System.nanoTime();
+        final ServerWorld world = worldAt(server, job.dimIndex());
+        if (world == null) {
+            return unavailable(job, 0L, 0L, responseStartedNanos);
+        }
+        return progressiveJob(world, disk, job, responseStartedNanos);
+    }
+
+    private EncodedResponse progressiveJob(
+        final ServerWorld world,
+        final SummaryDiskCache disk,
+        final TileJob job,
+        final long responseStartedNanos
+    ) {
         final long now = System.nanoTime();
         final ProgressiveKey key = new ProgressiveKey(
             world, job.lod(), job.tileX(), job.tileZ(), job.forceAbsolute()
@@ -1087,11 +1129,18 @@ public final class RegionSummaryService {
             if (existing == null) {
                 evictProgressiveTasks(now, true);
                 if (progressiveTasks.size() >= PROGRESSIVE_MAX_ACTIVE_TILES) {
-                    return directBuilt(new MapPatchS2C(
-                        job.reqId(), job.dimIndex(), job.lod(), job.tileX(), job.tileZ(),
-                        Proto.PATCH_MODE_PARTIAL, 0L, new byte[Proto.PATCH_PRESENCE_BYTES],
-                        ProgressiveRegionPatch.emptyPatchBody()
-                    ), 0L, Math.max(0L, System.nanoTime() - responseStartedNanos));
+                    return EncodedResponse.of(
+                        new MapPatchS2C(
+                            job.reqId(), job.dimIndex(), job.lod(), job.tileX(), job.tileZ(),
+                            Proto.PATCH_MODE_PARTIAL, 0L, new byte[Proto.PATCH_PRESENCE_BYTES],
+                            ProgressiveRegionPatch.emptyPatchBody()
+                        ),
+                        job.dimIndex(), job.lod(), job.tileX(), job.tileZ(),
+                        Proto.PATCH_MODE_PARTIAL, job.receivedAtNanos(), job.requestBytes(),
+                        responseStartedNanos, 0L,
+                        Math.max(0L, System.nanoTime() - responseStartedNanos),
+                        SyncPerformanceMonitor.CumulativeWork.NONE
+                    );
                 }
                 final String dimension = world.getRegistryKey().getValue().toString();
                 final Path worldRoot = world.getServer().getSavePath(WorldSavePath.ROOT);
@@ -1122,12 +1171,10 @@ public final class RegionSummaryService {
             job.reqId(), job.dimIndex(), job.lod(), job.tileX(), job.tileZ(),
             response.mode(), response.revision(), response.presence(), response.body()
         );
-        return new PatchDispatcher.BuiltPatch(
-            patch,
-            new SyncPerformanceMonitor.DirectWork(
-                0L, Math.max(0L, System.nanoTime() - responseStartedNanos)
-            ),
-            task.workSnapshot()
+        return EncodedResponse.of(
+            patch, job.dimIndex(), job.lod(), job.tileX(), job.tileZ(), response.mode(),
+            job.receivedAtNanos(), job.requestBytes(), responseStartedNanos,
+            0L, Math.max(0L, System.nanoTime() - responseStartedNanos), task.workSnapshot()
         );
     }
 
@@ -1278,27 +1325,18 @@ public final class RegionSummaryService {
         }
     }
 
-    private static PatchDispatcher.BuiltPatch unavailable(
-        final PatchDispatcher.TileJob job,
+    private static EncodedResponse unavailable(
+        final TileJob job,
         final long ioNanos,
-        final long computeNanos
+        final long computeNanos,
+        final long buildStartedNanos
     ) {
-        return directBuilt(
+        return EncodedResponse.of(
             new MapPatchS2C(job.reqId(), job.dimIndex(), job.lod(), job.tileX(), job.tileZ(),
                 Proto.PATCH_MODE_UNAVAILABLE, 0L, new byte[Proto.PATCH_PRESENCE_BYTES], new byte[0]),
-            ioNanos,
-            computeNanos
-        );
-    }
-
-    private static PatchDispatcher.BuiltPatch directBuilt(
-        final MapPatchS2C patch,
-        final long ioNanos,
-        final long computeNanos
-    ) {
-        return new PatchDispatcher.BuiltPatch(
-            patch,
-            new SyncPerformanceMonitor.DirectWork(ioNanos, computeNanos),
+            job.dimIndex(), job.lod(), job.tileX(), job.tileZ(),
+            Proto.PATCH_MODE_UNAVAILABLE, job.receivedAtNanos(), job.requestBytes(),
+            buildStartedNanos, ioNanos, computeNanos,
             SyncPerformanceMonitor.CumulativeWork.NONE
         );
     }
@@ -1494,6 +1532,13 @@ public final class RegionSummaryService {
                             entry.getValue().invalidateRegion(changed.regionX(), changed.regionZ());
                         }
                     }
+                }
+                for (final PlayerChannel channel : channels.values()) {
+                    final int changedRegionX = changed.regionX();
+                    final int changedRegionZ = changed.regionZ();
+                    channel.tiles.restartMatching(key -> key.dimIndex() == dimIndex
+                        && Math.floorDiv(changedRegionX, 1 << key.lod()) == key.tileX()
+                        && Math.floorDiv(changedRegionZ, 1 << key.lod()) == key.tileZ());
                 }
             }
         }

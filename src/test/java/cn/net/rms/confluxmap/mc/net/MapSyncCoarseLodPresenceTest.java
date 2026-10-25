@@ -30,9 +30,12 @@ import cn.net.rms.confluxmap.core.store.MapWorldService;
 import cn.net.rms.confluxmap.core.task.MapExecutors;
 import cn.net.rms.confluxmap.core.task.SessionGuard;
 import cn.net.rms.confluxmap.core.tile.TileService;
-import cn.net.rms.confluxmap.server.PatchDispatcher;
+import cn.net.rms.confluxmap.server.CorrectionSlotQueue;
+import cn.net.rms.confluxmap.server.EncodedResponse;
 import cn.net.rms.confluxmap.server.PlayerBudget;
 import cn.net.rms.confluxmap.server.ServerConfig;
+import cn.net.rms.confluxmap.server.SyncPerformanceMonitor;
+import cn.net.rms.confluxmap.server.TileJob;
 import cn.net.rms.confluxmap.server.TilePresence;
 import java.nio.file.Path;
 import java.util.ArrayDeque;
@@ -47,7 +50,7 @@ import org.junit.jupiter.api.Test;
  *
  * <p>The client here is the real {@link MapSyncClient} browsing at LOD 3, served by a server that
  * mirrors {@code RegionSummaryService}'s admission control and progressive answer over the real
- * {@link PatchDispatcher} and {@link TilePresence}.
+ * {@link CorrectionSlotQueue} and {@link TilePresence}.
  */
 class MapSyncCoarseLodPresenceTest {
     private static final WorldIdentity WORLD = WorldIdentity.singleplayer("map-sync-coarse-lod-presence-test");
@@ -360,13 +363,18 @@ class MapSyncCoarseLodPresenceTest {
         }
     }
 
+    private record TileKey(int dimIndex, int lod, int tileX, int tileZ) {
+    }
+
     /**
      * Mirrors {@code RegionSummaryService}'s admission control and a revision-0 progressive answer
      * built by the real {@link TilePresence} over the currently scanned region summaries.
      */
     private static final class FakeCompanionServer {
         final ServerConfig config;
-        final PatchDispatcher dispatcher;
+        final PlayerBudget budget;
+        final CorrectionSlotQueue<TileKey> tiles;
+        final SyncPerformanceMonitor performance = new SyncPerformanceMonitor();
         final List<Long> sinceRevisions = new ArrayList<>();
         final List<MapSyncSubscribeC2S> subscriptions = new ArrayList<>();
         final boolean progressive;
@@ -376,39 +384,55 @@ class MapSyncCoarseLodPresenceTest {
         FakeCompanionServer(final ServerConfig config, final boolean progressive) {
             this.config = config;
             this.progressive = progressive;
-            this.dispatcher = new PatchDispatcher(
-                new PlayerBudget(config.maxBytesPerSecondPerPlayer, config.minRequestIntervalMs),
-                config.maxPendingTilesPerPlayer
+            this.budget = new PlayerBudget(
+                config.maxBytesPerSecondPerPlayer, config.minRequestIntervalMs
             );
+            this.tiles = new CorrectionSlotQueue<>(config.maxPendingTilesPerPlayer, Runnable::run);
         }
 
         void handle(final MapViewReqC2S request, final long nowNanos, final MapSyncClient client) throws ProtoException {
             if (request.lod() > 4
                 || request.tiles().size() > config.maxTilesPerRequest
-                || request.dimIndex() < 0 || !dispatcher.budget().beginRequest(nowNanos)) {
+                || request.dimIndex() < 0 || !budget.beginRequest(nowNanos)) {
                 deliverError(client);
                 return;
             }
-            final List<PatchDispatcher.TileJob> jobs = new ArrayList<>(request.tiles().size());
+            int overflow = 0;
             for (final MapViewReqC2S.TileReq tile : request.tiles()) {
                 sinceRevisions.add(tile.sinceRevision());
-                jobs.add(new PatchDispatcher.TileJob(
-                    request.reqId(), request.dimIndex(), request.lod(), tile.tileX(), tile.tileZ(), tile.sinceRevision()
-                ));
+                final TileJob job = new TileJob(
+                    request.reqId(), request.dimIndex(), request.lod(),
+                    tile.tileX(), tile.tileZ(), tile.sinceRevision()
+                );
+                if (!tiles.enqueue(
+                    new TileKey(job.dimIndex(), job.lod(), job.tileX(), job.tileZ()),
+                    () -> encode(job)
+                )) {
+                    overflow++;
+                }
             }
-            if (dispatcher.submit(jobs) > 0) {
+            if (overflow > 0) {
                 deliverError(client);
             }
             tickDrain(nowNanos, client);
         }
 
         void tickDrain(final long nowNanos, final MapSyncClient client) {
-            dispatcher.drain(nowNanos, this::buildPatch, message -> deliver((MapPatchS2C) message, client));
+            tiles.drain(budget, (message, payload) -> deliver(
+                (MapPatchS2C) message, payload, client
+            ), performance, nowNanos);
         }
 
-        private void deliver(final MapPatchS2C patch, final MapSyncClient client) {
+        private EncodedResponse encode(final TileJob job) {
+            final MapPatchS2C patch = buildPatch(job);
+            return EncodedResponse.of(
+                patch, job.dimIndex(), job.lod(), job.tileX(), job.tileZ(), patch.mode(),
+                0L, 0, 0L, 0L
+            );
+        }
+
+        private void deliver(final MapPatchS2C patch, final byte[] encoded, final MapSyncClient client) {
             try {
-                final byte[] encoded = MsgCodec.encode(patch);
                 client.onPatch((MapPatchS2C) MsgCodec.decode(encoded), encoded.length);
             } catch (final ProtoException e) {
                 throw new AssertionError("server produced an unencodable patch", e);
@@ -421,7 +445,7 @@ class MapSyncCoarseLodPresenceTest {
             client.onError(payload.length);
         }
 
-        private MapPatchS2C buildPatch(final PatchDispatcher.TileJob job) {
+        private MapPatchS2C buildPatch(final TileJob job) {
             final byte[] presence = TilePresence.build(
                 job.lod(), job.tileX(), job.tileZ(), FakeCompanionServer::cachedRegionFlags
             );
@@ -442,7 +466,7 @@ class MapSyncCoarseLodPresenceTest {
             );
         }
 
-        private static byte[] evaluatedPixels(final PatchDispatcher.TileJob job) {
+        private static byte[] evaluatedPixels(final TileJob job) {
             final byte[] evaluated = new byte[PatchCodec.MASK_BYTES];
             final int scale = 1 << job.lod();
             final long originX = (long) job.tileX() * 256L * scale;

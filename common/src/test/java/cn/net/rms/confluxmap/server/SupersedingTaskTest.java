@@ -1,4 +1,4 @@
-package cn.net.rms.confluxmap.paper;
+package cn.net.rms.confluxmap.server;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
@@ -8,12 +8,12 @@ import java.util.concurrent.Executor;
 import java.util.concurrent.atomic.AtomicInteger;
 import org.junit.jupiter.api.Test;
 
-class PaperSupersedingTaskTest {
+class SupersedingTaskTest {
     @Test
     void repeatedRequestsKeepOnlyOneWorkerTaskAndPublishTheNewestResult() {
         final QueuedExecutor worker = new QueuedExecutor();
         final AtomicInteger executions = new AtomicInteger();
-        final PaperSupersedingTask<Integer> task = new PaperSupersedingTask<>(worker);
+        final SupersedingTask<Integer> task = new SupersedingTask<>(worker);
 
         for (int request = 0; request < 100; request++) {
             final int value = request;
@@ -34,8 +34,8 @@ class PaperSupersedingTaskTest {
         final QueuedExecutor worker = new QueuedExecutor();
         final AtomicInteger executions = new AtomicInteger();
         @SuppressWarnings("unchecked")
-        final PaperSupersedingTask<Integer>[] holder = new PaperSupersedingTask[1];
-        holder[0] = new PaperSupersedingTask<>(worker);
+        final SupersedingTask<Integer>[] holder = new SupersedingTask[1];
+        holder[0] = new SupersedingTask<>(worker);
 
         assertTrue(holder[0].submit(() -> {
             executions.incrementAndGet();
