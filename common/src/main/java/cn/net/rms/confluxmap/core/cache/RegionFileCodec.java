@@ -16,7 +16,7 @@ import java.util.zip.InflaterInputStream;
 
 /**
  * Binary format for {@code r.<rx>.<rz>.cfr} region cache files (see the plan's
- * 磁盘缓存 decision and S6). A file is three back-to-back sections written to the
+ * disk-cache decision and S6). A file is three back-to-back sections written to the
  * same stream, uncompressed header/table followed by a compressed body:
  *
  * <pre>
