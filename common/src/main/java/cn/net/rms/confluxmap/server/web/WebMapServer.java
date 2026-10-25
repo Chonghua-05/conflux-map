@@ -64,7 +64,8 @@ public final class WebMapServer implements AutoCloseable {
     }
 
     public URI uri(final String path) {
-        return URI.create("http://127.0.0.1:" + transport.getListeningPort() + path);
+        return URI.create("http://" + displayHost(transport.config.bindAddress)
+            + ":" + transport.getListeningPort() + path);
     }
 
     @Override
@@ -546,6 +547,27 @@ public final class WebMapServer implements AutoCloseable {
         } catch (final UnknownHostException e) {
             return false;
         }
+    }
+
+    /**
+     * Host to show in {@link #uri}: the configured bind address as the operator wrote it, except
+     * that a wildcard bind — which listens on every interface — is displayed as a loopback
+     * address that still opens. Resolution matches the transport's own bind, which resolves the
+     * same string via {@code InetSocketAddress}.
+     */
+    private static String displayHost(final String bindAddress) {
+        try {
+            if (InetAddress.getByName(bindAddress).isAnyLocalAddress()) {
+                return "127.0.0.1";
+            }
+        } catch (final UnknownHostException e) {
+            // An unresolvable address could not have produced a bound transport either.
+        }
+        final String literal = bindAddress.startsWith("[") && bindAddress.endsWith("]")
+            ? bindAddress.substring(1, bindAddress.length() - 1)
+            : bindAddress;
+        // URI authorities bracket IPv6 literals and percent-encode zone ids (RFC 6874).
+        return literal.contains(":") ? "[" + literal.replace("%", "%25") + "]" : literal;
     }
 
     private static boolean acceptsGzip(final NanoHTTPD.IHTTPSession session) {

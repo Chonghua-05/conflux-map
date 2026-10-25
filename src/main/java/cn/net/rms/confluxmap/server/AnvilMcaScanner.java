@@ -1,5 +1,6 @@
 package cn.net.rms.confluxmap.server;
 
+import cn.net.rms.confluxmap.ConfluxMapMod;
 import cn.net.rms.confluxmap.core.net.SummaryCodec;
 import cn.net.rms.confluxmap.core.util.ChunkRegionSlice;
 import cn.net.rms.confluxmap.nativepredict.NativeChunkNbtScanner;
@@ -143,7 +144,12 @@ final class AnvilMcaScanner {
                 final int regionChunkIndex = (localZ & 15) * 16 + (localX & 15);
                 chunks[regionIndex][regionChunkIndex] = summary;
             }
-        } catch (final IOException | RuntimeException e) {
+        } catch (final IOException e) {
+            // Corrupt or concurrently modified Anvil files are routine; stay quiet and fall back.
+            return null;
+        } catch (final RuntimeException e) {
+            ConfluxMapMod.LOGGER.debug(
+                "Unexpected Anvil scan failure for {} (mca {}.{})", path, mcaX, mcaZ, e);
             return null;
         }
 
@@ -246,7 +252,15 @@ final class AnvilMcaScanner {
                 );
                 return nbt == null ? null : summarizer.summarizeForLod(nbt, lod);
             }
-        } catch (final IOException | RuntimeException e) {
+        } catch (final IOException e) {
+            // Corrupt or concurrently modified Anvil files are routine; stay quiet and fall back.
+            return null;
+        } catch (final RuntimeException e) {
+            final int chunkX = mcaX * CHUNKS_PER_SIDE + mcaChunkIndex % CHUNKS_PER_SIDE;
+            final int chunkZ = mcaZ * CHUNKS_PER_SIDE + mcaChunkIndex / CHUNKS_PER_SIDE;
+            ConfluxMapMod.LOGGER.debug(
+                "Unexpected Anvil chunk scan failure for chunk {},{} in {}",
+                chunkX, chunkZ, regionDirectory, e);
             return null;
         }
     }

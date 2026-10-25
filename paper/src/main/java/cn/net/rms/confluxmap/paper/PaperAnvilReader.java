@@ -19,9 +19,12 @@ import net.jpountz.lz4.LZ4BlockInputStream;
 import net.querz.nbt.io.NBTInputStream;
 import net.querz.nbt.io.NamedTag;
 import net.querz.nbt.tag.CompoundTag;
+import org.apache.logging.log4j.LogManager;
+import org.apache.logging.log4j.Logger;
 
 /** Bounded, read-only Anvil scanner that never asks Paper to load or generate chunks. */
 final class PaperAnvilReader {
+    private static final Logger LOGGER = LogManager.getLogger("ConfluxMap-Paper");
     private static final int SECTOR_BYTES = 4_096;
     private static final int CHUNKS_PER_SIDE = 32;
     private static final int MAX_INLINE_CHUNK_BYTES = 255 * SECTOR_BYTES - Integer.BYTES;
@@ -119,7 +122,13 @@ final class PaperAnvilReader {
             return new SummaryCodec.SampledRegion(
                 slice.regionX(), slice.regionZ(), mtime, stride, chunks
             );
-        } catch (final IOException | RuntimeException e) {
+        } catch (final IOException e) {
+            // Corrupt or concurrently modified Anvil files are routine; stay quiet and fall back.
+            return null;
+        } catch (final RuntimeException e) {
+            LOGGER.debug(
+                "Unexpected Anvil region scan failure for {} (summary region {}.{}, mca {}.{})",
+                path, slice.regionX(), slice.regionZ(), mcaX, mcaZ, e);
             return null;
         }
     }
@@ -179,7 +188,13 @@ final class PaperAnvilReader {
                     return summarizer.summarizeForLod(new PaperNbtChunkColumnSource(root), lod);
                 }
             }
-        } catch (final IOException | RuntimeException e) {
+        } catch (final IOException e) {
+            // Corrupt or concurrently modified Anvil files are routine; stay quiet and fall back.
+            return null;
+        } catch (final RuntimeException e) {
+            LOGGER.debug(
+                "Unexpected Anvil chunk scan failure for chunk {},{} in {}",
+                chunkX, chunkZ, regionDirectory, e);
             return null;
         }
     }
