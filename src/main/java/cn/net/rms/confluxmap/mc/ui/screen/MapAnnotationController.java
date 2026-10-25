@@ -488,7 +488,7 @@ final class MapAnnotationController {
         final boolean opensMenu
     ) {
         //#if MC>=260100
-        //$$ final var button = addRenderableWidget(new Button(
+        //$$ final var button = screen.addWidget(new Button(
         //$$     x, y, ANNOTATION_CONTROL_SIZE, ANNOTATION_CONTROL_SIZE, Texts.literal(""),
         //$$     ignored -> activateAnnotationColorButton(color, opensMenu), narration -> narration.get()
         //$$ ) {

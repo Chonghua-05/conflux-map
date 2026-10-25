@@ -2804,8 +2804,12 @@ public final class FullscreenMapScreen extends ConfluxScreen {
         return addDrawableChild(widget);
     }
 
-    void clearWidgets() {
+    void clearMapWidgets() {
+        //#if MC>=260100
+        //$$ clearWidgets();
+        //#else
         clearChildren();
+        //#endif
     }
 
     MapIconButton iconButton(

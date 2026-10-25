@@ -170,7 +170,7 @@ final class MapExportSelectionController {
     }
 
     void rebuildExportSelectionControls() {
-        screen.clearWidgets();
+        screen.clearMapWidgets();
         screen.addWidget(Widgets.button(
             screen.width - MARGIN - 80,
             screen.height - 32,

@@ -54,7 +54,12 @@ public abstract class WorldChunkMixin {
         confluxmap$chunkDirtyFaulted = true;
         ConfluxMapMod.LOGGER.error(
             "server chunk dirty tracking disabled after fault at block {},{},{} in chunk {},{}",
-            pos.getX(), pos.getY(), pos.getZ(), chunk.getPos().x, chunk.getPos().z, fault
+            pos.getX(), pos.getY(), pos.getZ(),
+            //#if MC>=260100
+            //$$ chunk.getPos().x(), chunk.getPos().z(), fault
+            //#else
+            chunk.getPos().x, chunk.getPos().z, fault
+            //#endif
         );
     }
 }

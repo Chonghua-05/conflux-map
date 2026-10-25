@@ -35,6 +35,9 @@ import java.util.UUID;
 import net.fabricmc.fabric.api.client.rendering.v1.WorldRenderContext;
 import net.fabricmc.fabric.api.client.rendering.v1.WorldRenderEvents;
 //#endif
+//#if MC>=260200
+//$$ import net.fabricmc.fabric.api.client.rendering.v1.FabricOrderedSubmitNodeCollector;
+//#endif
 import net.minecraft.client.MinecraftClient;
 //#if MC>=12109 && MC<260100
 //$$ import net.minecraft.client.render.command.OrderedRenderCommandQueue;

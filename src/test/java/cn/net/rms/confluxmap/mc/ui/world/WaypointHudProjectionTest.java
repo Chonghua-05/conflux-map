@@ -193,7 +193,7 @@ final class WaypointHudProjectionTest {
     //$$ @Test
     //$$ void submittedHudOmitsTheVerticalRelationBadge() throws Exception {
     //$$     final String source = Files.readString(preprocessedLabelPainterSource());
-    //$$     final String drawIcon = methodBody(source, "\n    void drawIcon(");
+    //$$     final String drawIcon = methodBody(source, "\n    private void drawIcon(");
     //$$
     //$$     assertFalse(
     //$$         drawIcon.contains("WaypointVerticalRelation"),
