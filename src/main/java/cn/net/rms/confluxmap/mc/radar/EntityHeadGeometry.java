@@ -1,5 +1,6 @@
 package cn.net.rms.confluxmap.mc.radar;
 
+import cn.net.rms.confluxmap.ConfluxMapMod;
 import cn.net.rms.confluxmap.core.radar.HeadPartSelector;
 import cn.net.rms.confluxmap.core.radar.PortraitLayout;
 import java.lang.reflect.Array;
@@ -50,6 +51,12 @@ final class EntityHeadGeometry {
     private static final int CONTENT_PAD = 0;
     /** Keeps equally dominant cuboids together for multi-part subjects such as wither heads. */
     private static final float DOMINANT_SCORE_RATIO = 0.99f;
+    /** Reflective fallbacks run per part on the render path, so each failure logs once per JVM. */
+    private static boolean childrenFieldFailureLogged;
+    private static boolean partGroupFailureLogged;
+    private static boolean topLevelFieldFailureLogged;
+    private static boolean vertexFieldFailureLogged;
+    private static boolean arrayFieldFailureLogged;
     //#if MC<12103
     private static final String MAIN_LAYER = "main";
     private static final Map<String, ModelPart> DATA_ROOTS = new LinkedHashMap<>();
@@ -416,8 +423,12 @@ final class EntityHeadGeometry {
                         return (Map<String, ModelPart>) map;
                     }
                 }
-            } catch (final ReflectiveOperationException | RuntimeException ignored) {
+            } catch (final ReflectiveOperationException | RuntimeException error) {
                 // Try the next map field; an inaccessible field is not fatal to icon fallback.
+                if (!childrenFieldFailureLogged) {
+                    childrenFieldFailureLogged = true;
+                    ConfluxMapMod.LOGGER.debug("Could not read model part children map", error);
+                }
             }
         }
         return Map.of();
@@ -436,8 +447,12 @@ final class EntityHeadGeometry {
                     if (!parts.isEmpty() && (smallest.isEmpty() || parts.size() < smallest.size())) {
                         smallest = parts;
                     }
-                } catch (final ReflectiveOperationException | RuntimeException ignored) {
+                } catch (final ReflectiveOperationException | RuntimeException error) {
                     // A model without an accessible head group falls back to all top-level parts.
+                    if (!partGroupFailureLogged) {
+                        partGroupFailureLogged = true;
+                        ConfluxMapMod.LOGGER.debug("Could not read model part group", error);
+                    }
                 }
             }
         }
@@ -470,8 +485,12 @@ final class EntityHeadGeometry {
                     if (value instanceof ModelPart) {
                         found.add((ModelPart) value);
                     }
-                } catch (final ReflectiveOperationException | RuntimeException ignored) {
+                } catch (final ReflectiveOperationException | RuntimeException error) {
                     // Keep collecting other accessible model parts.
+                    if (!topLevelFieldFailureLogged) {
+                        topLevelFieldFailureLogged = true;
+                        ConfluxMapMod.LOGGER.debug("Could not read model part field", error);
+                    }
                 }
             }
         }
@@ -586,7 +605,11 @@ final class EntityHeadGeometry {
                 } else if (position == null) {
                     position = field.get(vertex);
                 }
-            } catch (final ReflectiveOperationException | RuntimeException ignored) {
+            } catch (final ReflectiveOperationException | RuntimeException error) {
+                if (!vertexFieldFailureLogged) {
+                    vertexFieldFailureLogged = true;
+                    ConfluxMapMod.LOGGER.debug("Could not read model vertex fields", error);
+                }
                 return null;
             }
         }
@@ -634,8 +657,12 @@ final class EntityHeadGeometry {
             try {
                 field.setAccessible(true);
                 return field.get(owner);
-            } catch (final ReflectiveOperationException | RuntimeException ignored) {
+            } catch (final ReflectiveOperationException | RuntimeException error) {
                 // Try another array field.
+                if (!arrayFieldFailureLogged) {
+                    arrayFieldFailureLogged = true;
+                    ConfluxMapMod.LOGGER.debug("Could not read model geometry array field", error);
+                }
             }
         }
         return null;

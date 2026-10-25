@@ -677,8 +677,9 @@ public final class ClientMultiworldService {
                     regions.put(region, RegionFileCodec.decode(
                         input, region.x(), region.z(), layer.type().ordinal()
                     ));
-                } catch (final IOException | RegionFileCodec.RegionFileException ignored) {
+                } catch (final IOException | RegionFileCodec.RegionFileException error) {
                     // Recognition is read-only and best-effort; cache ownership remains with RegionDiskCache.
+                    ConfluxMapMod.LOGGER.warn("Skipping unreadable terrain cache file {}", file, error);
                 }
             }
             candidates.add(new TerrainFingerprintMatcher.Candidate(profile.id(), regions));
