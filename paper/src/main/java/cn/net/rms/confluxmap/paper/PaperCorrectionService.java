@@ -17,6 +17,9 @@ import cn.net.rms.confluxmap.core.net.Proto;
 import cn.net.rms.confluxmap.core.net.SummaryCodec;
 import cn.net.rms.confluxmap.core.predict.FlatBaseline;
 import cn.net.rms.confluxmap.core.util.ChunkRegionSlice;
+import cn.net.rms.confluxmap.server.ProgressivePolicy;
+import cn.net.rms.confluxmap.server.ProgressiveTaskEviction;
+import cn.net.rms.confluxmap.server.RequestBytes;
 import cn.net.rms.confluxmap.server.LiveChunkSummaryCache;
 import cn.net.rms.confluxmap.server.ChunkColumnSummarizer;
 import cn.net.rms.confluxmap.server.CorrectionSlotQueue;
@@ -42,9 +45,6 @@ import org.slf4j.Logger;
 
 /** Paper transport-neutral correction engine with asynchronous, non-generating Anvil reads. */
 final class PaperCorrectionService implements AutoCloseable {
-    private static final int PROGRESSIVE_MIN_LOD = 3;
-    private static final int PROGRESSIVE_MAX_ACTIVE_TILES = 24;
-    private static final long PROGRESSIVE_IDLE_TTL_NANOS = 30_000_000_000L;
 
     interface MessageSender {
         void send(Message message);
@@ -232,25 +232,24 @@ final class PaperCorrectionService implements AutoCloseable {
         invalidations.acknowledge(playerId, request);
         regionInvalidations.acknowledge(playerId, request);
         liveDemand.nominate(request, now);
-        final int itemCount = request.tiles().size();
-        final int perItemBytes = itemCount == 0 ? 0 : Math.max(0, requestBytes) / itemCount;
-        int remainingBytes = itemCount == 0 ? 0 : Math.max(0, requestBytes) % itemCount;
+        final int[] itemBytes = RequestBytes.spread(requestBytes, request.tiles().size());
+        int tileIndex = 0;
         int overflow = 0;
         for (final MapViewReqC2S.TileReq tile : request.tiles()) {
-            final int itemBytes = perItemBytes + (remainingBytes-- > 0 ? 1 : 0);
+            final int tileRequestBytes = itemBytes[tileIndex++];
             final TileQueueKey key = new TileQueueKey(
                 request.dimIndex(), request.lod(), tile.tileX(), tile.tileZ(), forceAbsolute
             );
-            if (request.lod() >= PROGRESSIVE_MIN_LOD) {
+            if (request.lod() >= ProgressivePolicy.MIN_LOD) {
                 if (!channel.tiles.enqueueCompleted(key, () -> {
                     try {
-                        return progressiveTile(request, tile, now, itemBytes, forceAbsolute);
+                        return progressiveTile(request, tile, now, tileRequestBytes, forceAbsolute);
                     } catch (final RuntimeException e) {
                         logger.warn(
                             "Paper progressive correction tile {},{} at LOD {} failed",
                             tile.tileX(), tile.tileZ(), request.lod(), e
                         );
-                        return unavailableTile(request, tile, now, itemBytes);
+                        return unavailableTile(request, tile, now, tileRequestBytes);
                     }
                 })) {
                     overflow++;
@@ -259,13 +258,13 @@ final class PaperCorrectionService implements AutoCloseable {
             }
             if (!channel.tiles.enqueue(key, () -> {
                 try {
-                    return buildTile(request, tile, now, itemBytes, forceAbsolute);
+                    return buildTile(request, tile, now, tileRequestBytes, forceAbsolute);
                 } catch (final RuntimeException e) {
                     logger.warn(
                         "Paper correction tile {},{} at LOD {} failed",
                         tile.tileX(), tile.tileZ(), request.lod(), e
                     );
-                    return unavailableTile(request, tile, now, itemBytes);
+                    return unavailableTile(request, tile, now, tileRequestBytes);
                 }
             })) {
                 overflow++;
@@ -320,25 +319,25 @@ final class PaperCorrectionService implements AutoCloseable {
         }
         regionInvalidations.acknowledge(playerId, request);
         liveDemand.nominate(request, now);
-        final int perItemBytes = Math.max(0, requestBytes) / request.regions().size();
-        int remainingBytes = Math.max(0, requestBytes) % request.regions().size();
+        final int[] itemBytes = RequestBytes.spread(requestBytes, request.regions().size());
+        int regionIndex = 0;
         int overflow = 0;
         for (final MapRegionViewReqC2S.RegionReq region : request.regions()) {
-            final int itemBytes = perItemBytes + (remainingBytes-- > 0 ? 1 : 0);
+            final int regionRequestBytes = itemBytes[regionIndex++];
             final RegionQueueKey key = new RegionQueueKey(
                 request.dimIndex(), request.lod(), region.slice()
             );
             if (!channel.regions.enqueue(key, () -> {
                 try {
                     return buildRegion(
-                        request, region, now, itemBytes, forceAbsolute, correctionProfile
+                        request, region, now, regionRequestBytes, forceAbsolute, correctionProfile
                     );
                 } catch (final RuntimeException e) {
                     logger.warn(
                         "Paper correction region {},{} at LOD {} failed",
                         region.regionX(), region.regionZ(), request.lod(), e
                     );
-                    return unavailableRegion(request, region, now, itemBytes);
+                    return unavailableRegion(request, region, now, regionRequestBytes);
                 }
             })) {
                 overflow++;
@@ -514,7 +513,7 @@ final class PaperCorrectionService implements AutoCloseable {
         PaperProgressiveTile progressive = progressiveTiles.get(key);
         if (progressive == null) {
             evictProgressive(receivedNanos, true);
-            if (progressiveTiles.size() >= PROGRESSIVE_MAX_ACTIVE_TILES) {
+            if (progressiveTiles.size() >= ProgressivePolicy.MAX_ACTIVE_TILES) {
                 return partialTile(request, tile, receivedNanos, requestBytes);
             }
             progressive = new PaperProgressiveTile(
@@ -773,27 +772,7 @@ final class PaperCorrectionService implements AutoCloseable {
     }
 
     private void evictProgressive(final long nowNanos, final boolean forCapacity) {
-        final Iterator<Map.Entry<ProgressiveKey, PaperProgressiveTile>> iterator =
-            progressiveTiles.entrySet().iterator();
-        while (iterator.hasNext()) {
-            final Map.Entry<ProgressiveKey, PaperProgressiveTile> entry = iterator.next();
-            final ProgressiveKey key = entry.getKey();
-            final PaperProgressiveTile progressive = entry.getValue();
-            final boolean isWatched = watched(key);
-            final boolean expired = !isWatched
-                && nowNanos - progressive.lastRequestedAtNanos()
-                    > PROGRESSIVE_IDLE_TTL_NANOS;
-            final boolean capacityVictim = forCapacity
-                && progressiveTiles.size() >= PROGRESSIVE_MAX_ACTIVE_TILES
-                && progressive.complete() && !isWatched;
-            if (expired || capacityVictim) {
-                progressive.close();
-                iterator.remove();
-            }
-            if (forCapacity && progressiveTiles.size() < PROGRESSIVE_MAX_ACTIVE_TILES) {
-                return;
-            }
-        }
+        ProgressiveTaskEviction.evict(progressiveTiles, nowNanos, forCapacity, this::watched);
     }
 
     private PlayerChannel channel(final UUID playerId, final MessageSender sender) {

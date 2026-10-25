@@ -69,11 +69,8 @@ import net.minecraft.world.chunk.WorldChunk;
  * byte budget never drops tiles.
  */
 public final class RegionSummaryService {
-    private static final int PROGRESSIVE_MIN_LOD = 3;
-    private static final int PROGRESSIVE_MAX_ACTIVE_TILES = 24;
     private static final int PROGRESSIVE_MAX_CHUNKS_OR_REGIONS_PER_TICK = 2_048;
     private static final long PROGRESSIVE_MAX_NANOS_PER_TICK = 4_000_000L;
-    private static final long PROGRESSIVE_IDLE_TTL_NANOS = 30_000_000_000L;
     /** Hard global bound: a worst-case LOD0 page can approach the protocol's 576 KiB body cap. */
     private static final int REGION_PAGE_CACHE_LIMIT = 64;
     private static final int REGION_BASELINE_CACHE_LIMIT = 8;
@@ -356,21 +353,20 @@ public final class RegionSummaryService {
             return;
         }
         final SummaryDiskCache disk = diskFor(server);
-        final int requestTiles = request.tiles().size();
-        final int bytesPerTile = requestTiles == 0 ? 0 : Math.max(0, requestPayloadBytes) / requestTiles;
-        int remainingBytes = requestTiles == 0 ? 0 : Math.max(0, requestPayloadBytes) % requestTiles;
+        final int[] tileRequestBytes = RequestBytes.spread(requestPayloadBytes, request.tiles().size());
+        int tileIndex = 0;
         int overflow = 0;
         for (final MapViewReqC2S.TileReq tile : request.tiles()) {
-            final int tileRequestBytes = bytesPerTile + (remainingBytes-- > 0 ? 1 : 0);
+            final int requestBytes = tileRequestBytes[tileIndex++];
             final TileQueueKey key = new TileQueueKey(
                 request.dimIndex(), request.lod(), tile.tileX(), tile.tileZ(), forceAbsolute
             );
             final TileJob job = new TileJob(
                 request.reqId(), request.dimIndex(), request.lod(), tile.tileX(), tile.tileZ(),
-                tile.sinceRevision(), now, tileRequestBytes, forceAbsolute
+                tile.sinceRevision(), now, requestBytes, forceAbsolute
             );
             final boolean queued;
-            if (request.lod() >= PROGRESSIVE_MIN_LOD) {
+            if (request.lod() >= ProgressivePolicy.MIN_LOD) {
                 queued = channel.tiles.enqueueCompleted(
                     key, () -> progressiveResponse(server, disk, job)
                 );
@@ -469,17 +465,17 @@ public final class RegionSummaryService {
             ));
             return;
         }
+        final int[] regionRequestBytes = RequestBytes.spread(
+            requestPayloadBytes, request.regions().size()
+        );
         int overflow = 0;
-        final int requestRegions = request.regions().size();
-        final int bytesPerRegion = Math.max(0, requestPayloadBytes) / requestRegions;
-        int remainingBytes = Math.max(0, requestPayloadBytes) % requestRegions;
+        int regionIndex = 0;
         synchronized (channel.regionQueue) {
             for (final MapRegionViewReqC2S.RegionReq region : request.regions()) {
-                final int regionRequestBytes = bytesPerRegion
-                    + (remainingBytes-- > 0 ? 1 : 0);
+                final int requestBytes = regionRequestBytes[regionIndex++];
                 final RegionJob job = new RegionJob(
                     request.reqId(), request.dimIndex(), request.lod(), region,
-                    now, regionRequestBytes, forceAbsolute, correctionProfile
+                    now, requestBytes, forceAbsolute, correctionProfile
                 );
                 final RegionJobKey key = new RegionJobKey(
                     request.dimIndex(), request.lod(), region.slice()
@@ -1064,7 +1060,7 @@ public final class RegionSummaryService {
             if (world == null || !config.shareCorrections) {
                 return unavailable(job, ioNanos, computeNanos, buildStartedNanos);
             }
-            if (job.lod() >= PROGRESSIVE_MIN_LOD) {
+            if (job.lod() >= ProgressivePolicy.MIN_LOD) {
                 return progressiveJob(world, disk, job, buildStartedNanos);
             }
             final SummaryTile summary;
@@ -1128,7 +1124,7 @@ public final class RegionSummaryService {
             ProgressiveRegionPatch existing = progressiveTasks.get(key);
             if (existing == null) {
                 evictProgressiveTasks(now, true);
-                if (progressiveTasks.size() >= PROGRESSIVE_MAX_ACTIVE_TILES) {
+                if (progressiveTasks.size() >= ProgressivePolicy.MAX_ACTIVE_TILES) {
                     return EncodedResponse.of(
                         new MapPatchS2C(
                             job.reqId(), job.dimIndex(), job.lod(), job.tileX(), job.tileZ(),
@@ -1300,29 +1296,14 @@ public final class RegionSummaryService {
 
     /** Removes idle tasks; under capacity pressure, completed entries are safe to recreate. */
     private void evictProgressiveTasks(final long nowNanos, final boolean forCapacity) {
-        final Iterator<Map.Entry<ProgressiveKey, ProgressiveRegionPatch>> iterator =
-            progressiveTasks.entrySet().iterator();
-        while (iterator.hasNext()) {
-            final Map.Entry<ProgressiveKey, ProgressiveRegionPatch> entry = iterator.next();
-            final ProgressiveKey key = entry.getKey();
-            final ProgressiveRegionPatch task = entry.getValue();
-            final MinecraftServer taskServer = key.world().getServer();
-            // A world unloaded mid-session reports a null server; nobody can still watch it,
-            // so it must count as unwatched instead of NPE-ing the eviction scan.
-            final boolean watched = taskServer != null && watched(taskServer, key);
-            final boolean expired = !watched
-                && nowNanos - task.lastRequestedAtNanos() > PROGRESSIVE_IDLE_TTL_NANOS;
-            final boolean capacityVictim = forCapacity
-                && progressiveTasks.size() >= PROGRESSIVE_MAX_ACTIVE_TILES
-                && task.complete() && !watched;
-            if (expired || capacityVictim) {
-                task.close();
-                iterator.remove();
-            }
-            if (forCapacity && progressiveTasks.size() < PROGRESSIVE_MAX_ACTIVE_TILES) {
-                return;
-            }
-        }
+        ProgressiveTaskEviction.evict(progressiveTasks, nowNanos, forCapacity, this::watchedForEviction);
+    }
+
+    private boolean watchedForEviction(final ProgressiveKey key) {
+        // A world unloaded mid-session reports a null server; nobody can still watch it,
+        // so it must count as unwatched instead of NPE-ing the eviction scan.
+        final MinecraftServer taskServer = key.world().getServer();
+        return taskServer != null && watched(taskServer, key);
     }
 
     private static EncodedResponse unavailable(
@@ -1551,7 +1532,7 @@ public final class RegionSummaryService {
             while (iterator.hasNext()) {
                 final RegionPageTask task = iterator.next().getValue();
                 final boolean expired = nowNanos - task.lastRequestedAtNanos
-                    > PROGRESSIVE_IDLE_TTL_NANOS;
+                    > ProgressivePolicy.IDLE_TTL_NANOS;
                 final boolean overLimit = regionPageTasks.size() > REGION_PAGE_CACHE_LIMIT
                     && task.future.isDone();
                 if (expired || overLimit) {
@@ -1571,7 +1552,7 @@ public final class RegionSummaryService {
         while (regionPageTasks.size() >= REGION_PAGE_CACHE_LIMIT && iterator.hasNext()) {
             final RegionPageTask task = iterator.next().getValue();
             final boolean expired = nowNanos - task.lastRequestedAtNanos
-                > PROGRESSIVE_IDLE_TTL_NANOS;
+                > ProgressivePolicy.IDLE_TTL_NANOS;
             if (expired || task.future.isDone()) {
                 task.future.cancel(false);
                 iterator.remove();
@@ -1586,7 +1567,7 @@ public final class RegionSummaryService {
             while (iterator.hasNext()) {
                 final RegionBaselineTask task = iterator.next().getValue();
                 final boolean expired = nowNanos - task.lastRequestedAtNanos
-                    > PROGRESSIVE_IDLE_TTL_NANOS;
+                    > ProgressivePolicy.IDLE_TTL_NANOS;
                 final boolean overLimit = regionBaselineTasks.size() > REGION_BASELINE_CACHE_LIMIT
                     && task.future.isDone();
                 if (expired || overLimit) {
@@ -1606,7 +1587,7 @@ public final class RegionSummaryService {
         while (regionBaselineTasks.size() >= REGION_BASELINE_CACHE_LIMIT && iterator.hasNext()) {
             final RegionBaselineTask task = iterator.next().getValue();
             final boolean expired = nowNanos - task.lastRequestedAtNanos
-                > PROGRESSIVE_IDLE_TTL_NANOS;
+                > ProgressivePolicy.IDLE_TTL_NANOS;
             if (expired || task.future.isDone()) {
                 task.future.cancel(false);
                 iterator.remove();

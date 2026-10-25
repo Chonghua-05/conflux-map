@@ -21,6 +21,8 @@ import cn.net.rms.confluxmap.server.shared.SharedWaypointIo;
 import cn.net.rms.confluxmap.server.shared.SharedWaypointService;
 import cn.net.rms.confluxmap.server.shared.SharedWaypointStore;
 import cn.net.rms.confluxmap.server.shared.SharedWaypointValidator;
+import cn.net.rms.confluxmap.server.LiveCapturePolicy;
+import cn.net.rms.confluxmap.server.ServerConfigIo;
 import java.io.IOException;
 import java.nio.file.Path;
 import java.time.Clock;
@@ -58,7 +60,6 @@ import org.bukkit.scheduler.BukkitTask;
 
 /** Owns one Paper server's companion lifecycle and platform adapters. */
 final class PaperCompanion implements Listener {
-    private static final int MAX_LIVE_INSPECTIONS_PER_TICK = 128;
     /**
      * Unloaded-chunk overlays are rechecked once a second and dropped 30s after unload even if
      * the region file never moves: a chunk that unloads clean is never written, so its mtime
@@ -84,7 +85,7 @@ final class PaperCompanion implements Listener {
     private static final Logger SHARED_LOGGER = LogManager.getLogger("ConfluxMap-Paper");
 
     private final ConfluxMapPaperPlugin plugin;
-    private final PaperServerConfigIo configIo;
+    private final ServerConfigIo configIo;
     private final PaperWorldDirectory worlds = new PaperWorldDirectory();
     private final Map<ChunkKey, Chunk> liveChunks = new LinkedHashMap<>();
     private final ExecutorService captureWorkers = new ThreadPoolExecutor(
@@ -151,7 +152,7 @@ final class PaperCompanion implements Listener {
 
     PaperCompanion(
         final ConfluxMapPaperPlugin plugin,
-        final PaperServerConfigIo configIo
+        final ServerConfigIo configIo
     ) {
         this.plugin = plugin;
         this.configIo = configIo;
@@ -487,7 +488,7 @@ final class PaperCompanion implements Listener {
         }
         final boolean previous = config.shareWaypoints;
         config.shareWaypoints = true;
-        if (!configIo.save(config)) {
+        if (!configIo.saveAtomically(config)) {
             config.shareWaypoints = previous;
             return WaypointToggleResult.SAVE_FAILED;
         }
@@ -499,7 +500,7 @@ final class PaperCompanion implements Listener {
     synchronized WaypointToggleResult disableSharedWaypoints() {
         final boolean wasEnabled = config.shareWaypoints || sharedWaypointsEnabled();
         config.shareWaypoints = false;
-        final boolean saved = configIo.save(config);
+        final boolean saved = configIo.saveAtomically(config);
         if (!wasEnabled) {
             return saved
                 ? WaypointToggleResult.ALREADY_DISABLED
@@ -551,14 +552,11 @@ final class PaperCompanion implements Listener {
     }
 
     private void refreshLiveChunks() {
-        final int configuredPerTick = Math.max(
-            1, (config.maxChunkSummariesPerSecond + 19) / 20
-        );
-        final int captureBudget = Math.min(
-            PaperLiveCapturePolicy.MAX_LIVE_SUMMARIES_PER_TICK, configuredPerTick
+        final int captureBudget = LiveCapturePolicy.perTickCaptures(
+            config.maxChunkSummariesPerSecond
         );
         final int available = liveChunks.size();
-        final int inspectionBudget = Math.min(available, MAX_LIVE_INSPECTIONS_PER_TICK);
+        final int inspectionBudget = Math.min(available, LiveCapturePolicy.MAX_LIVE_INSPECTIONS_PER_TICK);
         final long nowNanos = System.nanoTime();
         int captured = 0;
         for (int inspected = 0;

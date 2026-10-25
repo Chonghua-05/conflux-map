@@ -1,5 +1,6 @@
 package cn.net.rms.confluxmap.paper;
 
+
 /**
  * Pure decisions and budgets for the Paper live-chunk capture pipeline. Paper has no
  * block-dirty signal (the adapter is pure Bukkit API), so captures are demand-gated and
@@ -9,12 +10,6 @@ package cn.net.rms.confluxmap.paper;
 final class PaperLiveCapturePolicy {
     /** Freshness target for recaptures: a watched chunk is refreshed at most this often. */
     static final int RECAPTURE_INTERVAL_TICKS = 100;
-
-    /**
-     * Snapshot acquisition is the only main-thread cost per capture (summaries run on workers),
-     * so this bounds the per-tick main-thread spend instead of total capture throughput.
-     */
-    static final int MAX_LIVE_SUMMARIES_PER_TICK = 8;
 
     /** Hard cap on snapshots handed to workers before backpressure skips further captures. */
     static final int MAX_IN_FLIGHT_CAPTURES = 64;

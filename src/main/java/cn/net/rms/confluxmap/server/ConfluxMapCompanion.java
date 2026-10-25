@@ -64,7 +64,7 @@ public final class ConfluxMapCompanion {
     public ConfluxMapCompanion(final ServerConfigIo configIo) {
         this.configIo = configIo;
         this.worldIds = new WorldIds();
-        this.config = ServerConfigIo.loadDefault();
+        this.config = new ServerConfig();
         this.networking = new ServerNetworking(this);
         this.sharedWaypointNetworking = new SharedWaypointNetworking(this);
         this.updateCheck = new UpdateCheckService(

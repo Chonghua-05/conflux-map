@@ -7,15 +7,11 @@ import cn.net.rms.confluxmap.nativepredict.NativeChunkNbtScanner;
 import java.io.ByteArrayInputStream;
 import java.io.DataInputStream;
 import java.io.IOException;
-import java.io.InputStream;
 import java.nio.ByteBuffer;
 import java.nio.channels.FileChannel;
-import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.StandardOpenOption;
 import java.util.Arrays;
-import java.util.zip.GZIPInputStream;
-import java.util.zip.InflaterInputStream;
 //#if MC>=12005
 //$$ import net.jpountz.lz4.LZ4BlockInputStream;
 //#endif
@@ -24,27 +20,15 @@ import net.minecraft.nbt.NbtIo;
 
 /** Reads one Anvil file once and produces all four 16x16-chunk summary regions it contains. */
 final class AnvilMcaScanner {
-    private static final int SECTOR_BYTES = 4_096;
-    private static final int LOCATION_BYTES = SECTOR_BYTES;
-    private static final int CHUNKS_PER_SIDE = 32;
+    private static final int CHUNKS_PER_SIDE = AnvilRegionReader.CHUNKS_PER_SIDE;
     private static final int CHUNKS_PER_MCA = CHUNKS_PER_SIDE * CHUNKS_PER_SIDE;
     private static final int SUMMARY_REGIONS_PER_SIDE = 2;
-    private static final int MAX_INLINE_CHUNK_BYTES = 255 * SECTOR_BYTES - Integer.BYTES;
-    private static final int MAX_DECOMPRESSED_CHUNK_BYTES = 64 * 1_024 * 1_024;
+    //#if MC>=12005
+    //$$ private static final AnvilRegionReader.Lz4Stream LZ4 = LZ4BlockInputStream::new;
+    //#else
+    private static final AnvilRegionReader.Lz4Stream LZ4 = null;
+    //#endif
     private final boolean nativeEnabled;
-
-    private record ChunkBytes(byte[] buffer, int length) {
-    }
-
-    private static final class ChunkBuffer extends java.io.ByteArrayOutputStream {
-        ChunkBuffer() {
-            super(32 * 1_024);
-        }
-
-        ChunkBytes result() {
-            return new ChunkBytes(buf, count);
-        }
-    }
 
     AnvilMcaScanner() {
         this(true);
@@ -115,11 +99,10 @@ final class AnvilMcaScanner {
         }
 
         try (FileChannel file = FileChannel.open(path, StandardOpenOption.READ)) {
-            final ByteBuffer locations = ByteBuffer.allocate(LOCATION_BYTES);
-            if (!readFully(file, locations, 0L)) {
+            final ByteBuffer locations = AnvilRegionReader.readLocationTable(file);
+            if (locations == null) {
                 return null;
             }
-            locations.flip();
             final long fileSize = file.size();
             for (int mcaChunkIndex = 0; mcaChunkIndex < CHUNKS_PER_MCA; mcaChunkIndex++) {
                 final int location = locations.getInt();
@@ -131,11 +114,9 @@ final class AnvilMcaScanner {
                 if (slice != null && !contains(slice, mcaX, mcaZ, localX, localZ)) {
                     continue;
                 }
-                final int sectorOffset = location >>> 8;
-                final int sectorCount = location & 0xFF;
                 final SummaryCodec.SampledChunk summary = scanChunk(
                     file, fileSize, path.getParent(), mcaX, mcaZ, mcaChunkIndex,
-                    sectorOffset, sectorCount, lod, summarizer
+                    location, lod, summarizer
                 );
                 if (summary == null) {
                     continue;
@@ -194,138 +175,35 @@ final class AnvilMcaScanner {
         final int mcaX,
         final int mcaZ,
         final int mcaChunkIndex,
-        final int sectorOffset,
-        final int sectorCount,
+        final int location,
         final int lod,
         final ChunkSummarizer summarizer
     ) {
-        if (sectorOffset < 2 || sectorCount <= 0) {
-            return null;
-        }
-        final long byteOffset = (long) sectorOffset * SECTOR_BYTES;
-        final long allocatedEnd = byteOffset + (long) sectorCount * SECTOR_BYTES;
-        if (allocatedEnd > fileSize || byteOffset + Integer.BYTES + 1L > fileSize) {
-            return null;
-        }
-        final ByteBuffer prefix = ByteBuffer.allocate(Integer.BYTES + 1);
+        final int chunkX = mcaX * CHUNKS_PER_SIDE + mcaChunkIndex % CHUNKS_PER_SIDE;
+        final int chunkZ = mcaZ * CHUNKS_PER_SIDE + mcaChunkIndex / CHUNKS_PER_SIDE;
         try {
-            if (!readFully(file, prefix, byteOffset)) {
+            final byte[] rawNbt = AnvilRegionReader.readChunkNbt(
+                file, fileSize, regionDirectory, chunkX, chunkZ, location, LZ4
+            );
+            if (rawNbt == null) {
                 return null;
             }
-            prefix.flip();
-            final int length = prefix.getInt();
-            final int versionByte = prefix.get() & 0xFF;
-            final boolean external = (versionByte & 0x80) != 0;
-            final int version = versionByte & 0x7F;
-            if (length <= 0 || length > MAX_INLINE_CHUNK_BYTES
-                || (!external && length > sectorCount * SECTOR_BYTES - Integer.BYTES)) {
-                return null;
+            final NativeChunkNbtScanner.Chunk nativeChunk = nativeEnabled
+                ? NativeChunkNbtScanner.scan(rawNbt, rawNbt.length, lod)
+                : null;
+            if (nativeChunk != null) {
+                return summarizer.summarizeNative(nativeChunk);
             }
-
-            final InputStream raw;
-            if (external) {
-                final int localX = mcaChunkIndex % CHUNKS_PER_SIDE;
-                final int localZ = mcaChunkIndex / CHUNKS_PER_SIDE;
-                final int chunkX = mcaX * CHUNKS_PER_SIDE + localX;
-                final int chunkZ = mcaZ * CHUNKS_PER_SIDE + localZ;
-                raw = Files.newInputStream(regionDirectory.resolve("c." + chunkX + "." + chunkZ + ".mcc"));
-            } else {
-                final byte[] payload = new byte[length - 1];
-                final ByteBuffer bytes = ByteBuffer.wrap(payload);
-                if (!readFully(file, bytes, byteOffset + Integer.BYTES + 1L)) {
-                    return null;
-                }
-                raw = new ByteArrayInputStream(payload);
-            }
-            try (InputStream decompressed = decompress(raw, version)) {
-                final ChunkBytes rawNbt = readChunkBytes(decompressed);
-                final NativeChunkNbtScanner.Chunk nativeChunk = nativeEnabled
-                    ? NativeChunkNbtScanner.scan(rawNbt.buffer(), rawNbt.length(), lod)
-                    : null;
-                if (nativeChunk != null) {
-                    return summarizer.summarizeNative(nativeChunk);
-                }
-                final NbtCompound nbt = NbtIo.read(
-                    new DataInputStream(new ByteArrayInputStream(
-                        rawNbt.buffer(), 0, rawNbt.length()
-                    ))
-                );
-                return nbt == null ? null : summarizer.summarizeForLod(nbt, lod);
-            }
+            final NbtCompound nbt = NbtIo.read(new DataInputStream(new ByteArrayInputStream(rawNbt)));
+            return nbt == null ? null : summarizer.summarizeForLod(nbt, lod);
         } catch (final IOException e) {
             // Corrupt or concurrently modified Anvil files are routine; stay quiet and fall back.
             return null;
         } catch (final RuntimeException e) {
-            final int chunkX = mcaX * CHUNKS_PER_SIDE + mcaChunkIndex % CHUNKS_PER_SIDE;
-            final int chunkZ = mcaZ * CHUNKS_PER_SIDE + mcaChunkIndex / CHUNKS_PER_SIDE;
             ConfluxMapMod.LOGGER.debug(
                 "Unexpected Anvil chunk scan failure for chunk {},{} in {}",
                 chunkX, chunkZ, regionDirectory, e);
             return null;
         }
-    }
-
-    private static InputStream decompress(final InputStream input, final int version) throws IOException {
-        try {
-            if (version == 1) {
-                return new GZIPInputStream(input);
-            }
-            if (version == 2) {
-                return new InflaterInputStream(input);
-            }
-            if (version == 3) {
-                return input;
-            }
-            //#if MC>=12005
-            //$$ if (version == 4) {
-            //$$     return new LZ4BlockInputStream(input);
-            //$$ }
-            //#endif
-            throw new IOException("unsupported Anvil compression version " + version);
-        } catch (final IOException | RuntimeException e) {
-            try {
-                input.close();
-            } catch (final IOException ignored) {
-                // Preserve the decompressor construction failure.
-            }
-            throw e;
-        }
-    }
-
-    private static ChunkBytes readChunkBytes(final InputStream input) throws IOException {
-        final ChunkBuffer output = new ChunkBuffer();
-        final byte[] buffer = new byte[16 * 1_024];
-        int total = 0;
-        int read;
-        while ((read = input.read(buffer)) >= 0) {
-            if (read == 0) {
-                continue;
-            }
-            total += read;
-            if (total > MAX_DECOMPRESSED_CHUNK_BYTES) {
-                throw new IOException("decompressed chunk NBT exceeds safety cap");
-            }
-            output.write(buffer, 0, read);
-        }
-        return output.result();
-    }
-
-    private static boolean readFully(
-        final FileChannel file,
-        final ByteBuffer target,
-        final long offset
-    ) throws IOException {
-        long position = offset;
-        while (target.hasRemaining()) {
-            final int read = file.read(target, position);
-            if (read < 0) {
-                return false;
-            }
-            if (read == 0) {
-                continue;
-            }
-            position += read;
-        }
-        return true;
     }
 }

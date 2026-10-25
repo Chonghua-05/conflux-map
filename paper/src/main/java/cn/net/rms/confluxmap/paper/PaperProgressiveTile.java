@@ -3,6 +3,8 @@ package cn.net.rms.confluxmap.paper;
 import cn.net.rms.confluxmap.core.net.PatchCodec;
 import cn.net.rms.confluxmap.core.net.Proto;
 import cn.net.rms.confluxmap.core.net.SummaryCodec;
+import cn.net.rms.confluxmap.server.ProgressivePolicy;
+import cn.net.rms.confluxmap.server.ProgressiveTask;
 import cn.net.rms.confluxmap.server.PatchBuilder;
 import cn.net.rms.confluxmap.server.SummaryView;
 import cn.net.rms.confluxmap.server.SyncPerformanceMonitor;
@@ -20,7 +22,7 @@ import java.util.concurrent.atomic.AtomicLong;
 import java.util.function.Function;
 
 /** Bounded reusable LOD-3/4 Paper scan with Fabric-compatible partial responses. */
-final class PaperProgressiveTile implements AutoCloseable {
+final class PaperProgressiveTile implements ProgressiveTask {
     @FunctionalInterface
     interface RegionReader {
         SummaryCodec.SampledRegion read(int regionX, int regionZ);
@@ -53,7 +55,6 @@ final class PaperProgressiveTile implements AutoCloseable {
     }
 
     private static final byte[] EMPTY_PATCH = PatchCodec.encode(List.of());
-    private static final int MAX_REVISION_VARIANTS = 8;
     private static final AtomicLong NEXT_WORK_ID = new AtomicLong();
 
     private final Path regionDirectory;
@@ -114,11 +115,13 @@ final class PaperProgressiveTile implements AutoCloseable {
         }
     }
 
-    synchronized long lastRequestedAtNanos() {
+    @Override
+    public synchronized long lastRequestedAtNanos() {
         return lastRequestedAtNanos;
     }
 
-    synchronized boolean complete() {
+    @Override
+    public synchronized boolean complete() {
         return completeSummary != null;
     }
 
@@ -154,7 +157,7 @@ final class PaperProgressiveTile implements AutoCloseable {
         builds.entrySet().removeIf(entry -> entry.getValue().isCancelled());
         CompletableFuture<PatchBuilder.Result> build = builds.get(sinceRevision);
         if (build == null) {
-            if (builds.size() >= MAX_REVISION_VARIANTS) {
+            if (builds.size() >= ProgressivePolicy.MAX_REVISION_VARIANTS) {
                 return partial();
             }
             final PaperSampledSummaryTile summary = completeSummary;

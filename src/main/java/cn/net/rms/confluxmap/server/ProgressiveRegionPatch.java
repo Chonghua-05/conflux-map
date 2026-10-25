@@ -20,9 +20,8 @@ import net.minecraft.nbt.NbtCompound;
 import net.minecraft.util.math.ChunkPos;
 
 /** One reusable, freshness-checked progressive correction scan for an LOD-3/4 tile. */
-final class ProgressiveRegionPatch {
+final class ProgressiveRegionPatch implements ProgressiveTask {
     static final int PUBLISH_CHUNK_INTERVAL = 2_048;
-    private static final int MAX_REVISION_VARIANTS = 8;
     private static final byte[] EMPTY_PATCH_BODY = PatchCodec.encode(java.util.List.of());
     private static final AtomicLong NEXT_WORK_ID = new AtomicLong();
 
@@ -255,11 +254,13 @@ final class ProgressiveRegionPatch {
         scheduleBaseline();
     }
 
-    synchronized long lastRequestedAtNanos() {
+    @Override
+    public synchronized long lastRequestedAtNanos() {
         return lastRequestedAtNanos;
     }
 
-    synchronized boolean complete() {
+    @Override
+    public synchronized boolean complete() {
         return state == State.COMPLETE;
     }
 
@@ -351,7 +352,7 @@ final class ProgressiveRegionPatch {
         }
         trimBuildVariants(sinceRevision);
         BuildSlot slot = builds.get(sinceRevision);
-        if (slot == null && builds.size() >= MAX_REVISION_VARIANTS) {
+        if (slot == null && builds.size() >= ProgressivePolicy.MAX_REVISION_VARIANTS) {
             return new Response(Proto.PATCH_MODE_PARTIAL, 0L, published.presence(), EMPTY_PATCH_BODY);
         }
         if (slot == null) {
@@ -368,7 +369,8 @@ final class ProgressiveRegionPatch {
         return new Response(Proto.PATCH_MODE_PARTIAL, 0L, published.presence(), EMPTY_PATCH_BODY);
     }
 
-    synchronized void close() {
+    @Override
+    public synchronized void close() {
         closed = true;
         builds.clear();
         for (final CompletableFuture<AnvilMcaScanner.Scan> scan : mcaScans.values()) {
@@ -477,11 +479,11 @@ final class ProgressiveRegionPatch {
     }
 
     private void trimBuildVariants(final long keepRevision) {
-        if (builds.size() <= MAX_REVISION_VARIANTS) {
+        if (builds.size() <= ProgressivePolicy.MAX_REVISION_VARIANTS) {
             return;
         }
         final Iterator<Map.Entry<Long, BuildSlot>> entries = builds.entrySet().iterator();
-        while (builds.size() > MAX_REVISION_VARIANTS && entries.hasNext()) {
+        while (builds.size() > ProgressivePolicy.MAX_REVISION_VARIANTS && entries.hasNext()) {
             final Map.Entry<Long, BuildSlot> entry = entries.next();
             if (entry.getKey() != keepRevision && !entry.getValue().building) {
                 entries.remove();
