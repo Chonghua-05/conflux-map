@@ -13,7 +13,7 @@ final class MapRegionSelectionTest {
     void selectionDrawsBetweenMarkersAndMeasureOverlay() throws IOException {
         final String source = source();
         final int start = source.indexOf("protected void renderContents(");
-        final int end = source.indexOf("    private void drawExportSelection", start);
+        final int end = source.indexOf("    private void drawRegionSelection(", start);
 
         assertTrue(start >= 0 && end > start, "renderContents must be present");
         final String render = source.substring(start, end);
@@ -29,14 +29,14 @@ final class MapRegionSelectionTest {
     void rightPressArmsSelectionInsteadOfOpeningTheMenu() throws IOException {
         final String source = source();
         final int start = source.indexOf("public boolean mouseClicked");
-        final int end = source.indexOf("    private boolean beginAnnotationPointer", start);
+        final int end = source.indexOf("    public boolean mouseReleased", start);
 
         assertTrue(start >= 0 && end > start, "mouseClicked must be present");
         final String clicks = source.substring(start, end);
         assertTrue(clicks.indexOf("regionSelection = null;") < clicks.indexOf("selectTargetDropdownOption"),
             "any press must clear the committed selection first"
         );
-        final int defaultBranch = clicks.indexOf("if (button == MouseButtons.LEFT && beginAnnotationPointer");
+        final int defaultBranch = clicks.indexOf("if (button == MouseButtons.LEFT && annotations.beginAnnotationPointer");
         final String defaultClicks = clicks.substring(defaultBranch);
         assertTrue(defaultClicks.contains("regionSelectPress = true;"),
             "the plain-map right press must arm the region selection"
@@ -50,7 +50,7 @@ final class MapRegionSelectionTest {
     void rightReleaseCommitsASnappedSelectionOrOpensTheMenu() throws IOException {
         final String source = source();
         final int start = source.indexOf("public boolean mouseReleased");
-        final int end = source.indexOf("    private void commitAnnotationPointer", start);
+        final int end = source.indexOf("    public boolean mouseDragged", start);
 
         assertTrue(start >= 0 && end > start, "mouseReleased must be present");
         final String releases = source.substring(start, end);

@@ -31,7 +31,7 @@ class FullscreenMapLocationMenuTest {
         )).replace("\r\n", "\n");
         final String occlusion = between(
             source,
-            "private boolean mapOverlayIntersectsUi(\n        final float left",
+            "boolean mapOverlayIntersectsUi(\n        final float left",
             "    private static boolean intersects"
         );
 
@@ -40,14 +40,14 @@ class FullscreenMapLocationMenuTest {
             "the location menu must cover map overlays instead of suppressing them"
         );
         assertTrue(
-            occlusion.contains("locationActionTooltips.containsKey(widget)"),
+            occlusion.contains("locationMenu.ownsTooltipWidget(widget)"),
             "location-menu buttons must be excluded from generic widget avoidance"
         );
 
         final String render = between(
             source,
             "protected void renderContents(",
-            "    private void drawExportSelection"
+            "    private void drawRegionSelection("
         );
         final int menu = render.indexOf("drawLocationMenu(draw);");
         assertTrue(render.indexOf("drawStructures(draw, mouseX, mouseY);") < menu);
@@ -449,15 +449,15 @@ class FullscreenMapLocationMenuTest {
             "the pane must keep text focus off the search field while its menu is open"
         );
 
-        final String fullscreen = Files.readString(root.resolve(
-            "src/main/java/cn/net/rms/confluxmap/mc/ui/screen/FullscreenMapScreen.java"
+        final String menuController = Files.readString(root.resolve(
+            "src/main/java/cn/net/rms/confluxmap/mc/ui/screen/MapLocationMenuController.java"
         )).replace("\r\n", "\n");
         assertTrue(
-            fullscreen.contains("FullscreenMapLocationMenu.actionForHotkey(locationMenuSpecs, keyCode)"),
+            menuController.contains("FullscreenMapLocationMenu.actionForHotkey(locationMenuSpecs, keyCode)"),
             "the fullscreen map must resolve shortcuts against its live button list"
         );
         assertTrue(
-            fullscreen.contains("FullscreenMapLocationMenu.drawHotkeyHints("),
+            menuController.contains("FullscreenMapLocationMenu.drawHotkeyHints("),
             "the fullscreen map must draw the digit hints over its menu buttons"
         );
 

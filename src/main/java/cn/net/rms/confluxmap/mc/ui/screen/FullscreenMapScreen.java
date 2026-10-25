@@ -132,6 +132,7 @@ import net.minecraft.client.MinecraftClient;
 //#endif
 import net.minecraft.client.gui.screen.Screen;
 import net.minecraft.client.gui.widget.ButtonWidget;
+import net.minecraft.client.font.TextRenderer;
 import net.minecraft.client.gui.widget.ClickableWidget;
 import net.minecraft.client.option.KeyBinding;
 import net.minecraft.client.render.GameRenderer;
@@ -159,27 +160,9 @@ import net.minecraft.util.math.MathHelper;
  * pyramid {@link TileService} composes in core/.
  *
  * <p>Does not call {@link TileTextureManager#beginFrame()} itself - see the
- * javadoc on {@code MinimapHudRenderer.render} for why that would double it up.
+ * javadoc on {@code MinimapTilePainter.beginFrame} for why that would double it up.
  */
 public final class FullscreenMapScreen extends ConfluxScreen {
-    private enum TargetSelector { WORLD, DIMENSION }
-
-    private record TargetDropdown(
-        int x,
-        int y,
-        int width,
-        int visibleRows,
-        int optionCount
-    ) {
-        int height() {
-            return visibleRows * TARGET_DROPDOWN_ROW_HEIGHT;
-        }
-
-        boolean contains(final double mouseX, final double mouseY) {
-            return mouseX >= x && mouseX < x + width
-                && mouseY >= y && mouseY < y + height();
-        }
-    }
 
     private static final double MIN_SCALE = 0.25;
     private static final double MAX_SCALE = 16.0;
@@ -187,16 +170,10 @@ public final class FullscreenMapScreen extends ConfluxScreen {
     private static final double ZOOM_STEP = 1.26;
     private static final int DEFAULT_CANDIDATE_WAYPOINT_Y = 64;
 
-    private static final int MARGIN = 6;
-    private static final int CONTROL_SIZE = 22;
+    static final int MARGIN = 6;
+    static final int CONTROL_SIZE = 22;
     private static final int CONTROL_ICON_SIZE = 16;
-    private static final int CONTROL_GAP = 3;
-    private static final int TARGET_SELECTOR_WIDTH = 128;
-    private static final int COMPACT_TARGET_SELECTOR_HEIGHT = 16;
-    private static final int RESOURCE_PACK_TARGET_SELECTOR_HEIGHT = 20;
-    private static final int TARGET_SELECTOR_GAP = 4;
-    private static final int TARGET_DROPDOWN_ROW_HEIGHT = 18;
-    private static final int TARGET_DROPDOWN_MAX_ROWS = 8;
+    static final int CONTROL_GAP = 3;
     private static final Identifier VIEW_GROUP_ICON = Ids.of(
         "confluxmap", "textures/gui/group_view.png"
     );
@@ -236,73 +213,18 @@ public final class FullscreenMapScreen extends ConfluxScreen {
     private static final Identifier WORLD_PROFILE_ICON = Ids.of(
         "confluxmap", "textures/gui/world_profile.png"
     );
-    private static final Identifier ANNOTATION_PERSISTENCE_ICON = Ids.of(
-        "confluxmap", "textures/gui/annotation_persistence.png"
-    );
-    private static final Identifier ANNOTATION_PERSISTENCE_TRANSIENT_ICON = Ids.of(
-        "confluxmap", "textures/gui/annotation_persistence_transient.png"
-    );
-    private static final Identifier ANNOTATION_ERASER_ICON = Ids.of(
-        "confluxmap", "textures/gui/annotation_eraser.png"
-    );
     private static final Identifier ANNOTATION_DRAWING_ICON = Ids.of(
         "confluxmap", "textures/gui/annotation_drawing.png"
     );
-    private static final Identifier ANNOTATION_SELECT_ICON = Ids.of(
-        "confluxmap", "textures/gui/annotation_select.png"
-    );
-    private static final Identifier ANNOTATION_LINE_ICON = Ids.of(
-        "confluxmap", "textures/gui/annotation_line.png"
-    );
-    private static final Identifier ANNOTATION_CIRCLE_ICON = Ids.of(
-        "confluxmap", "textures/gui/annotation_circle.png"
-    );
-    private static final Identifier ANNOTATION_RECTANGLE_ICON = Ids.of(
-        "confluxmap", "textures/gui/annotation_rectangle.png"
-    );
-    private static final Identifier ANNOTATION_FREEHAND_ICON = Ids.of(
-        "confluxmap", "textures/gui/annotation_freehand.png"
-    );
-    private static final Identifier ANNOTATION_LABEL_ICON = Ids.of(
-        "confluxmap", "textures/gui/annotation_label.png"
-    );
-    private static final Identifier ANNOTATION_UNDO_ICON = Ids.of(
-        "confluxmap", "textures/gui/annotation_undo.png"
-    );
-    private static final Identifier ANNOTATION_REDO_ICON = Ids.of(
-        "confluxmap", "textures/gui/annotation_redo.png"
-    );
-    private static final Identifier MEASURE_ICON = Ids.of(
-        "confluxmap", "textures/gui/measure.png"
-    );
-    private static final int TEXT_COLOR = 0xFFFFFFFF;
-    private static final int SYNCING_TEXT_COLOR = 0xFFFFE066;
-    private static final int SYNCED_TEXT_COLOR = 0xFF80E080;
-    private static final int SYNC_FAILED_TEXT_COLOR = 0xFFFF7777;
-    private static final int UPDATE_TEXT_COLOR = 0xFFFFE066;
+    static final int TEXT_COLOR = 0xFFFFFFFF;
     /** Measure overlay: teal line reads over green/brown terrain without clashing with the amber annotation palette. */
-    private static final int MEASURE_LINE_COLOR = 0xFF3FD1C7;
-    private static final int MEASURE_PREVIEW_COLOR = 0x993FD1C7;
-    private static final int MEASURE_VERTEX_COLOR = 0xFFFFFFFF;
-    private static final int MEASURE_TOTAL_COLOR = 0xFFFFE066;
-    private static final float MEASURE_STROKE_WIDTH = 2.0f;
-    private static final float MEASURE_PREVIEW_STROKE_WIDTH = 1.5f;
-    private static final float MEASURE_VERTEX_RADIUS = 3.0f;
-    private static final double MEASURE_LABEL_OFFSET_PX = 9.0;
     /** Region selection: amber stays distinct from the teal measure and blue export overlays. */
     private static final int REGION_SELECT_FILL = 0x26FFE066;
     private static final int REGION_SELECT_BORDER = 0xFFFFE066;
     private static final int REGION_SELECT_LABEL_BACKGROUND = 0xD0181822;
     private static final int REGION_SELECT_LABEL_PADDING = 3;
     private static final int REGION_SELECT_LABEL_LINE_GAP = 2;
-    private static final int BACKGROUND_COLOR = 0xFF101018;
-    private static final int LOAD_STATE_ENTITY_COLOR = 0x7048B85E;
-    private static final int LOAD_STATE_BLOCK_COLOR = 0x70D8A83E;
-    private static final int LOAD_STATE_BORDER_COLOR = 0x704E78C4;
-    private static final int LOAD_STATE_UNLOADED_COLOR = 0x00000000;
-    private static final int LOAD_STATE_OUTLINE_COLOR = 0xA0101018;
-    private static final int LOAD_STATE_LEGEND_BACKGROUND = 0xD0181822;
-    private static final int TEMPORARY_LOCATION_COLOR = 0xFF3498DB;
+    static final int BACKGROUND_COLOR = 0xFF101018;
     private static final int GRID_COLOR = 0x22FFFFFF;
     private static final int PLAYER_MARKER_COLOR = 0xFFFFFFFF;
     private static final double MIN_GRID_SPACING_PX = 8.0;
@@ -319,74 +241,62 @@ public final class FullscreenMapScreen extends ConfluxScreen {
     private static final double HOVER_RADIUS_PX = 6.0;
     private static final double DEFAULT_CREATE_Y = 64.0;
     /** Cursor travel between left-press and left-release below which a hovered marker click edits it, not pans (see {@link #mouseReleased}). */
-    private static final double CLICK_DRAG_TOLERANCE_PX = 4.0;
-    private static final double ANNOTATION_HIT_TOLERANCE_PX = 5.0;
-    private static final int ANNOTATION_CONTROL_SIZE = 20;
-    private static final int ANNOTATION_CONTROL_GAP = 3;
-    private static final int ANNOTATION_MAX_ROWS = 4;
-    private static final int ANNOTATION_COLOR_MENU_COLUMNS = 4;
-    private static final long DOUBLE_CLICK_INTERVAL_MS = 350L;
-    private static final UUID ANNOTATION_DRAFT_ID = new UUID(0L, 0L);
-    private static final int[] ANNOTATION_COLORS = {
-        0xFFE74C3C, 0xFFE67E22, 0xFFF1C40F, 0xFF2ECC71,
-        0xFF1ABC9C, 0xFF3498DB, 0xFF9B59B6, 0xFFECF0F1
-    };
+    static final double CLICK_DRAG_TOLERANCE_PX = 4.0;
     /** Radar markers are ~12px across; cull with enough margin that one straddling the edge doesn't pop. */
     private static final float RADAR_CULL_MARGIN = 8f;
 
     /** Null when MaliLib owns the binding and closes this screen through the shared action handler. */
     private final KeyBinding openMapKey;
-    private final GameBridge gameBridge;
+    final GameBridge gameBridge;
     private final MapWorldService mapWorlds;
     private final TileService tiles;
     private final TileTextureManager textures;
     private final SplitMapBlur embeddedBlur = new SplitMapBlur();
-    private final DaylightModel daylightModel;
-    private final PredictionState predictionState;
-    private final PredictionTileService predictionTiles;
-    private final FullscreenMapViewState viewState;
+    final DaylightModel daylightModel;
+    final PredictionState predictionState;
+    final PredictionTileService predictionTiles;
+    final FullscreenMapViewState viewState;
     private final CustomMarkerService customMarkers;
     /** Guards the public API's map-opened event against the resize re-init of {@link #init()}. */
     private boolean openAnnounced;
-    private final LayerSelector layerSelector;
-    private final WaypointService waypointService;
-    private final AnnotationService annotationService;
-    private final WaypointRenderCatalog waypointRenderCatalog;
-    private final WaypointRenderCatalog archivedWaypointRenderCatalog;
-    private final ConfluxConfig config;
-    private final SharedWaypointClient sharedWaypoints;
-    private final CompanionSession companion;
-    private final ChunkLoadStateClient chunkLoadStates;
+    final LayerSelector layerSelector;
+    final WaypointService waypointService;
+    final AnnotationService annotationService;
+    final WaypointRenderCatalog waypointRenderCatalog;
+    final WaypointRenderCatalog archivedWaypointRenderCatalog;
+    final ConfluxConfig config;
+    final SharedWaypointClient sharedWaypoints;
+    final CompanionSession companion;
+    final ChunkLoadStateClient chunkLoadStates;
     private final EntityRadarScanner radarScanner;
-    private final ServerPlayerRadarState serverPlayerRadar;
+    final ServerPlayerRadarState serverPlayerRadar;
     private final EntityIconManager radarIconManager;
     private final RadarViewRange radarViewRange;
     private final PlayerTrail playerTrail;
-    private final StructureMarkerService structureMarkers;
+    final StructureMarkerService structureMarkers;
     private final PortalService portals;
-    private final UpdateCheckService updateCheck;
-    private final ClientGroundTeleportService groundTeleport;
-    private final ClientMultiworldService clientMultiworld;
-    private final FullscreenMapBrowseService mapBrowser;
-    private final UiResourceTheme uiTheme;
+    final UpdateCheckService updateCheck;
+    final ClientGroundTeleportService groundTeleport;
+    final ClientMultiworldService clientMultiworld;
+    final FullscreenMapBrowseService mapBrowser;
+    final UiResourceTheme uiTheme;
     private InitialFocus initialFocus;
-    private final WaypointHighlightState waypointHighlightState;
-    private final MeasureState measureState;
+    final WaypointHighlightState waypointHighlightState;
 
     /** World point currently at screen center, and blocks-per-pixel; all mutable, panned/zoomed by input. */
-    private double centerX;
-    private double centerZ;
-    private double scale;
-    private SplitMapLayout embeddedLayout;
+    double centerX;
+    double centerZ;
+    double scale;
+    SplitMapLayout embeddedLayout;
 
     /** Recomputed every frame by {@link #drawWaypoints} - the marker nearest the cursor within {@link #HOVER_RADIUS_PX}, or none. */
-    private WaypointRenderEntry hoveredWaypoint;
-    private StructureIndex.Marker hoveredStructure;
+    WaypointRenderEntry hoveredWaypoint;
+    StructureIndex.Marker hoveredStructure;
 
     /** Cursor position at the last left-button press, so {@link #mouseReleased} can tell a click from a pan drag. */
-    private double leftPressX;
-    private double leftPressY;
-    private boolean mapPointerPress;
+    double leftPressX;
+    double leftPressY;
+    boolean mapPointerPress;
     /**
      * Right-button press arms a chunk-snapped region selection instead of opening the location
      * menu: dragging past {@link #CLICK_DRAG_TOLERANCE_PX} starts the rectangle from the anchor
@@ -400,7 +310,13 @@ public final class FullscreenMapScreen extends ConfluxScreen {
     private int regionSelectAnchorX;
     private int regionSelectAnchorZ;
     private MapExportBounds regionSelection;
-    private final FullscreenMapToolPanel toolPanel = new FullscreenMapToolPanel();
+    final FullscreenMapToolPanel toolPanel = new FullscreenMapToolPanel();
+    private final MapTargetSelectors selectors;
+    final MapAnnotationController annotations;
+    final MapLocationMenuController locationMenu;
+    final MapExportSelectionController exportControls;
+    final MapLoadStateOverlay loadStateOverlay;
+    private final MapInfoLabels infoLabels;
     private SharedWaypointAvailability sharedAvailability;
     private MapIconButton viewGroupButton;
     private MapIconButton waypointGroupButton;
@@ -412,58 +328,16 @@ public final class FullscreenMapScreen extends ConfluxScreen {
     private MapIconButton structureSearchButton;
     private MapIconButton displayModeButton;
     private MapIconButton mapExportButton;
-    private ButtonWidget clientWorldButton;
+    ButtonWidget clientWorldButton;
     private ButtonWidget worldSelectorButton;
     private ButtonWidget dimensionSelectorButton;
-    private TargetSelector openTargetSelector;
-    private int targetDropdownScrollOffset;
-    private Map<WorldIdentity, String> targetWorldLabels = Map.of();
-    private List<WorldIdentity> targetWorldOptions = List.of();
-    private List<DimensionId> targetDimensionOptions = List.of();
     private int waypointControlsBottom;
-    private FullscreenMapLocationMenu.Bounds locationMenuBounds;
-    private FullscreenMapLocationMenu.Target locationMenuTarget;
-    private WaypointRenderEntry locationMenuWaypoint;
-    private UUID locationMenuPlayerId;
-    private List<FullscreenMapLocationMenu.ButtonSpec> locationMenuSpecs = List.of();
-    private ServerPlayerRadarState.PlayerView hoveredRadarPlayer;
-    private FullscreenMapLocationMenu.Action pendingLocationAction;
-    private boolean locationMenuDeletePending;
-    private ButtonWidget setWaypointLocationButton;
-    private ButtonWidget editWaypointLocationButton;
-    private ButtonWidget shareLocationButton;
-    private ButtonWidget teleportLocationButton;
-    private String teleportLocationUnavailableKey;
-    private final Map<ButtonWidget, String> annotationTooltips = new LinkedHashMap<>();
-    private final Map<ButtonWidget, String> locationActionTooltips = new LinkedHashMap<>();
-    private final Map<AnnotationTool, ButtonWidget> annotationToolButtons = new EnumMap<>(AnnotationTool.class);
-    private AnnotationToolbarBounds annotationToolbarBounds;
-    private AnnotationToolbarBounds annotationColorMenuBounds;
-    private MapIconButton annotationPersistenceButton;
-    private MapIconButton annotationEraserButton;
-    private ButtonWidget annotationLabelButton;
-    private ButtonWidget annotationUndoButton;
-    private ButtonWidget annotationRedoButton;
-    private ButtonWidget measureButton;
+    ServerPlayerRadarState.PlayerView hoveredRadarPlayer;
+    final Map<ButtonWidget, String> annotationTooltips = new LinkedHashMap<>();
+    AnnotationToolbarBounds annotationToolbarBounds;
+    AnnotationToolbarBounds annotationColorMenuBounds;
     private FullscreenDisplayMode controlsDisplayMode;
-    private boolean annotationColorMenuOpen;
-    private AnnotationTool annotationTool = AnnotationTool.SELECT;
     /** Exclusive with every {@link AnnotationTool}: while on, left-click places measure points instead of drawing. */
-    private boolean measureMode;
-    private AnnotationPersistence newAnnotationPersistence = AnnotationPersistence.PERSISTENT;
-    private int newAnnotationColor = ANNOTATION_COLORS[5];
-    private UUID selectedAnnotationId;
-    private AnnotationDraft annotationDraft;
-    private Annotation movingAnnotation;
-    private boolean annotationPointerPress;
-    private double annotationMoveDx;
-    private double annotationMoveDz;
-    private final Set<UUID> erasingAnnotationIds = new LinkedHashSet<>();
-    private long lastEraserButtonClickMs = Long.MIN_VALUE;
-    private ButtonWidget loadStateDetailButton;
-    private MapExportScreen exportSelectionScreen;
-    private boolean exportSelectionReturnsToForm;
-    private final MapExportSelection exportSelection = new MapExportSelection();
 
     public FullscreenMapScreen(final KeyBinding openMapKey) {
         this(openMapKey, null);
@@ -508,7 +382,13 @@ public final class FullscreenMapScreen extends ConfluxScreen {
             mapBrowser.waypoints(), List::of, config
         );
         this.waypointHighlightState = app.waypointHighlightState();
-        this.measureState = app.measureState();
+
+        this.selectors = new MapTargetSelectors(this);
+        this.annotations = new MapAnnotationController(this, app.measureState());
+        this.locationMenu = new MapLocationMenuController(this);
+        this.exportControls = new MapExportSelectionController(this);
+        this.loadStateOverlay = new MapLoadStateOverlay(this);
+        this.infoLabels = new MapInfoLabels(this);
 
         final DimensionId dimension = gameBridge.session().dimension();
         final Optional<PlayerView> player = gameBridge.viewpoint();
@@ -533,12 +413,7 @@ public final class FullscreenMapScreen extends ConfluxScreen {
 
     @Override
     protected void init() {
-        locationMenuBounds = null;
-        locationMenuTarget = null;
-        locationMenuWaypoint = null;
-        locationMenuPlayerId = null;
-        pendingLocationAction = null;
-        locationMenuDeletePending = false;
+        locationMenu.reset();
         // init() reruns on resize; announce the open event exactly once per screen life.
         if (!openAnnounced) {
             openAnnounced = true;
@@ -557,86 +432,37 @@ public final class FullscreenMapScreen extends ConfluxScreen {
             centerZ = requestedFocus.z();
             scale = Math.min(scale, DEFAULT_SCALE);
         }
-        if (exportSelectionScreen != null) {
-            rebuildExportSelectionControls();
+        if (exportControls.selecting()) {
+            exportControls.rebuildExportSelectionControls();
             return;
         }
         rebuildWaypointControls();
     }
 
-    private void rebuildExportSelectionControls() {
-        clearChildren();
-        addDrawableChild(Widgets.button(
-            width - MARGIN - 80,
-            height - 32,
-            80,
-            20,
-            Texts.translatable("confluxmap.screen.map_export.cancel_selection"),
-            ignored -> cancelExportSelection()
-        ));
-        if (exportSelection.bounds().isPresent()) {
-            addDrawableChild(Widgets.button(
-                width / 2 - 104,
-                height - 32,
-                100,
-                20,
-                Texts.translatable("confluxmap.screen.map_export.use_selection"),
-                ignored -> finishExportSelection()
-            ));
-            addDrawableChild(Widgets.button(
-                width / 2 + 4,
-                height - 32,
-                100,
-                20,
-                Texts.translatable("confluxmap.screen.map_export.reset_selection"),
-                ignored -> {
-                    exportSelection.reset();
-                    rebuildExportSelectionControls();
-                }
-            ));
-        }
-    }
 
-    private void rebuildWaypointControls() {
+    void rebuildWaypointControls() {
         clearChildren();
         sharedAvailability = viewSharedAvailability();
         localVisibilityButton = null;
         sharedVisibilityButton = null;
         manageWaypointsButton = null;
-        setWaypointLocationButton = null;
-        editWaypointLocationButton = null;
-        shareLocationButton = null;
-        teleportLocationButton = null;
-        teleportLocationUnavailableKey = null;
-        locationActionTooltips.clear();
+        locationMenu.clearButtons();
         structureSearchButton = null;
-        annotationTooltips.clear();
-        annotationToolButtons.clear();
-        annotationPersistenceButton = null;
-        annotationEraserButton = null;
-        annotationLabelButton = null;
-        annotationUndoButton = null;
-        annotationRedoButton = null;
-        measureButton = null;
-        annotationToolbarBounds = null;
-        annotationColorMenuBounds = null;
+        annotations.clearControls();
         displayModeButton = null;
         mapExportButton = null;
         clientWorldButton = null;
-        worldSelectorButton = null;
-        dimensionSelectorButton = null;
+        selectors.clearButtons();
         controlsDisplayMode = null;
-        loadStateDetailButton = null;
         viewGroupButton = null;
         waypointGroupButton = null;
         drawingGroupButton = null;
         actionsGroupButton = null;
 
         if (displayMode() == FullscreenDisplayMode.TERRAIN) {
-            addTargetSelectors();
+            selectors.addTargetSelectors();
         } else {
-            openTargetSelector = null;
-            targetDropdownScrollOffset = 0;
+            selectors.closeDropdown();
         }
 
         final int x = width - MARGIN - CONTROL_SIZE;
@@ -680,130 +506,17 @@ public final class FullscreenMapScreen extends ConfluxScreen {
             switch (openGroup) {
                 case VIEW -> rebuildViewControls(top);
                 case WAYPOINTS -> rebuildWaypointGroupControls(top + CONTROL_SIZE + CONTROL_GAP);
-                case DRAWING -> rebuildAnnotationControls(top + (CONTROL_SIZE + CONTROL_GAP) * 2);
+                case DRAWING -> annotations.rebuildAnnotationControls(top + (CONTROL_SIZE + CONTROL_GAP) * 2);
                 case ACTIONS -> rebuildActionControls(top + (CONTROL_SIZE + CONTROL_GAP) * 3);
                 default -> throw new IllegalStateException("Unhandled tool group: " + openGroup);
             }
         }
-        addLoadStateDetailControl();
-        if (locationMenuBounds != null && locationMenuTarget != null) {
-            addLocationMenuButtons();
+        loadStateOverlay.addLoadStateDetailControl();
+        if (locationMenu.isOpen()) {
+            locationMenu.addLocationMenuButtons();
         }
     }
 
-    private void addTargetSelectors() {
-        refreshTargetOptions();
-        final int availableWidth = Math.max(
-            180, width - (MARGIN + CONTROL_SIZE + CONTROL_GAP) * 2
-        );
-        final int selectorWidth = Math.min(
-            TARGET_SELECTOR_WIDTH,
-            Math.max(80, (availableWidth - TARGET_SELECTOR_GAP) / 2)
-        );
-        final int selectorHeight = targetSelectorHeight();
-        final int startX = (width - selectorWidth * 2 - TARGET_SELECTOR_GAP) / 2;
-        worldSelectorButton = addDrawableChild(Widgets.button(
-            startX,
-            MARGIN,
-            selectorWidth,
-            selectorHeight,
-            targetSelectorLabel(TargetSelector.WORLD, selectorWidth),
-            ignored -> toggleTargetSelector(TargetSelector.WORLD)
-        ));
-        dimensionSelectorButton = addDrawableChild(Widgets.button(
-            startX + selectorWidth + TARGET_SELECTOR_GAP,
-            MARGIN,
-            selectorWidth,
-            selectorHeight,
-            targetSelectorLabel(TargetSelector.DIMENSION, selectorWidth),
-            ignored -> toggleTargetSelector(TargetSelector.DIMENSION)
-        ));
-        dimensionSelectorButton.active = !dimensionOptions().isEmpty();
-    }
-
-    private int targetSelectorHeight() {
-        return uiTheme.useVanillaButtonStyle()
-            ? RESOURCE_PACK_TARGET_SELECTOR_HEIGHT
-            : COMPACT_TARGET_SELECTOR_HEIGHT;
-    }
-
-    private Text targetSelectorLabel(final TargetSelector selector, final int buttonWidth) {
-        final String value = selector == TargetSelector.WORLD
-            ? worldLabel(viewSession().world())
-            : dimensionDisplayName(viewSession().dimension());
-        final String prefix = Texts.translatable(
-            selector == TargetSelector.WORLD
-                ? "confluxmap.map.target.world"
-                : "confluxmap.map.target.dimension"
-        ).getString();
-        final String full = prefix + ": " + value + " ▾";
-        //#if MC>=260100
-        //$$ return Texts.literal(this.font.plainSubstrByWidth(full, Math.max(20, buttonWidth - 8)));
-        //#else
-        return Texts.literal(this.textRenderer.trimToWidth(full, Math.max(20, buttonWidth - 8)));
-        //#endif
-    }
-
-    private void toggleTargetSelector(final TargetSelector selector) {
-        openTargetSelector = openTargetSelector == selector ? null : selector;
-        targetDropdownScrollOffset = 0;
-    }
-
-    private Map<WorldIdentity, String> worldLabels() {
-        final Map<WorldIdentity, String> labels = new LinkedHashMap<>();
-        final SessionGuard.Session live = gameBridge.session();
-        if (live.active()) {
-            labels.put(live.world(), currentWorldLabel());
-        }
-        if (clientMultiworld.canManageProfiles()) {
-            for (final ClientWorldProfile profile : clientMultiworld.profiles()) {
-                labels.put(clientMultiworld.worldIdentity(profile), profile.displayName());
-            }
-        }
-        return labels;
-    }
-
-    private String worldLabel(final WorldIdentity world) {
-        return targetWorldLabels.getOrDefault(world, shortWorldId(world.worldId()));
-    }
-
-    private String currentWorldLabel() {
-        return clientMultiworld.companionWorldName()
-            .or(() -> clientMultiworld.currentProfile().map(ClientWorldProfile::displayName))
-            .orElseGet(() -> Texts.translatable(
-                "confluxmap.screen.map_view.current_world"
-            ).getString());
-    }
-
-    private List<WorldIdentity> worldOptions() {
-        return targetWorldOptions;
-    }
-
-    private List<DimensionId> dimensionOptions() {
-        return targetDimensionOptions;
-    }
-
-    private void refreshTargetOptions() {
-        targetWorldLabels = worldLabels();
-        targetWorldOptions = mapBrowser.worlds(
-            gameBridge.session(), new ArrayList<>(targetWorldLabels.keySet())
-        );
-        targetDimensionOptions = mapBrowser.dimensions(
-            gameBridge.session(), viewSession().world(), advertisedDimensions()
-        );
-    }
-
-    private static List<DimensionId> advertisedDimensions() {
-        final HelloPolicyS2C policy = ConfluxMapClient.get().companionSession().policy();
-        if (policy == null) {
-            return List.of();
-        }
-        return policy.dims().stream()
-            .map(HelloPolicyS2C.DimDescriptor::dimId)
-            .map(DimensionId::parse)
-            .distinct()
-            .toList();
-    }
 
     private MapIconButton addToolGroupButton(
         final int x,
@@ -823,9 +536,9 @@ public final class FullscreenMapScreen extends ConfluxScreen {
     private void toggleToolGroup(final FullscreenMapToolPanel.Group group) {
         final boolean leavingDrawing = toolPanel.isOpen(FullscreenMapToolPanel.Group.DRAWING);
         toolPanel.toggle(group);
-        annotationColorMenuOpen = false;
+        annotations.closeColorMenu();
         if (leavingDrawing && !toolPanel.isOpen(FullscreenMapToolPanel.Group.DRAWING)) {
-            selectAnnotationTool(AnnotationTool.SELECT);
+            annotations.selectAnnotationTool(AnnotationTool.SELECT);
             return;
         }
         rebuildWaypointControls();
@@ -930,7 +643,7 @@ public final class FullscreenMapScreen extends ConfluxScreen {
         y += CONTROL_SIZE + CONTROL_GAP;
         mapExportButton = addDrawableChild(new MapIconButton(
             x, y, MAP_EXPORT_ICON, Texts.translatable("confluxmap.screen.map_export.tooltip"),
-            ignored -> openMapExport()
+            ignored -> exportControls.openMapExport()
         ));
         mapExportButton.active = !mapBrowser.browsing();
         annotationTooltips.put(mapExportButton, "confluxmap.screen.map_export.tooltip");
@@ -953,490 +666,7 @@ public final class FullscreenMapScreen extends ConfluxScreen {
         );
     }
 
-    private void rebuildAnnotationControls(final int desiredTop) {
 
-        final int controlCount = AnnotationTool.values().length + 6;
-        final int stride = ANNOTATION_CONTROL_SIZE + ANNOTATION_CONTROL_GAP;
-        final int availableToolbarWidth = width - MARGIN * 2 - CONTROL_GAP - CONTROL_SIZE;
-        final int maxToolColumns = Math.max(
-            1, (availableToolbarWidth + ANNOTATION_CONTROL_GAP) / stride
-        );
-        final int minimumRows = (controlCount + maxToolColumns - 1) / maxToolColumns;
-        final int availableRows = Math.max(
-            1, (height - MARGIN - desiredTop + ANNOTATION_CONTROL_GAP) / stride
-        );
-        final int rows = Math.min(
-            ANNOTATION_MAX_ROWS, Math.max(minimumRows, Math.min(ANNOTATION_MAX_ROWS, availableRows))
-        );
-        final int columns = (controlCount + rows - 1) / rows;
-        final int toolGridWidth = columns * stride - ANNOTATION_CONTROL_GAP;
-        final int toolGridHeight = Math.min(rows, controlCount) * stride - ANNOTATION_CONTROL_GAP;
-        final int toolbarWidth = toolGridWidth;
-        final int toolbarHeight = toolGridHeight;
-        final boolean fitsBelowWaypoints = desiredTop + toolbarHeight <= height - MARGIN;
-        final int top = fitsBelowWaypoints
-            ? desiredTop
-            : Math.max(MARGIN, height - MARGIN - toolbarHeight);
-        // Anchored to the tool-group column, not to secondaryControlsX(): the drawing group is the
-        // one group that puts nothing in that secondary column, so reserving it leaves a visibly
-        // empty button-wide gap between the tool grid and the group buttons.
-        final int left = fitsBelowWaypoints
-            ? Math.max(MARGIN, width - MARGIN - CONTROL_SIZE - CONTROL_GAP - toolbarWidth)
-            : MARGIN;
-        annotationToolbarBounds = new AnnotationToolbarBounds(left, top, toolbarWidth, toolbarHeight);
-
-        int index = 0;
-        for (final AnnotationTool tool : AnnotationTool.values()) {
-            final int buttonX = controlX(left, stride, rows, index);
-            final int buttonY = controlY(top, stride, rows, index);
-            final ButtonWidget button;
-            if (tool == AnnotationTool.ERASER) {
-                annotationEraserButton = addDrawableChild(new MapIconButton(
-                    buttonX,
-                    buttonY,
-                    ANNOTATION_CONTROL_SIZE,
-                    ANNOTATION_ERASER_ICON,
-                    Texts.literal(""),
-                    ignored -> selectAnnotationTool(tool)
-                ));
-                annotationTooltips.put(annotationEraserButton, toolTooltip(tool));
-                button = annotationEraserButton;
-            } else {
-                button = addAnnotationIconButton(
-                    buttonX,
-                    buttonY,
-                    annotationToolIcon(tool),
-                    toolTooltip(tool),
-                    ignored -> selectAnnotationTool(tool)
-                );
-            }
-            annotationToolButtons.put(tool, button);
-            index++;
-        }
-        measureButton = addAnnotationIconButton(
-            controlX(left, stride, rows, index),
-            controlY(top, stride, rows, index),
-            MEASURE_ICON,
-            "confluxmap.map.measure.tooltip",
-            ignored -> selectMeasureTool()
-        );
-        index++;
-        addColorButton(
-            controlX(left, stride, rows, index),
-            controlY(top, stride, rows, index),
-            selectedAnnotationColor(),
-            true
-        );
-        index++;
-        annotationPersistenceButton = addDrawableChild(new MapIconButton(
-            controlX(left, stride, rows, index),
-            controlY(top, stride, rows, index),
-            ANNOTATION_CONTROL_SIZE,
-            ANNOTATION_PERSISTENCE_ICON,
-            Texts.literal(""),
-            ignored -> toggleAnnotationPersistence()
-        ));
-        annotationTooltips.put(
-            annotationPersistenceButton, "confluxmap.map.annotation.persistence.tooltip"
-        );
-        index++;
-        annotationLabelButton = addAnnotationIconButton(
-            controlX(left, stride, rows, index),
-            controlY(top, stride, rows, index),
-            ANNOTATION_LABEL_ICON,
-            "confluxmap.map.annotation.label.tooltip",
-            ignored -> editSelectedAnnotationLabel()
-        );
-        index++;
-        annotationUndoButton = addAnnotationIconButton(
-            controlX(left, stride, rows, index),
-            controlY(top, stride, rows, index),
-            ANNOTATION_UNDO_ICON,
-            "confluxmap.map.annotation.undo.tooltip",
-            ignored -> undoAnnotationChange()
-        );
-        index++;
-        annotationRedoButton = addAnnotationIconButton(
-            controlX(left, stride, rows, index),
-            controlY(top, stride, rows, index),
-            ANNOTATION_REDO_ICON,
-            "confluxmap.map.annotation.redo.tooltip",
-            ignored -> redoAnnotationChange()
-        );
-        if (annotationColorMenuOpen) {
-            rebuildAnnotationColorMenu();
-        }
-        refreshAnnotationControls();
-    }
-
-    private void rebuildAnnotationColorMenu() {
-        final int stride = ANNOTATION_CONTROL_SIZE + ANNOTATION_CONTROL_GAP;
-        final int rows = (ANNOTATION_COLORS.length + ANNOTATION_COLOR_MENU_COLUMNS - 1)
-            / ANNOTATION_COLOR_MENU_COLUMNS;
-        final int menuWidth = ANNOTATION_COLOR_MENU_COLUMNS * stride - ANNOTATION_CONTROL_GAP;
-        final int menuHeight = rows * stride - ANNOTATION_CONTROL_GAP;
-        final int leftCandidate = annotationToolbarBounds.x() - ANNOTATION_CONTROL_GAP - menuWidth;
-        final int rightCandidate = annotationToolbarBounds.x()
-            + annotationToolbarBounds.width() + ANNOTATION_CONTROL_GAP;
-        final int left = leftCandidate >= MARGIN
-            ? leftCandidate
-            : rightCandidate + menuWidth <= width - MARGIN ? rightCandidate : MARGIN;
-        final int top = Math.max(
-            MARGIN, Math.min(annotationToolbarBounds.y(), height - MARGIN - menuHeight)
-        );
-        annotationColorMenuBounds = new AnnotationToolbarBounds(left, top, menuWidth, menuHeight);
-        for (int index = 0; index < ANNOTATION_COLORS.length; index++) {
-            addColorButton(
-                left + index % ANNOTATION_COLOR_MENU_COLUMNS * stride,
-                top + index / ANNOTATION_COLOR_MENU_COLUMNS * stride,
-                ANNOTATION_COLORS[index],
-                false
-            );
-        }
-    }
-
-    private static int controlX(final int left, final int stride, final int rows, final int index) {
-        return left + index / rows * stride;
-    }
-
-    private static int controlY(final int top, final int stride, final int rows, final int index) {
-        return top + index % rows * stride;
-    }
-
-    private ButtonWidget addAnnotationIconButton(
-        final int x,
-        final int y,
-        final Identifier icon,
-        final String tooltipKey,
-        final ButtonWidget.PressAction action
-    ) {
-        final ButtonWidget button = addDrawableChild(new MapIconButton(
-            x, y, ANNOTATION_CONTROL_SIZE, icon, Texts.translatable(tooltipKey), action
-        ));
-        annotationTooltips.put(button, tooltipKey);
-        return button;
-    }
-
-    private void addColorButton(
-        final int x,
-        final int y,
-        final int color,
-        final boolean opensMenu
-    ) {
-        //#if MC>=260100
-        //$$ final var button = addRenderableWidget(new Button(
-        //$$     x, y, ANNOTATION_CONTROL_SIZE, ANNOTATION_CONTROL_SIZE, Texts.literal(""),
-        //$$     ignored -> activateAnnotationColorButton(color, opensMenu), narration -> narration.get()
-        //$$ ) {
-        //$$     @Override
-        //$$     protected void extractContents(
-        //$$         final GuiGraphicsExtractor context,
-        //$$         final int mouseX,
-        //$$         final int mouseY,
-        //$$         final float delta
-        //$$     ) {
-        //$$         if (uiTheme.useVanillaButtonStyle()) {
-        //$$             extractDefaultSprite(context);
-        //$$         }
-        //$$         renderAnnotationColorButton(GuiDraw.of(context), this, color, opensMenu);
-        //$$     }
-        //$$ });
-        //#elseif MC>=12111
-        //$$ final ButtonWidget button = addDrawableChild(new ButtonWidget(
-        //$$     x, y, ANNOTATION_CONTROL_SIZE, ANNOTATION_CONTROL_SIZE, Texts.literal(""),
-        //$$     ignored -> activateAnnotationColorButton(color, opensMenu), narration -> narration.get()
-        //$$ ) {
-        //$$     @Override
-        //$$     protected void drawIcon(
-        //$$         final DrawContext context,
-        //$$         final int mouseX,
-        //$$         final int mouseY,
-        //$$         final float delta
-        //$$     ) {
-        //$$         if (uiTheme.useVanillaButtonStyle()) {
-        //$$             drawButton(context);
-        //$$         }
-        //$$         renderAnnotationColorButton(GuiDraw.of(context), this, color, opensMenu);
-        //$$     }
-        //$$ });
-        //#elseif MC>=12002
-        //$$ final ButtonWidget button = addDrawableChild(new ButtonWidget(
-        //$$     x, y, ANNOTATION_CONTROL_SIZE, ANNOTATION_CONTROL_SIZE, Texts.literal(""),
-        //$$     ignored -> activateAnnotationColorButton(color, opensMenu), narration -> narration.get()
-        //$$ ) {
-        //$$     @Override
-        //$$     protected void renderWidget(
-        //$$         final DrawContext context,
-        //$$         final int mouseX,
-        //$$         final int mouseY,
-        //$$         final float delta
-        //$$     ) {
-        //$$         if (uiTheme.useVanillaButtonStyle()) {
-        //$$             super.renderWidget(context, mouseX, mouseY, delta);
-        //$$         }
-        //$$         renderAnnotationColorButton(GuiDraw.of(context), this, color, opensMenu);
-        //$$     }
-        //$$ });
-        //#elseif MC>=12000
-        //$$ final ButtonWidget button = addDrawableChild(new ButtonWidget(
-        //$$     x, y, ANNOTATION_CONTROL_SIZE, ANNOTATION_CONTROL_SIZE, Texts.literal(""),
-        //$$     ignored -> activateAnnotationColorButton(color, opensMenu), narration -> narration.get()
-        //$$ ) {
-        //$$     @Override
-        //$$     protected void renderButton(
-        //$$         final DrawContext context,
-        //$$         final int mouseX,
-        //$$         final int mouseY,
-        //$$         final float delta
-        //$$     ) {
-        //$$         if (uiTheme.useVanillaButtonStyle()) {
-        //$$             super.renderButton(context, mouseX, mouseY, delta);
-        //$$         }
-        //$$         renderAnnotationColorButton(GuiDraw.of(context), this, color, opensMenu);
-        //$$     }
-        //$$ });
-        //#else
-        final ButtonWidget button = addDrawableChild(new ButtonWidget(
-            x, y, ANNOTATION_CONTROL_SIZE, ANNOTATION_CONTROL_SIZE, Texts.literal(""),
-            ignored -> activateAnnotationColorButton(color, opensMenu)
-        ) {
-            @Override
-            public void renderButton(
-                final MatrixStack matrices,
-                final int mouseX,
-                final int mouseY,
-                final float delta
-            ) {
-                if (uiTheme.useVanillaButtonStyle()) {
-                    super.renderButton(matrices, mouseX, mouseY, delta);
-                }
-                renderAnnotationColorButton(GuiDraw.of(matrices), this, color, opensMenu);
-            }
-        });
-        //#endif
-        annotationTooltips.put(button, "confluxmap.map.annotation.color.tooltip");
-    }
-
-    private void renderAnnotationColorButton(
-        final GuiDraw draw,
-        final ButtonWidget button,
-        final int color,
-        final boolean opensMenu
-    ) {
-        final int x = Widgets.x(button);
-        final int y = Widgets.y(button);
-        final int displayedColor = opensMenu ? selectedAnnotationColor() : color;
-        final int inset = uiTheme.useVanillaButtonStyle() ? 3 : 0;
-        final int swatchSize = button.getWidth() - inset * 2;
-        RenderUtil.fillRect(
-            draw.matrices(), x + inset, y + inset, swatchSize, swatchSize,
-            displayedColor | 0xFF000000
-        );
-        if (opensMenu ? annotationColorMenuOpen : color == selectedAnnotationColor()) {
-            final int border = uiTheme.useVanillaButtonStyle() ? 1 : 2;
-            RenderUtil.fillRect(
-                draw.matrices(), x + inset, y + inset, swatchSize, border, 0xFFFFFFFF
-            );
-            RenderUtil.fillRect(
-                draw.matrices(), x + inset, y + inset + swatchSize - border,
-                swatchSize, border, 0xFFFFFFFF
-            );
-            RenderUtil.fillRect(
-                draw.matrices(), x + inset, y + inset, border, swatchSize, 0xFFFFFFFF
-            );
-            RenderUtil.fillRect(
-                draw.matrices(), x + inset + swatchSize - border, y + inset,
-                border, swatchSize, 0xFFFFFFFF
-            );
-        }
-    }
-
-    private void refreshAnnotationControls() {
-        for (final Map.Entry<AnnotationTool, ButtonWidget> entry : annotationToolButtons.entrySet()) {
-            entry.getValue().active = true;
-            if (entry.getValue() instanceof MapIconButton iconButton) {
-                iconButton.setSelected(entry.getKey() == annotationTool && !measureMode);
-            }
-        }
-        if (measureButton instanceof MapIconButton iconButton) {
-            iconButton.setSelected(measureMode);
-        }
-        final boolean selected = selectedAnnotation().isPresent();
-        if (annotationLabelButton != null) {
-            annotationLabelButton.active = selected;
-        }
-        if (annotationPersistenceButton != null) {
-            final boolean persistent =
-                selectedAnnotationPersistence() == AnnotationPersistence.PERSISTENT;
-            annotationPersistenceButton.setSelected(persistent);
-            annotationPersistenceButton.setIcon(
-                persistent ? ANNOTATION_PERSISTENCE_ICON : ANNOTATION_PERSISTENCE_TRANSIENT_ICON
-            );
-        }
-        final AnnotationStore store = viewAnnotationStore();
-        if (annotationUndoButton != null) {
-            annotationUndoButton.active = store != null && store.canUndo();
-        }
-        if (annotationRedoButton != null) {
-            annotationRedoButton.active = store != null && store.canRedo();
-        }
-    }
-
-    private static Identifier annotationToolIcon(final AnnotationTool tool) {
-        return switch (tool) {
-            case SELECT -> ANNOTATION_SELECT_ICON;
-            case LINE -> ANNOTATION_LINE_ICON;
-            case CIRCLE -> ANNOTATION_CIRCLE_ICON;
-            case RECTANGLE -> ANNOTATION_RECTANGLE_ICON;
-            case FREEHAND -> ANNOTATION_FREEHAND_ICON;
-            case ERASER -> ANNOTATION_ERASER_ICON;
-        };
-    }
-
-    private static String toolTooltip(final AnnotationTool tool) {
-        return switch (tool) {
-            case SELECT -> "confluxmap.map.annotation.select.tooltip";
-            case LINE -> "confluxmap.map.annotation.line.tooltip";
-            case CIRCLE -> "confluxmap.map.annotation.circle.tooltip";
-            case RECTANGLE -> "confluxmap.map.annotation.rectangle.tooltip";
-            case FREEHAND -> "confluxmap.map.annotation.freehand.tooltip";
-            case ERASER -> "confluxmap.map.annotation.eraser.tooltip";
-        };
-    }
-
-    private Optional<Annotation> selectedAnnotation() {
-        final AnnotationStore store = viewAnnotationStore();
-        return store == null || selectedAnnotationId == null
-            ? Optional.empty()
-            : store.get(selectedAnnotationId);
-    }
-
-    private AnnotationPersistence selectedAnnotationPersistence() {
-        return selectedAnnotation().map(Annotation::persistence).orElse(newAnnotationPersistence);
-    }
-
-    private int selectedAnnotationColor() {
-        return selectedAnnotation().map(annotation -> annotation.style().colorArgb()).orElse(newAnnotationColor);
-    }
-
-    private void selectAnnotationTool(final AnnotationTool tool) {
-        final long now = Util.getMeasuringTimeMs();
-        final boolean openEraserSettings = tool == AnnotationTool.ERASER
-            && lastEraserButtonClickMs != Long.MIN_VALUE
-            && now - lastEraserButtonClickMs <= DOUBLE_CLICK_INTERVAL_MS;
-        lastEraserButtonClickMs = tool == AnnotationTool.ERASER ? now : Long.MIN_VALUE;
-        measureMode = false;
-        annotationTool = tool;
-        annotationDraft = null;
-        movingAnnotation = null;
-        annotationPointerPress = false;
-        erasingAnnotationIds.clear();
-        annotationColorMenuOpen = false;
-        rebuildWaypointControls();
-        if (openEraserSettings) {
-            lastEraserButtonClickMs = Long.MIN_VALUE;
-            MinecraftAccess.setScreen(MinecraftClient.getInstance(), new AnnotationEraserSettingsScreen(this, config));
-        }
-    }
-
-    private void selectMeasureTool() {
-        measureMode = true;
-        annotationTool = AnnotationTool.SELECT;
-        annotationDraft = null;
-        movingAnnotation = null;
-        annotationPointerPress = false;
-        erasingAnnotationIds.clear();
-        annotationColorMenuOpen = false;
-        rebuildWaypointControls();
-    }
-
-    private void activateAnnotationColorButton(final int color, final boolean opensMenu) {
-        if (opensMenu) {
-            annotationColorMenuOpen = !annotationColorMenuOpen;
-        } else {
-            selectAnnotationColor(color);
-            annotationColorMenuOpen = false;
-        }
-        rebuildWaypointControls();
-    }
-
-    private void selectAnnotationColor(final int color) {
-        newAnnotationColor = color;
-        final AnnotationStore store = viewAnnotationStore();
-        if (store != null) {
-            selectedAnnotation().ifPresent(annotation -> store.update(
-                annotation.withStyle(new AnnotationStyle(color))
-            ));
-        }
-    }
-
-    private void undoAnnotationChange() {
-        final AnnotationStore store = viewAnnotationStore();
-        if (store != null && store.undo()) {
-            clearMissingSelection(store);
-            refreshAnnotationControls();
-        }
-    }
-
-    private void redoAnnotationChange() {
-        final AnnotationStore store = viewAnnotationStore();
-        if (store != null && store.redo()) {
-            clearMissingSelection(store);
-            refreshAnnotationControls();
-        }
-    }
-
-    private void clearMissingSelection(final AnnotationStore store) {
-        if (selectedAnnotationId != null && store.get(selectedAnnotationId).isEmpty()) {
-            selectedAnnotationId = null;
-        }
-    }
-
-    private void toggleAnnotationPersistence() {
-        final AnnotationPersistence next = selectedAnnotationPersistence() == AnnotationPersistence.PERSISTENT
-            ? AnnotationPersistence.TRANSIENT
-            : AnnotationPersistence.PERSISTENT;
-        final AnnotationStore store = viewAnnotationStore();
-        final Optional<Annotation> selected = selectedAnnotation();
-        if (store != null && selected.isPresent()) {
-            store.update(selected.get().withPersistence(next));
-        } else {
-            newAnnotationPersistence = next;
-        }
-        refreshAnnotationControls();
-    }
-
-    private void editSelectedAnnotationLabel() {
-        final AnnotationStore store = viewAnnotationStore();
-        if (store == null) {
-            return;
-        }
-        selectedAnnotation().ifPresent(annotation -> MinecraftAccess.setScreen(MinecraftClient.getInstance(),
-            new AnnotationLabelScreen(this, store, annotation)
-        ));
-    }
-
-    private void addLoadStateDetailControl() {
-        if (!loadStateMode()) {
-            return;
-        }
-        final int buttonWidth = Math.min(180, Math.max(90, width - 2 * (MARGIN + 80)));
-        final int x = (width - buttonWidth) / 2;
-        loadStateDetailButton = addDrawableChild(Widgets.button(
-            x,
-            MARGIN,
-            buttonWidth,
-            20,
-            loadStateDetailLabel(),
-            ignored -> {
-                config.chunkLoadDetailMode = config.chunkLoadDetailMode == ChunkLoadDetailMode.BANDS
-                    ? ChunkLoadDetailMode.EXACT
-                    : ChunkLoadDetailMode.BANDS;
-                ConfluxMapClient.get().configIo().save(config);
-                loadStateDetailButton.setMessage(loadStateDetailLabel());
-            }
-        ));
-    }
 
     private void setDisplayMode(final FullscreenDisplayMode mode) {
         if (!displayModeAvailable(mode)) {
@@ -1468,239 +698,7 @@ public final class FullscreenMapScreen extends ConfluxScreen {
         };
     }
 
-    private void openMapExport() {
-        final int minX = (int) Math.floor(centerX - width / 2.0 * scale);
-        final int minZ = (int) Math.floor(centerZ - height / 2.0 * scale);
-        final int maxX = (int) Math.ceil(centerX + width / 2.0 * scale) - 1;
-        final int maxZ = (int) Math.ceil(centerZ + height / 2.0 * scale) - 1;
-        final MapExportScreen screen = new MapExportScreen(
-            this,
-            MapExportBounds.between(minX, minZ, maxX, maxZ),
-            MapExportResolution.forLod(currentLod())
-        );
-        beginExportSelection(screen, false);
-    }
 
-    void beginExportSelection(final MapExportScreen screen) {
-        beginExportSelection(screen, true);
-    }
-
-    private void beginExportSelection(
-        final MapExportScreen screen,
-        final boolean returnsToForm
-    ) {
-        exportSelectionScreen = screen;
-        exportSelectionReturnsToForm = returnsToForm;
-        exportSelection.reset();
-        mapPointerPress = false;
-        annotationPointerPress = false;
-        MinecraftAccess.setScreen(MinecraftClient.getInstance(), this);
-    }
-
-    MapExportRequest createExportRequest(
-        final MapExportBounds bounds,
-        final MapExportResolution resolution
-    ) {
-        final SessionGuard.Session session = viewSession();
-        final MapLayer layer = viewLayer();
-        final boolean biome = displayMode() == FullscreenDisplayMode.BIOME;
-        final boolean prediction = predictionActive(layer, session, biome);
-        final AnnotationStore annotations = viewAnnotationStore();
-        return new MapExportRequest(
-            session,
-            layer,
-            bounds,
-            resolution,
-            displayMode(),
-            prediction,
-            predictionTiles.viewMode(),
-            0xFFFFFFFF,
-            BACKGROUND_COLOR,
-            config.dynamicLighting,
-            daylightModel.factor(),
-            displayMode() == FullscreenDisplayMode.CHUNK_LOAD_STATE
-                ? new MapExportLoadState(chunkLoadStates.snapshot().entries())
-                : MapExportLoadState.empty()
-        ).withAnnotations(
-            annotations == null ? List.of() : annotations.list(session.dimension())
-        );
-    }
-
-    private void cancelExportSelection() {
-        final MapExportScreen screen = exportSelectionScreen;
-        exportSelectionScreen = null;
-        final boolean returnsToForm = exportSelectionReturnsToForm;
-        exportSelectionReturnsToForm = false;
-        exportSelection.reset();
-        mapPointerPress = false;
-        if (screen != null && returnsToForm) {
-            MinecraftAccess.setScreen(MinecraftClient.getInstance(), screen);
-        } else {
-            rebuildWaypointControls();
-        }
-    }
-
-    private void selectExportCorner(final double mouseX, final double mouseY) {
-        final int blockX = (int) Math.floor(centerX + (mouseX - width / 2.0) * scale);
-        final int blockZ = (int) Math.floor(centerZ + (mouseY - height / 2.0) * scale);
-        final Optional<MapExportBounds> completed = exportSelection.select(blockX, blockZ);
-        if (completed.isEmpty()) {
-            rebuildExportSelectionControls();
-            return;
-        }
-        rebuildExportSelectionControls();
-    }
-
-    private void finishExportSelection() {
-        final MapExportScreen screen = exportSelectionScreen;
-        final Optional<MapExportBounds> completed = exportSelection.bounds();
-        if (screen == null || completed.isEmpty()) {
-            return;
-        }
-        exportSelectionScreen = null;
-        exportSelectionReturnsToForm = false;
-        exportSelection.reset();
-        screen.applySelection(completed.get());
-        MinecraftAccess.setScreen(MinecraftClient.getInstance(), screen);
-    }
-
-    private void addLocationMenuButtons() {
-        final List<FullscreenMapLocationMenu.ButtonSpec> specs = locationMenuButtonSpecs(
-            locationMenuTarget, locationMenuWaypoint, locationMenuPlayerId, locationMenuDeletePending
-        );
-        locationMenuSpecs = specs;
-        for (int index = 0; index < specs.size(); index++) {
-            final FullscreenMapLocationMenu.ButtonSpec spec = specs.get(index);
-            final ButtonWidget button = addDrawableChild(Widgets.button(
-                locationMenuBounds.buttonX(),
-                locationMenuBounds.buttonY(index),
-                locationMenuBounds.buttonWidth(),
-                FullscreenMapLocationMenu.BUTTON_HEIGHT,
-                Texts.translatable(spec.labelKey()),
-                ignored -> pendingLocationAction = spec.action()
-            ));
-            locationActionTooltips.put(button, spec.tooltipKey());
-            button.active = spec.active();
-            switch (spec.action()) {
-                case SET_WAYPOINT -> setWaypointLocationButton = button;
-                case EDIT_WAYPOINT -> editWaypointLocationButton = button;
-                case SHARE_LOCATION -> shareLocationButton = button;
-                case TELEPORT -> teleportLocationButton = button;
-                case DELETE_WAYPOINT, SHARE_WAYPOINT, HIGHLIGHT, HIGHLIGHT_WAYPOINT, CLEAR_HIGHLIGHT,
-                     HIGHLIGHT_PLAYER, CLEAR_PLAYER_HIGHLIGHT -> {
-                }
-            }
-        }
-    }
-
-    /**
-     * Resolves the location menu's buttons for one captured target. Shared with the embedded
-     * split-map menu so both host the same actions, enablement, and tooltips.
-     */
-    List<FullscreenMapLocationMenu.ButtonSpec> locationMenuButtonSpecs(
-        final FullscreenMapLocationMenu.Target target,
-        final WaypointRenderEntry waypoint,
-        final UUID playerId,
-        final boolean deletePending
-    ) {
-        final MinecraftClient client = MinecraftClient.getInstance();
-        final boolean playerPresent = client.player != null;
-        final SessionGuard.Session viewed = viewSession();
-        final SessionGuard.Session live = gameBridge.session();
-        final TeleportCommandAccess.Result teleportAccess = TeleportCommandAccess.evaluate(
-            client,
-            config.teleportCommand,
-            live,
-            viewed.world(),
-            viewed.dimension(),
-            // A live session can always resolve the landing after the target chunk loads
-            // (ground, or void at the pre-teleport Y); only a browsed session needs a
-            // known height up front, and an API landing resolver can supply one.
-            teleportPositionKnownForMenu(target)
-        );
-        final boolean teleportCommandAvailable = teleportAccess.available();
-        teleportLocationUnavailableKey = teleportAccess.reasonKey();
-        final boolean existingWaypoint = FullscreenMapLocationMenu.isSavedWaypoint(
-            playerId == null ? waypoint : null
-        );
-        final boolean waypointEditable = existingWaypoint && waypointEditable(waypoint);
-        final String waypointDeleteUnavailableKey = existingWaypoint
-            ? waypointDeleteUnavailableKey(waypoint) : null;
-        final boolean waypointDeletable = existingWaypoint && waypointDeleteUnavailableKey == null;
-        final List<FullscreenMapLocationMenu.Action> actions = new ArrayList<>(
-            FullscreenMapLocationMenu.actions(
-                existingWaypoint,
-                locationMenuTargetHighlighted(waypoint, target, playerId),
-                playerId != null
-            )
-        );
-        // A seed-sibling waypoint belongs to another world namespace: teleport and highlight
-        // still make sense (same seed, same terrain), but editing, deleting, and publishing
-        // must go through its owning session.
-        if (existingWaypoint && waypoint.sibling()) {
-            actions.removeIf(action -> action == FullscreenMapLocationMenu.Action.EDIT_WAYPOINT
-                || action == FullscreenMapLocationMenu.Action.DELETE_WAYPOINT
-                || action == FullscreenMapLocationMenu.Action.SHARE_WAYPOINT);
-        }
-        final List<FullscreenMapLocationMenu.ButtonSpec> specs = new ArrayList<>(actions.size());
-        for (final FullscreenMapLocationMenu.Action action : actions) {
-            boolean active = FullscreenMapLocationMenu.actionEnabled(
-                action, playerPresent, teleportCommandAvailable,
-                waypointEditable, waypointDeletable
-            );
-            String tooltipKey = actionTooltipKey(action);
-            if (action == FullscreenMapLocationMenu.Action.DELETE_WAYPOINT
-                && !active && waypointDeleteUnavailableKey != null) {
-                tooltipKey = waypointDeleteUnavailableKey;
-            }
-            if (!viewingLiveWorld()
-                && (action == FullscreenMapLocationMenu.Action.SHARE_LOCATION
-                    || action == FullscreenMapLocationMenu.Action.SHARE_WAYPOINT)) {
-                active = false;
-            }
-            if (action == FullscreenMapLocationMenu.Action.HIGHLIGHT
-                || action == FullscreenMapLocationMenu.Action.HIGHLIGHT_WAYPOINT
-                || action == FullscreenMapLocationMenu.Action.HIGHLIGHT_PLAYER) {
-                active = (playerId != null
-                    ? viewingLiveWorld() : viewingLiveSession())
-                    && (waypoint != null || target != null);
-            } else if (action == FullscreenMapLocationMenu.Action.CLEAR_HIGHLIGHT) {
-                active = waypointHighlightState.active();
-            } else if (action == FullscreenMapLocationMenu.Action.CLEAR_PLAYER_HIGHLIGHT) {
-                active = playerId != null && serverPlayerRadar.isHighlighted(playerId);
-            }
-            specs.add(new FullscreenMapLocationMenu.ButtonSpec(
-                action,
-                action == FullscreenMapLocationMenu.Action.DELETE_WAYPOINT && deletePending
-                    ? "confluxmap.screen.waypoints.confirm"
-                    : action.translationKey(),
-                tooltipKey,
-                active
-            ));
-        }
-        return specs;
-    }
-
-    private boolean locationMenuTargetHighlighted(
-        final WaypointRenderEntry waypoint,
-        final FullscreenMapLocationMenu.Target target,
-        final UUID playerId
-    ) {
-        if (!viewingLiveWorld()) {
-            return false;
-        }
-        if (playerId != null) {
-            return serverPlayerRadar.isHighlighted(playerId);
-        }
-        if (waypoint != null) {
-            return waypointHighlightState.matchesEntry(waypoint, viewSession().dimension());
-        }
-        return target != null && waypointHighlightState.matches(
-            target.blockX() + 0.5,
-            target.blockZ() + 0.5,
-            viewSession().dimension()
-        );
-    }
 
     @Override
     public void tick() {
@@ -1712,7 +710,7 @@ public final class FullscreenMapScreen extends ConfluxScreen {
             rebuildWaypointControls();
             return;
         }
-        if (loadStateMode() != (loadStateDetailButton != null)) {
+        if (loadStateMode() != loadStateOverlay.hasDetailButton()) {
             rebuildWaypointControls();
             return;
         }
@@ -1724,16 +722,8 @@ public final class FullscreenMapScreen extends ConfluxScreen {
         }
         sharedAvailability = availability;
         refreshWaypointVisibilityButtons();
-        if (locationMenuTarget != null && !locationMenuTarget.groundKnown()) {
-            final ColumnStore.SurfaceLookup ground = groundAt(
-                locationMenuTarget.blockX(), locationMenuTarget.blockZ()
-            );
-            if (ground.known()) {
-                locationMenuTarget = FullscreenMapLocationMenu.targetAt(
-                    locationMenuTarget.blockX(), ground, locationMenuTarget.blockZ()
-                );
-                rebuildWaypointControls();
-            }
+        if (locationMenu.refreshGroundTarget()) {
+            rebuildWaypointControls();
         }
         refreshStructureSearchButton();
     }
@@ -1803,58 +793,57 @@ public final class FullscreenMapScreen extends ConfluxScreen {
             regionSelectPress = false;
             return true;
         }
-        if (exportSelectionScreen != null) {
+        if (exportControls.selecting()) {
             //#if MC>=12109
             //$$ if (keyCode == cn.net.rms.confluxmap.compat.Keys.ESCAPE || openMapKey != null && openMapKey.matchesKey(input)) {
             //#else
             if (keyCode == cn.net.rms.confluxmap.compat.Keys.ESCAPE
                 || openMapKey != null && openMapKey.matchesKey(keyCode, scanCode)) {
             //#endif
-                cancelExportSelection();
+                exportControls.cancelExportSelection();
                 return true;
             }
         }
         final boolean controlDown = (modifiers & (cn.net.rms.confluxmap.compat.Keys.MOD_CONTROL | cn.net.rms.confluxmap.compat.Keys.MOD_SUPER)) != 0;
         final boolean shiftDown = (modifiers & cn.net.rms.confluxmap.compat.Keys.MOD_SHIFT) != 0;
-        if (controlDown && keyCode == cn.net.rms.confluxmap.compat.Keys.Z && !shiftDown && measureMode) {
-            undoMeasurePoint();
+        if (controlDown && keyCode == cn.net.rms.confluxmap.compat.Keys.Z && !shiftDown && annotations.isMeasureMode()) {
+            annotations.undoMeasurePoint();
             return true;
         }
         if (controlDown && keyCode == cn.net.rms.confluxmap.compat.Keys.Z) {
             if (shiftDown) {
-                redoAnnotationChange();
+                annotations.redoAnnotationChange();
             } else {
-                undoAnnotationChange();
+                annotations.undoAnnotationChange();
             }
             return true;
         }
         if (controlDown && keyCode == cn.net.rms.confluxmap.compat.Keys.Y) {
-            redoAnnotationChange();
+            annotations.redoAnnotationChange();
             return true;
         }
         if (keyCode == cn.net.rms.confluxmap.compat.Keys.F9) {
             ConfluxMapClient.get().reloadPredictionTiles();
             return true;
         }
-        if (keyCode == cn.net.rms.confluxmap.compat.Keys.ESCAPE && openTargetSelector != null) {
-            openTargetSelector = null;
-            targetDropdownScrollOffset = 0;
+        if (keyCode == cn.net.rms.confluxmap.compat.Keys.ESCAPE && selectors.dropdownOpen()) {
+            selectors.closeDropdown();
             return true;
         }
-        if (keyCode == cn.net.rms.confluxmap.compat.Keys.ESCAPE && annotationColorMenuOpen) {
-            annotationColorMenuOpen = false;
+        if (keyCode == cn.net.rms.confluxmap.compat.Keys.ESCAPE && annotations.isColorMenuOpen()) {
+            annotations.closeColorMenu();
             rebuildWaypointControls();
             return true;
         }
-        if (keyCode == cn.net.rms.confluxmap.compat.Keys.ESCAPE && locationMenuBounds != null) {
-            dismissLocationMenu();
+        if (keyCode == cn.net.rms.confluxmap.compat.Keys.ESCAPE && locationMenu.isOpen()) {
+            locationMenu.dismissLocationMenu();
             return true;
         }
         if (keyCode == cn.net.rms.confluxmap.compat.Keys.ESCAPE && toolPanel.openGroup() != null) {
             final boolean closingDrawing = toolPanel.isOpen(FullscreenMapToolPanel.Group.DRAWING);
             toolPanel.close();
             if (closingDrawing) {
-                selectAnnotationTool(AnnotationTool.SELECT);
+                annotations.selectAnnotationTool(AnnotationTool.SELECT);
             } else {
                 rebuildWaypointControls();
             }
@@ -1891,11 +880,11 @@ public final class FullscreenMapScreen extends ConfluxScreen {
     public boolean mouseClicked(final double mouseX, final double mouseY, final int button) {
     //#endif
         regionSelection = null;
-        if (button == MouseButtons.LEFT && selectTargetDropdownOption(mouseX, mouseY)) {
+        if (button == MouseButtons.LEFT && selectors.selectTargetDropdownOption(mouseX, mouseY)) {
             mapPointerPress = false;
             return true;
         }
-        if (exportSelectionScreen != null) {
+        if (exportControls.selecting()) {
             //#if MC>=12109
             //$$ if (super.mouseClicked(click, doubledClick)) {
             //#else
@@ -1904,11 +893,11 @@ public final class FullscreenMapScreen extends ConfluxScreen {
                 return true;
             }
             if (button == MouseButtons.RIGHT) {
-                cancelExportSelection();
+                exportControls.cancelExportSelection();
                 return true;
             }
             if (button == MouseButtons.LEFT) {
-                if (exportSelection.bounds().isPresent()) {
+                if (exportControls.selectionComplete()) {
                     return true;
                 }
                 leftPressX = mouseX;
@@ -1918,22 +907,22 @@ public final class FullscreenMapScreen extends ConfluxScreen {
             }
             return false;
         }
-        if (locationMenuBounds != null) {
-            if (locationMenuBounds.contains(mouseX, mouseY)) {
+        if (locationMenu.isOpen()) {
+            if (locationMenu.hoverContains(mouseX, mouseY)) {
                 //#if MC>=12109
                 //$$ super.mouseClicked(click, doubledClick);
                 //#else
                 super.mouseClicked(mouseX, mouseY, button);
                 //#endif
                 mapPointerPress = false;
-                performPendingLocationAction();
+                locationMenu.performPendingLocationAction();
                 return true;
             }
             if (button == MouseButtons.RIGHT && !isOverMapControls(mouseX, mouseY)) {
-                openLocationMenu(mouseX, mouseY);
+                locationMenu.openLocationMenu(mouseX, mouseY);
                 return true;
             }
-            dismissLocationMenu();
+            locationMenu.dismissLocationMenu();
             mapPointerPress = false;
             return true;
         }
@@ -1945,14 +934,13 @@ public final class FullscreenMapScreen extends ConfluxScreen {
             mapPointerPress = false;
             return true;
         }
-        if (openTargetSelector != null) {
-            openTargetSelector = null;
-            targetDropdownScrollOffset = 0;
+        if (selectors.dropdownOpen()) {
+            selectors.closeDropdown();
             mapPointerPress = false;
             return true;
         }
-        if (annotationColorMenuOpen) {
-            annotationColorMenuOpen = false;
+        if (annotations.isColorMenuOpen()) {
+            annotations.closeColorMenu();
             rebuildWaypointControls();
             mapPointerPress = false;
             return true;
@@ -1961,9 +949,9 @@ public final class FullscreenMapScreen extends ConfluxScreen {
             mapPointerPress = false;
             return true;
         }
-        if (measureMode) {
+        if (annotations.isMeasureMode()) {
             if (button == MouseButtons.RIGHT) {
-                undoMeasurePoint();
+                annotations.undoMeasurePoint();
                 return true;
             }
             if (button == MouseButtons.LEFT) {
@@ -1976,7 +964,7 @@ public final class FullscreenMapScreen extends ConfluxScreen {
             }
             return false;
         }
-        if (button == MouseButtons.LEFT && beginAnnotationPointer(mouseX, mouseY)) {
+        if (button == MouseButtons.LEFT && annotations.beginAnnotationPointer(mouseX, mouseY)) {
             return true;
         }
         if (button == MouseButtons.RIGHT) {
@@ -1996,120 +984,7 @@ public final class FullscreenMapScreen extends ConfluxScreen {
         return false;
     }
 
-    private boolean beginAnnotationPointer(final double mouseX, final double mouseY) {
-        final AnnotationStore store = viewAnnotationStore();
-        if (store == null) {
-            return false;
-        }
-        final AnnotationPoint worldPoint = annotationWorldPoint(mouseX, mouseY);
-        if (annotationTool == AnnotationTool.SELECT) {
-            final Optional<Annotation> hit = store.hit(
-                viewSession().dimension(), worldPoint, ANNOTATION_HIT_TOLERANCE_PX * scale
-            );
-            if (hit.isEmpty()) {
-                selectedAnnotationId = null;
-                refreshAnnotationControls();
-                return false;
-            }
-            selectedAnnotationId = hit.get().id();
-            movingAnnotation = hit.get();
-            annotationMoveDx = 0.0;
-            annotationMoveDz = 0.0;
-            annotationPointerPress = true;
-            leftPressX = mouseX;
-            leftPressY = mouseY;
-            mapPointerPress = false;
-            refreshAnnotationControls();
-            return true;
-        }
-        if (annotationTool == AnnotationTool.ERASER) {
-            annotationPointerPress = true;
-            annotationDraft = null;
-            movingAnnotation = null;
-            erasingAnnotationIds.clear();
-            collectEraserHits(store, worldPoint);
-            mapPointerPress = false;
-            return true;
-        }
-        annotationDraft = new AnnotationDraft(annotationTool, worldPoint);
-        annotationPointerPress = true;
-        movingAnnotation = null;
-        leftPressX = mouseX;
-        leftPressY = mouseY;
-        mapPointerPress = false;
-        return true;
-    }
 
-    private void collectEraserHits(
-        final AnnotationStore store,
-        final AnnotationPoint worldPoint
-    ) {
-        final double radius = config.annotationEraserSize / 2.0 * scale;
-        for (final Annotation annotation : store.hits(
-            viewSession().dimension(), worldPoint, radius
-        )) {
-            erasingAnnotationIds.add(annotation.id());
-        }
-    }
-
-    private void collectEraserStroke(
-        final AnnotationStore store,
-        final double mouseX,
-        final double mouseY,
-        final double deltaX,
-        final double deltaY
-    ) {
-        final double distance = Math.hypot(deltaX, deltaY);
-        final double sampleSpacing = Math.max(1.0, config.annotationEraserSize / 4.0);
-        final int samples = Math.max(1, (int) Math.ceil(distance / sampleSpacing));
-        for (int index = 0; index <= samples; index++) {
-            final double progress = index / (double) samples;
-            collectEraserHits(store, annotationWorldPoint(
-                mouseX - deltaX + deltaX * progress,
-                mouseY - deltaY + deltaY * progress
-            ));
-        }
-    }
-
-    private AnnotationPoint annotationWorldPoint(final double mouseX, final double mouseY) {
-        return new AnnotationPoint(
-            centerX + (mouseX - width / 2.0) * scale,
-            centerZ + (mouseY - height / 2.0) * scale
-        );
-    }
-
-    private MeasurePath measurePath() {
-        final SessionGuard.Session session = viewSession();
-        return measureState.path(session.world(), session.dimension());
-    }
-
-    /** Right-click contract of the measure tool: undo the newest point, exit once the path is empty. */
-    private void undoMeasurePoint() {
-        if (!measurePath().undo()) {
-            selectAnnotationTool(AnnotationTool.SELECT);
-        }
-    }
-
-    private void openLocationMenu(final double mouseX, final double mouseY) {
-        annotationColorMenuOpen = false;
-        final boolean closingDrawing = toolPanel.isOpen(FullscreenMapToolPanel.Group.DRAWING);
-        toolPanel.close();
-        if (closingDrawing) {
-            selectAnnotationTool(AnnotationTool.SELECT);
-        }
-        final FullscreenMapLocationMenu.Capture capture = captureLocationMenu(
-            mouseX, mouseY, width / 2.0, height / 2.0,
-            width - MARGIN - CONTROL_SIZE - CONTROL_GAP, height
-        );
-        locationMenuBounds = capture.bounds();
-        locationMenuTarget = capture.target();
-        locationMenuWaypoint = capture.waypoint();
-        locationMenuPlayerId = capture.playerId();
-        pendingLocationAction = null;
-        locationMenuDeletePending = false;
-        mapPointerPress = false;
-        rebuildWaypointControls();
-    }
 
     /**
      * Captures the right-click menu target for a split-map screen embedding this map.
@@ -2121,56 +996,12 @@ public final class FullscreenMapScreen extends ConfluxScreen {
         final double mouseY,
         final SplitMapLayout layout
     ) {
-        return captureLocationMenu(
+        return locationMenu.captureLocationMenu(
             mouseX, mouseY, layout.mapCenterX(), layout.mapCenterY(),
             layout.mapWidth(), layout.screenHeight()
         );
     }
 
-    private FullscreenMapLocationMenu.Capture captureLocationMenu(
-        final double mouseX,
-        final double mouseY,
-        final double mapCenterX,
-        final double mapCenterY,
-        final int viewportWidth,
-        final int viewportHeight
-    ) {
-        final ServerPlayerRadarState.PlayerView playerTarget = hoveredRadarPlayer;
-        final double worldX = playerTarget == null
-            ? centerX + (mouseX - mapCenterX) * scale : playerTarget.x();
-        final double worldZ = playerTarget == null
-            ? centerZ + (mouseY - mapCenterY) * scale : playerTarget.z();
-        final FullscreenMapLocationMenu.Point point = FullscreenMapLocationMenu.pointAt(
-            worldX, worldZ, playerTarget == null ? hoveredStructure : null
-        );
-        final int blockX = point.blockX();
-        final int blockZ = point.blockZ();
-        final WaypointRenderEntry waypoint = playerTarget == null ? hoveredWaypoint : null;
-        final boolean existingWaypoint = FullscreenMapLocationMenu.isSavedWaypoint(waypoint);
-        // Sizing only: HIGHLIGHT and CLEAR_HIGHLIGHT swap 1:1, and the real state is resolved
-        // when the buttons are built (locationMenuButtonSpecs).
-        final FullscreenMapLocationMenu.Bounds bounds = FullscreenMapLocationMenu.place(
-            (int) Math.floor(mouseX),
-            (int) Math.floor(mouseY),
-            viewportWidth,
-            viewportHeight,
-            FullscreenMapLocationMenu.actions(
-                existingWaypoint, false, playerTarget != null
-            ).size()
-        );
-        final FullscreenMapLocationMenu.Target target = FullscreenMapLocationMenu.targetAt(
-            blockX,
-            playerTarget == null
-                ? groundAt(blockX, blockZ)
-                : new ColumnStore.SurfaceLookup(
-                    true, OptionalInt.of((int) Math.floor(playerTarget.y()) - 1)
-                ),
-            blockZ
-        );
-        return new FullscreenMapLocationMenu.Capture(
-            bounds, target, waypoint, playerTarget == null ? null : playerTarget.playerId()
-        );
-    }
 
     /**
      * Ground answer for one map column: a captured surface (or captured void), else the
@@ -2178,7 +1009,7 @@ public final class FullscreenMapScreen extends ConfluxScreen {
      * holding this column is queued ahead of the viewport order, because a map action may be
      * waiting on it.
      */
-    private ColumnStore.SurfaceLookup groundAt(final int blockX, final int blockZ) {
+    ColumnStore.SurfaceLookup groundAt(final int blockX, final int blockZ) {
         final ColumnStore.SurfaceLookup captured = capturedGroundAt(blockX, blockZ);
         if (captured.known()) {
             return captured;
@@ -2198,7 +1029,7 @@ public final class FullscreenMapScreen extends ConfluxScreen {
     }
 
     /** Captured-only ground for teleport decisions: a real column, a real void, or unknown. */
-    private ColumnStore.SurfaceLookup capturedGroundAt(final int blockX, final int blockZ) {
+    ColumnStore.SurfaceLookup capturedGroundAt(final int blockX, final int blockZ) {
         final MapWorld mapWorld = viewMapWorlds().current();
         if (mapWorld == null) {
             return ColumnStore.SurfaceLookup.UNKNOWN;
@@ -2208,24 +1039,6 @@ public final class FullscreenMapScreen extends ConfluxScreen {
             .surfaceAt(blockX, blockZ);
     }
 
-    private void performPendingLocationAction() {
-        final FullscreenMapLocationMenu.Action action = pendingLocationAction;
-        final FullscreenMapLocationMenu.Target target = locationMenuTarget;
-        final WaypointRenderEntry waypoint = locationMenuWaypoint;
-        final UUID playerId = locationMenuPlayerId;
-        if (action == null || target == null) {
-            return;
-        }
-        if (action == FullscreenMapLocationMenu.Action.DELETE_WAYPOINT
-            && !locationMenuDeletePending) {
-            pendingLocationAction = null;
-            locationMenuDeletePending = true;
-            rebuildWaypointControls();
-            return;
-        }
-        dismissLocationMenu();
-        runLocationAction(action, target, waypoint, playerId, this);
-    }
 
     /**
      * Offers the open menu's digit shortcuts to the shared key funnel in
@@ -2234,301 +1047,9 @@ public final class FullscreenMapScreen extends ConfluxScreen {
      */
     @Override
     protected boolean embeddedMenuHotkeyPressed(final int keyCode) {
-        if (locationMenuBounds == null) {
-            return false;
-        }
-        final FullscreenMapLocationMenu.Action action =
-            FullscreenMapLocationMenu.actionForHotkey(locationMenuSpecs, keyCode);
-        if (action == null) {
-            return false;
-        }
-        pendingLocationAction = action;
-        performPendingLocationAction();
-        return true;
+        return locationMenu.hotkeyPressed(keyCode);
     }
 
-    /**
-     * Runs one captured location-menu action. Embedded split-map hosts pass themselves as
-     * {@code returnTo} so the edit/share screens they open come back to them.
-     */
-    void runLocationAction(
-        final FullscreenMapLocationMenu.Action action,
-        final FullscreenMapLocationMenu.Target target,
-        final WaypointRenderEntry waypoint,
-        final UUID playerId,
-        final Screen returnTo
-    ) {
-        switch (action) {
-            case HIGHLIGHT, HIGHLIGHT_WAYPOINT -> {
-                serverPlayerRadar.clearHighlight();
-                if (waypoint != null) {
-                    if (WaypointHighlightState.SELECTED_LOCATION_ID.equals(waypoint.id())) {
-                        waypointHighlightState.target()
-                            .filter(existing -> existing.waypointId() == null)
-                            .ifPresentOrElse(
-                                waypointHighlightState::select,
-                                () -> selectLocationHighlight(target)
-                            );
-                    } else {
-                        waypointHighlightState.selectWaypoint(
-                            waypoint, viewSession().dimension()
-                        );
-                    }
-                } else if (target != null) {
-                    selectLocationHighlight(target);
-                }
-            }
-            case CLEAR_HIGHLIGHT -> waypointHighlightState.clear();
-            case HIGHLIGHT_PLAYER -> {
-                if (playerId != null && serverPlayerRadar.highlight(playerId)) {
-                    waypointHighlightState.clear();
-                }
-            }
-            case CLEAR_PLAYER_HIGHLIGHT -> serverPlayerRadar.clearHighlight();
-            case SET_WAYPOINT -> gameBridge.player().ifPresent(player -> MinecraftAccess.setScreen(
-                MinecraftClient.getInstance(),
-                WaypointEditScreen.forCreate(
-                    returnTo,
-                    viewSession().dimension(),
-                    target.blockX(),
-                    target.placementY(player.blockY()),
-                    target.blockZ(),
-                    this::viewWaypointStore
-                )
-            ));
-            case EDIT_WAYPOINT -> {
-                if (waypoint != null) {
-                    openWaypointFromLocationMenu(waypoint, returnTo);
-                }
-            }
-            case DELETE_WAYPOINT -> {
-                if (waypoint != null) {
-                    deleteWaypointFromLocationMenu(waypoint);
-                }
-            }
-            case SHARE_LOCATION -> gameBridge.player().ifPresent(
-                player -> shareTemporaryLocation(target, target.placementY(player.blockY()), returnTo)
-            );
-            case SHARE_WAYPOINT -> {
-                if (waypoint != null) {
-                    shareWaypoint(waypoint, returnTo);
-                }
-            }
-            case TELEPORT -> {
-                final SessionGuard.Session viewed = viewSession();
-                groundTeleport.teleport(
-                    target.blockX(), target.blockZ(),
-                    landingWithExternalOverride(target, viewed),
-                    target.ground(),
-                    viewed.dimension(), viewed.world()
-                );
-                if (config.teleportCloseMap) {
-                    onClose();
-                }
-            }
-        }
-        fireLocationActionPerformed(action, target);
-    }
-
-    /**
-     * The captured ground for the teleport, upgraded by the API landing resolver when the
-     * mod has no landing answer of its own: a browsed (non-live) session whose column is
-     * unknown. A resolver answer becomes a synthesized captured surface, so the teleport
-     * lands at the supplied height in one command. Live sessions and known columns keep
-     * the two-stage policy untouched.
-     */
-    private ColumnStore.SurfaceLookup landingWithExternalOverride(
-        final FullscreenMapLocationMenu.Target target,
-        final SessionGuard.Session viewed
-    ) {
-        final ColumnStore.SurfaceLookup captured = capturedGroundAt(target.blockX(), target.blockZ());
-        if (captured.known()
-            || FullscreenMapLocationMenu.teleportPositionKnown(target, viewingLiveSession())) {
-            return captured;
-        }
-        final ConfluxMapApiImpl api = ConfluxMapClient.get().api();
-        final OptionalInt override = api == null
-            ? OptionalInt.empty()
-            : api.resolveTeleportLanding(target.blockX(), target.blockZ(), viewed.dimension(), false);
-        return override.isPresent()
-            ? new ColumnStore.SurfaceLookup(true, OptionalInt.of(override.getAsInt() - 1))
-            : captured;
-    }
-
-    /** Menu-gating variant of the teleport position answer, including API-supplied landings. */
-    private boolean teleportPositionKnownForMenu(final FullscreenMapLocationMenu.Target target) {
-        if (FullscreenMapLocationMenu.teleportPositionKnown(target, viewingLiveSession())) {
-            return true;
-        }
-        final ConfluxMapApiImpl api = ConfluxMapClient.get().api();
-        return api != null && api.resolveTeleportLanding(
-            target.blockX(), target.blockZ(), viewSession().dimension(), false
-        ).isPresent();
-    }
-
-    /** Reports an executed location action to API listeners; skips coordinate-less calls. */
-    private void fireLocationActionPerformed(
-        final FullscreenMapLocationMenu.Action action,
-        final FullscreenMapLocationMenu.Target target
-    ) {
-        if (target == null) {
-            return;
-        }
-        final ConfluxMapApiImpl api = ConfluxMapClient.get().api();
-        if (api == null) {
-            return;
-        }
-        final ConfluxMapEvents.LocationAction mapped = switch (action) {
-            case SET_WAYPOINT -> ConfluxMapEvents.LocationAction.SET_WAYPOINT;
-            case EDIT_WAYPOINT -> ConfluxMapEvents.LocationAction.EDIT_WAYPOINT;
-            case DELETE_WAYPOINT -> ConfluxMapEvents.LocationAction.DELETE_WAYPOINT;
-            case SHARE_LOCATION -> ConfluxMapEvents.LocationAction.SHARE_LOCATION;
-            case SHARE_WAYPOINT -> ConfluxMapEvents.LocationAction.SHARE_WAYPOINT;
-            case TELEPORT -> ConfluxMapEvents.LocationAction.TELEPORT;
-            case HIGHLIGHT -> ConfluxMapEvents.LocationAction.HIGHLIGHT;
-            case HIGHLIGHT_WAYPOINT -> ConfluxMapEvents.LocationAction.HIGHLIGHT_WAYPOINT;
-            case CLEAR_HIGHLIGHT -> ConfluxMapEvents.LocationAction.CLEAR_HIGHLIGHT;
-            case HIGHLIGHT_PLAYER -> ConfluxMapEvents.LocationAction.HIGHLIGHT_PLAYER;
-            case CLEAR_PLAYER_HIGHLIGHT -> ConfluxMapEvents.LocationAction.CLEAR_PLAYER_HIGHLIGHT;
-        };
-        api.fireLocationActionPerformed(
-            mapped, target.blockX(), target.blockZ(), viewSession().dimension(), target.groundKnown()
-        );
-    }
-
-    private void selectLocationHighlight(final FullscreenMapLocationMenu.Target target) {
-        final boolean yKnown = target.blockY().isPresent();
-        waypointHighlightState.select(WaypointHighlightState.Target.location(
-            viewSession().dimension(), target.blockX() + 0.5,
-            yKnown ? target.blockY().getAsInt() : WaypointHighlightState.DEFAULT_LOCATION_Y,
-            target.blockZ() + 0.5, yKnown
-        ));
-    }
-
-    private void shareTemporaryLocation(
-        final FullscreenMapLocationMenu.Target target,
-        final int y,
-        final Screen returnTo
-    ) {
-        final MinecraftClient client = MinecraftClient.getInstance();
-        final String name = Texts.translatable("confluxmap.map.location_menu.temporary_name").getString();
-        final Waypoint temporary = new Waypoint(
-            UUID.randomUUID(),
-            name,
-            viewSession().dimension(),
-            target.blockX(),
-            y,
-            target.blockZ(),
-            TEMPORARY_LOCATION_COLOR,
-            "",
-            true,
-            Waypoint.Type.NORMAL,
-            System.currentTimeMillis()
-        );
-        MinecraftAccess.setScreen(client, new WaypointShareConfirmScreen(
-            returnTo, temporary, WaypointShareConfirmScreen.Target.CHAT
-        ));
-    }
-
-    private void shareWaypoint(final WaypointRenderEntry waypoint, final Screen returnTo) {
-        final MinecraftClient client = MinecraftClient.getInstance();
-        if (waypoint.local()) {
-            viewWaypointService().list().stream()
-                .filter(local -> local.id.equals(waypoint.id()))
-                .findFirst()
-                .ifPresent(local -> MinecraftAccess.setScreen(
-                    client,
-                    new WaypointShareConfirmScreen(
-                        returnTo, local, WaypointShareConfirmScreen.Target.CHAT
-                    )
-                ));
-            return;
-        }
-        sharedWaypoints.find(waypoint.id()).ifPresent(shared ->
-            MinecraftAccess.setScreen(
-                client,
-                WaypointShareConfirmScreen.forSharedWaypoint(
-                    returnTo,
-                    shared
-                )
-            )
-        );
-    }
-
-    private void dismissLocationMenu() {
-        locationMenuBounds = null;
-        locationMenuTarget = null;
-        locationMenuWaypoint = null;
-        locationMenuPlayerId = null;
-        locationMenuSpecs = List.of();
-        pendingLocationAction = null;
-        locationMenuDeletePending = false;
-        rebuildWaypointControls();
-    }
-
-    private boolean waypointEditable(final WaypointRenderEntry waypoint) {
-        if (waypoint == null || waypoint.sibling()) {
-            return false;
-        }
-        if (waypoint.local()) {
-            final WaypointStore store = viewWaypointStore();
-            return store != null && store.persistenceWritable();
-        }
-        return sharedWaypoints.find(waypoint.id()).map(sharedWaypoints::canUpdate).orElse(false);
-    }
-
-    private String waypointDeleteUnavailableKey(final WaypointRenderEntry waypoint) {
-        if (waypoint == null) {
-            return "confluxmap.screen.waypoint.public_unavailable";
-        }
-        if (waypoint.sibling()) {
-            return "confluxmap.screen.waypoints.cross_world_read_only";
-        }
-        if (waypoint.local()) {
-            final WaypointStore store = viewWaypointStore();
-            return store != null && store.persistenceWritable()
-                ? null : "confluxmap.screen.waypoints.read_only";
-        }
-        final var shared = sharedWaypoints.find(waypoint.id());
-        return shared.isPresent()
-            ? sharedWaypoints.deleteDisabledReasonKey(shared.get())
-            : "confluxmap.screen.waypoint.public_unavailable";
-    }
-
-    private void openWaypointFromLocationMenu(
-        final WaypointRenderEntry waypoint,
-        final Screen returnTo
-    ) {
-        if (waypoint.local()) {
-            viewWaypointService().list().stream()
-                .filter(local -> local.id.equals(waypoint.id()))
-                .findFirst()
-                .ifPresent(local -> MinecraftAccess.setScreen(
-                    MinecraftClient.getInstance(), WaypointEditScreen.forEdit(
-                        returnTo, local, this::viewWaypointStore
-                    )
-                ));
-            return;
-        }
-        sharedWaypoints.find(waypoint.id())
-            .filter(sharedWaypoints::canUpdate)
-            .ifPresent(shared -> MinecraftAccess.setScreen(
-                MinecraftClient.getInstance(), WaypointEditScreen.forPublicEdit(returnTo, shared)
-            ));
-    }
-
-    private void deleteWaypointFromLocationMenu(final WaypointRenderEntry waypoint) {
-        if (waypoint.local()) {
-            final WaypointStore store = viewWaypointStore();
-            if (store != null && store.persistenceWritable()) {
-                store.remove(waypoint.id());
-            }
-            return;
-        }
-        sharedWaypoints.find(waypoint.id())
-            .filter(sharedWaypoints::canDelete)
-            .ifPresent(sharedWaypoints::delete);
-    }
 
     /**
      * Completes the left-click-a-marker-to-edit gesture: if the cursor is still on
@@ -2556,19 +1077,19 @@ public final class FullscreenMapScreen extends ConfluxScreen {
                     regionSelectAnchorX, regionSelectAnchorZ, cursorX, cursorZ
                 );
             } else if (!isOverMapControls(mouseX, mouseY)) {
-                openLocationMenu(mouseX, mouseY);
+                locationMenu.openLocationMenu(mouseX, mouseY);
             }
             return true;
         }
-        if (exportSelectionScreen != null && button == MouseButtons.LEFT && mapPointerPress) {
+        if (exportControls.selecting() && button == MouseButtons.LEFT && mapPointerPress) {
             mapPointerPress = false;
             if (Math.hypot(mouseX - leftPressX, mouseY - leftPressY) < CLICK_DRAG_TOLERANCE_PX) {
-                selectExportCorner(mouseX, mouseY);
+                exportControls.selectExportCorner(mouseX, mouseY);
             }
             return true;
         }
-        if (button == MouseButtons.LEFT && annotationPointerPress) {
-            commitAnnotationPointer(mouseX, mouseY);
+        if (button == MouseButtons.LEFT && annotations.isPointerDown()) {
+            annotations.commitAnnotationPointer(mouseX, mouseY);
             return true;
         }
         if (button != MouseButtons.LEFT || !mapPointerPress) {
@@ -2579,13 +1100,7 @@ public final class FullscreenMapScreen extends ConfluxScreen {
             //#endif
         }
         mapPointerPress = false;
-        if (measureMode
-            && !isOverMapControls(mouseX, mouseY)
-            && Math.hypot(mouseX - leftPressX, mouseY - leftPressY) < CLICK_DRAG_TOLERANCE_PX) {
-            final AnnotationPoint raw = annotationWorldPoint(mouseX, mouseY);
-            measurePath().add(new AnnotationPoint(
-                Math.floor(raw.x()) + 0.5, Math.floor(raw.z()) + 0.5
-            ));
+        if (annotations.placeMeasurePoint(mouseX, mouseY)) {
             return true;
         }
         if (hoveredWaypoint != null
@@ -2597,58 +1112,6 @@ public final class FullscreenMapScreen extends ConfluxScreen {
         return true;
     }
 
-    private void commitAnnotationPointer(final double mouseX, final double mouseY) {
-        annotationPointerPress = false;
-        final AnnotationStore store = viewAnnotationStore();
-        if (store == null) {
-            movingAnnotation = null;
-            annotationDraft = null;
-            erasingAnnotationIds.clear();
-            return;
-        }
-        if (annotationTool == AnnotationTool.ERASER) {
-            collectEraserHits(store, annotationWorldPoint(mouseX, mouseY));
-            if (store.removeAll(erasingAnnotationIds) > 0) {
-                if (selectedAnnotationId != null && erasingAnnotationIds.contains(selectedAnnotationId)) {
-                    selectedAnnotationId = null;
-                }
-                refreshAnnotationControls();
-            }
-            erasingAnnotationIds.clear();
-            return;
-        }
-        if (movingAnnotation != null) {
-            if (annotationMoveDx != 0.0 || annotationMoveDz != 0.0) {
-                store.update(movingAnnotation.withGeometry(
-                    movingAnnotation.geometry().translate(annotationMoveDx, annotationMoveDz)
-                ));
-            }
-            movingAnnotation = null;
-            annotationMoveDx = 0.0;
-            annotationMoveDz = 0.0;
-            return;
-        }
-        if (annotationDraft != null) {
-            annotationDraft.dragTo(annotationWorldPoint(mouseX, mouseY), scale);
-            final Optional<AnnotationGeometry> geometry = annotationDraft.geometry(scale, true);
-            annotationDraft = null;
-            if (geometry.isPresent()) {
-                final Annotation created = new Annotation(
-                    UUID.randomUUID(),
-                    viewSession().dimension(),
-                    geometry.get(),
-                    new AnnotationStyle(newAnnotationColor),
-                    "",
-                    newAnnotationPersistence,
-                    System.currentTimeMillis()
-                );
-                if (store.add(created)) {
-                    selectedAnnotationId = created.id();
-                    refreshAnnotationControls();
-                }
-            }
-        }
-    }
 
     @Override
     //#if MC>=12109
@@ -2659,18 +1122,9 @@ public final class FullscreenMapScreen extends ConfluxScreen {
     //#else
     public boolean mouseDragged(final double mouseX, final double mouseY, final int button, final double deltaX, final double deltaY) {
     //#endif
-        if (button == MouseButtons.LEFT && annotationPointerPress) {
-            if (annotationTool == AnnotationTool.ERASER) {
-                final AnnotationStore store = viewAnnotationStore();
-                if (store != null) {
-                    collectEraserStroke(store, mouseX, mouseY, deltaX, deltaY);
-                }
-            } else if (movingAnnotation != null) {
-                annotationMoveDx = (mouseX - leftPressX) * scale;
-                annotationMoveDz = (mouseY - leftPressY) * scale;
-            } else if (annotationDraft != null) {
-                annotationDraft.dragTo(annotationWorldPoint(mouseX, mouseY), scale);
-            }
+        if (button == MouseButtons.LEFT
+            && annotations.isPointerDown()
+            && annotations.dragPointer(mouseX, mouseY, deltaX, deltaY)) {
             return true;
         }
         if (button == MouseButtons.RIGHT && regionSelectPress) {
@@ -2695,7 +1149,7 @@ public final class FullscreenMapScreen extends ConfluxScreen {
         //#endif
     }
 
-    private boolean isOverMapControls(final double mouseX, final double mouseY) {
+    boolean isOverMapControls(final double mouseX, final double mouseY) {
         final int left = width - MARGIN - CONTROL_SIZE;
         final int top = MARGIN + this.textRenderer.fontHeight + 5;
         final boolean waypointControls = mouseX >= left && mouseX <= width - MARGIN
@@ -2739,20 +1193,11 @@ public final class FullscreenMapScreen extends ConfluxScreen {
         if (!regionSelectDragging) {
             regionSelection = null;
         }
-        final TargetDropdown targetDropdown = targetDropdown();
-        if (amount != 0 && targetDropdown != null
-            && (targetDropdown.contains(mouseX, mouseY)
-                || isOverTargetSelector(mouseX, mouseY))) {
-            targetDropdownScrollOffset = DropdownScroll.afterWheel(
-                targetDropdownScrollOffset,
-                amount,
-                targetDropdown.optionCount(),
-                targetDropdown.visibleRows()
-            );
+        if (selectors.wheelScrolled(mouseX, mouseY, amount)) {
             return true;
         }
-        if (locationMenuBounds != null) {
-            dismissLocationMenu();
+        if (locationMenu.isOpen()) {
+            locationMenu.dismissLocationMenu();
             return true;
         }
         if (amount == 0) {
@@ -2877,11 +1322,11 @@ public final class FullscreenMapScreen extends ConfluxScreen {
         drawGrid(matrices);
         drawTiles(matrices);
         if (loadStateMode()) {
-            drawChunkLoadStateOverlay(draw);
+            loadStateOverlay.drawChunkLoadStateOverlay(draw);
         }
         drawChunkGrid(matrices, mouseX, mouseY);
         drawPlayerTrail(matrices);
-        drawAnnotations(draw, mouseX, mouseY);
+        annotations.drawAnnotations(draw, mouseX, mouseY);
         drawStructures(draw, mouseX, mouseY);
         drawPortals(draw, mouseX, mouseY);
         drawRadar(draw, tickDelta, mouseX, mouseY);
@@ -2891,63 +1336,21 @@ public final class FullscreenMapScreen extends ConfluxScreen {
         drawCameraMarker(matrices, radarObserver);
         drawPlayerMarker(matrices, tickDelta);
         drawRegionSelection(draw, mouseX, mouseY);
-        drawMeasureOverlay(draw, mouseX, mouseY);
-        drawExportSelection(draw, mouseX, mouseY);
-        drawDimensionLabel(draw);
-        drawLayerLabel(draw);
-        drawPredictionLabel(draw);
-        drawServerSyncLabel(draw);
+        annotations.drawMeasureOverlay(draw, mouseX, mouseY);
+        exportControls.drawExportSelection(draw, mouseX, mouseY);
+        infoLabels.drawDimensionLabel(draw);
+        infoLabels.drawLayerLabel(draw);
+        infoLabels.drawPredictionLabel(draw);
+        infoLabels.drawServerSyncLabel(draw);
         if (loadStateMode()) {
-            drawChunkLoadStateLegend(draw);
+            loadStateOverlay.drawChunkLoadStateLegend(draw);
         }
-        drawScaleLabel(draw);
-        drawCursorCoords(draw, mouseX, mouseY);
-        drawUpdateBadge(draw);
-        drawLocationMenu(draw);
+        infoLabels.drawScaleLabel(draw);
+        infoLabels.drawCursorCoords(draw, mouseX, mouseY);
+        infoLabels.drawUpdateBadge(draw);
+        locationMenu.drawLocationMenu(draw);
     }
 
-    private void drawExportSelection(final GuiDraw draw, final int mouseX, final int mouseY) {
-        if (exportSelectionScreen == null) {
-            return;
-        }
-        final String instruction = Texts.translatable(
-            exportSelection.bounds().isPresent()
-                ? "confluxmap.screen.map_export.selection_ready"
-                : exportSelection.first().isEmpty()
-                    ? "confluxmap.screen.map_export.select_first"
-                    : "confluxmap.screen.map_export.select_second"
-        ).getString();
-        draw.drawTextWithShadow(
-            this.textRenderer,
-            instruction,
-            width / 2f - this.textRenderer.getWidth(instruction) / 2f,
-            MARGIN,
-            TEXT_COLOR
-        );
-        final Optional<MapExportSelection.Point> first = exportSelection.first();
-        if (first.isEmpty()) {
-            return;
-        }
-        final int cursorX = (int) Math.floor(centerX + (mouseX - width / 2.0) * scale);
-        final int cursorZ = (int) Math.floor(centerZ + (mouseY - height / 2.0) * scale);
-        final MapExportBounds preview = exportSelection.bounds().orElseGet(() -> MapExportBounds.between(
-            first.get().x(), first.get().z(), cursorX, cursorZ
-        ));
-        final int minX = preview.minX();
-        final int minZ = preview.minZ();
-        final int maxX = preview.maxX();
-        final int maxZ = preview.maxZ();
-        final float left = (float) (width / 2.0 + (minX - centerX) / scale);
-        final float top = (float) (height / 2.0 + (minZ - centerZ) / scale);
-        final float right = (float) (width / 2.0 + ((long) maxX + 1L - centerX) / scale);
-        final float bottom = (float) (height / 2.0 + ((long) maxZ + 1L - centerZ) / scale);
-        final MatrixStack matrices = draw.matrices();
-        RenderUtil.fillRect(matrices, left, top, right - left, bottom - top, 0x303399FF);
-        RenderUtil.fillRect(matrices, left, top, right - left, 1f, 0xFF66CCFF);
-        RenderUtil.fillRect(matrices, left, bottom - 1f, right - left, 1f, 0xFF66CCFF);
-        RenderUtil.fillRect(matrices, left, top, 1f, bottom - top, 0xFF66CCFF);
-        RenderUtil.fillRect(matrices, right - 1f, top, 1f, bottom - top, 0xFF66CCFF);
-    }
 
     /**
      * Right-drag region selection: a chunk-snapped rectangle with the covered chunk and block
@@ -3051,194 +1454,8 @@ public final class FullscreenMapScreen extends ConfluxScreen {
         );
     }
 
-    private void drawAnnotations(final GuiDraw draw, final int mouseX, final int mouseY) {
-        final AnnotationStore store = viewAnnotationStore();
-        if (store == null) {
-            return;
-        }
-        final List<Annotation> visible = new ArrayList<>(store.list(viewSession().dimension()));
-        visible.removeIf(annotation -> erasingAnnotationIds.contains(annotation.id()));
-        if (movingAnnotation != null) {
-            for (int index = 0; index < visible.size(); index++) {
-                if (visible.get(index).id().equals(movingAnnotation.id())) {
-                    visible.set(index, movingAnnotation.withGeometry(
-                        movingAnnotation.geometry().translate(annotationMoveDx, annotationMoveDz)
-                    ));
-                    break;
-                }
-            }
-        }
-        if (annotationDraft != null) {
-            annotationDraft.geometry(scale, false).ifPresent(geometry -> visible.add(new Annotation(
-                ANNOTATION_DRAFT_ID,
-                viewSession().dimension(),
-                geometry,
-                new AnnotationStyle(newAnnotationColor),
-                "",
-                newAnnotationPersistence,
-                System.currentTimeMillis()
-            )));
-        }
-        final AnnotationProjection projection = new AnnotationProjection(
-            centerX,
-            centerZ,
-            width / 2.0,
-            height / 2.0,
-            scale,
-            0.0,
-            width,
-            height
-        );
-        AnnotationRenderer.drawGeometry(
-            draw.matrices(),
-            visible,
-            projection,
-            annotationDraft == null ? selectedAnnotationId : ANNOTATION_DRAFT_ID
-        );
-        AnnotationRenderer.drawLabels(
-            draw,
-            this.textRenderer,
-            visible,
-            projection,
-            0,
-            0,
-            width,
-            height,
-            AnnotationRenderer.ClipShape.RECTANGLE
-        );
-        if (annotationTool == AnnotationTool.ERASER
-            && locationMenuBounds == null
-            && !isOverMapControls(mouseX, mouseY)) {
-            RenderUtil.drawRing(
-                draw.matrices(),
-                mouseX,
-                mouseY,
-                config.annotationEraserSize / 2.0f,
-                1.5f,
-                0xE6FFFFFF
-            );
-        }
-    }
 
-    /**
-     * Measure overlay: committed points and segments stay visible for the viewed dimension even
-     * after the tool is deselected, so a finished measurement keeps reading until cleared.
-     */
-    private void drawMeasureOverlay(final GuiDraw draw, final int mouseX, final int mouseY) {
-        final MeasurePath path = measurePath();
-        if (!measureMode && path.isEmpty()) {
-            return;
-        }
-        final MatrixStack matrices = draw.matrices();
-        final AnnotationProjection projection = new AnnotationProjection(
-            centerX, centerZ, width / 2.0, height / 2.0, scale, 0.0, width, height
-        );
-        final List<AnnotationPoint> points = path.points();
-        for (int index = 1; index < points.size(); index++) {
-            final AnnotationProjection.ScreenPoint start = projection.project(points.get(index - 1));
-            final AnnotationProjection.ScreenPoint end = projection.project(points.get(index));
-            AnnotationRenderer.stroke(matrices, start, end, MEASURE_STROKE_WIDTH, MEASURE_LINE_COLOR);
-            drawMeasureSegmentLabel(draw, start, end, measureDistanceText(path.segmentLength(index - 1)));
-        }
-        for (final AnnotationPoint point : points) {
-            final AnnotationProjection.ScreenPoint at = projection.project(point);
-            RenderUtil.fillBeveledDiamond(
-                matrices, (float) at.x(), (float) at.y(), MEASURE_VERTEX_RADIUS, MEASURE_VERTEX_COLOR
-            );
-        }
-        if (points.size() >= 2) {
-            final AnnotationProjection.ScreenPoint last = projection.project(points.get(points.size() - 1));
-            drawMeasureLabel(
-                draw,
-                last.x(),
-                last.y() - MEASURE_VERTEX_RADIUS - 2.0,
-                Texts.translatable(
-                    "confluxmap.map.measure.total", measureDistanceText(path.totalLength())
-                ).getString(),
-                MEASURE_TOTAL_COLOR
-            );
-        }
-        final boolean cursorOnMap = locationMenuBounds == null && !isOverMapControls(mouseX, mouseY);
-        if (measureMode && !path.isEmpty() && cursorOnMap && exportSelectionScreen == null) {
-            final AnnotationPoint raw = annotationWorldPoint(mouseX, mouseY);
-            final AnnotationPoint snapped = new AnnotationPoint(
-                Math.floor(raw.x()) + 0.5, Math.floor(raw.z()) + 0.5
-            );
-            final AnnotationProjection.ScreenPoint from = projection.project(points.get(points.size() - 1));
-            final AnnotationProjection.ScreenPoint to = projection.project(snapped);
-            AnnotationRenderer.stroke(
-                matrices, from, to, MEASURE_PREVIEW_STROKE_WIDTH, MEASURE_PREVIEW_COLOR
-            );
-            drawMeasureSegmentLabel(
-                draw, from, to, measureDistanceText(MeasurePath.distance(points.get(points.size() - 1), snapped))
-            );
-        }
-        if (measureMode && exportSelectionScreen == null) {
-            final String hint = Texts.translatable("confluxmap.map.measure.hint").getString();
-            final int hintWidth = this.textRenderer.getWidth(hint);
-            draw.drawTextWithShadow(
-                this.textRenderer,
-                hint,
-                width / 2f - hintWidth / 2f,
-                height - MARGIN - 12 - this.textRenderer.fontHeight,
-                TEXT_COLOR
-            );
-        }
-    }
-
-    private static String measureDistanceText(final double blocks) {
-        return Texts.translatable("confluxmap.map.measure.segment", MeasureFormat.blocks(blocks)).getString();
-    }
-
-    private void drawMeasureSegmentLabel(
-        final GuiDraw draw,
-        final AnnotationProjection.ScreenPoint start,
-        final AnnotationProjection.ScreenPoint end,
-        final String text
-    ) {
-        final double dx = end.x() - start.x();
-        final double dy = end.y() - start.y();
-        final double length = Math.hypot(dx, dy);
-        if (length == 0.0) {
-            return;
-        }
-        final double perpendicularX = -dy / length;
-        final double perpendicularY = dx / length;
-        // Always lift the label to the segment's upper side so it stays over the map.
-        final double side = perpendicularY > 0.0 ? -1.0 : 1.0;
-        drawMeasureLabel(
-            draw,
-            (start.x() + end.x()) / 2.0 + perpendicularX * side * MEASURE_LABEL_OFFSET_PX,
-            (start.y() + end.y()) / 2.0 + perpendicularY * side * MEASURE_LABEL_OFFSET_PX,
-            text,
-            0xFFFFFFFF
-        );
-    }
-
-    private void drawMeasureLabel(
-        final GuiDraw draw,
-        final double x,
-        final double y,
-        final String text,
-        final int color
-    ) {
-        final int textWidth = this.textRenderer.getWidth(text);
-        final float left = (float) (x - textWidth / 2.0);
-        final float top = (float) (y - this.textRenderer.fontHeight / 2.0);
-        if (left < 0.0f || top < 0.0f
-            || left + textWidth > width || top + this.textRenderer.fontHeight > height) {
-            return;
-        }
-        if (mapOverlayIntersectsUi(
-            left - 1.0f, top - 1.0f,
-            left + textWidth + 1.0f, top + this.textRenderer.fontHeight + 1.0f
-        )) {
-            return;
-        }
-        draw.drawTextWithShadow(this.textRenderer, text, left, top, color);
-    }
-
-    private FullscreenDisplayMode displayMode() {
+    FullscreenDisplayMode displayMode() {
         if (config.fullscreenDisplayMode == FullscreenDisplayMode.CHUNK_LOAD_STATE
             && (!viewingLiveSession() || !chunkLoadStates.available())) {
             return FullscreenDisplayMode.TERRAIN;
@@ -3250,11 +1467,11 @@ public final class FullscreenMapScreen extends ConfluxScreen {
         return config.fullscreenDisplayMode;
     }
 
-    private boolean loadStateMode() {
+    boolean loadStateMode() {
         return displayMode() == FullscreenDisplayMode.CHUNK_LOAD_STATE;
     }
 
-    private boolean biomeMode() {
+    boolean biomeMode() {
         return displayMode() == FullscreenDisplayMode.BIOME;
     }
 
@@ -3284,305 +1501,9 @@ public final class FullscreenMapScreen extends ConfluxScreen {
         displayModeButton.active = true;
     }
 
-    private Text loadStateDetailLabel() {
-        final String valueKey = config.chunkLoadDetailMode == ChunkLoadDetailMode.EXACT
-            ? "confluxmap.map.load_state.detail.exact"
-            : "confluxmap.map.load_state.detail.bands";
-        return Texts.translatable(
-            "confluxmap.map.load_state.detail",
-            Texts.translatable(valueKey).getString()
-        );
-    }
 
-    private void drawChunkLoadStateOverlay(final GuiDraw draw) {
-        final MatrixStack matrices = draw.matrices();
-        final int minChunkX = TileMath.blockToChunk(
-            (int) Math.floor(centerX - width / 2.0 * scale)
-        );
-        final int maxChunkX = TileMath.blockToChunk(
-            (int) Math.ceil(centerX + width / 2.0 * scale)
-        );
-        final int minChunkZ = TileMath.blockToChunk(
-            (int) Math.floor(centerZ - height / 2.0 * scale)
-        );
-        final int maxChunkZ = TileMath.blockToChunk(
-            (int) Math.ceil(centerZ + height / 2.0 * scale)
-        );
-        chunkLoadStates.reportViewport(
-            gameBridge.session().dimension(), minChunkX, maxChunkX, minChunkZ, maxChunkZ
-        );
 
-        final float chunkSize = (float) ChunkScreenRect.chunkSize(scale);
-        final ChunkLoadOverlayStyle style = ChunkLoadOverlayStyle.forChunkWidth(
-            chunkSize, config.chunkLoadDetailMode
-        );
-        for (final LoadStateDeltaS2C.Entry entry : chunkLoadStates.snapshot().entries()) {
-            if (entry.chunkX() < minChunkX || entry.chunkX() > maxChunkX
-                || entry.chunkZ() < minChunkZ || entry.chunkZ() > maxChunkZ) {
-                continue;
-            }
-            final ChunkScreenRect rect = ChunkScreenRect.forChunk(
-                entry.chunkX(), entry.chunkZ(), centerX, centerZ, width, height, scale
-            );
-            final float screenX = (float) rect.x();
-            final float screenY = (float) rect.y();
-            RenderUtil.fillRect(
-                matrices, screenX, screenY, chunkSize, chunkSize, loadStateColor(entry.band())
-            );
-            if (style.drawOutline()) {
-                drawChunkLoadOutline(matrices, screenX, screenY, chunkSize);
-            }
-            if (style.drawLevelLabel()) {
-                final String level = "L" + entry.level();
-                final int textWidth = this.textRenderer.getWidth(level);
-                draw.drawTextWithShadow(
-                    this.textRenderer,
-                    level,
-                    screenX + (chunkSize - textWidth) / 2f,
-                    screenY + (chunkSize - this.textRenderer.fontHeight) / 2f,
-                    TEXT_COLOR
-                );
-            }
-        }
-    }
 
-    private static int loadStateColor(final ChunkLoadBand band) {
-        return switch (band) {
-            case ENTITY_TICKING -> LOAD_STATE_ENTITY_COLOR;
-            case BLOCK_TICKING -> LOAD_STATE_BLOCK_COLOR;
-            case BORDER -> LOAD_STATE_BORDER_COLOR;
-            case UNLOADED -> LOAD_STATE_UNLOADED_COLOR;
-        };
-    }
-
-    private static void drawChunkLoadOutline(
-        final MatrixStack matrices,
-        final float x,
-        final float y,
-        final float size
-    ) {
-        RenderUtil.fillRect(matrices, x, y, size, 1f, LOAD_STATE_OUTLINE_COLOR);
-        RenderUtil.fillRect(matrices, x, y + size - 1f, size, 1f, LOAD_STATE_OUTLINE_COLOR);
-        RenderUtil.fillRect(matrices, x, y, 1f, size, LOAD_STATE_OUTLINE_COLOR);
-        RenderUtil.fillRect(matrices, x + size - 1f, y, 1f, size, LOAD_STATE_OUTLINE_COLOR);
-    }
-
-    private void drawChunkLoadStateLegend(final GuiDraw draw) {
-        final int rowHeight = this.textRenderer.fontHeight + 3;
-        final int legendWidth = Math.min(180, Math.max(130, width / 3));
-        final int legendHeight = rowHeight * 5 + 8;
-        final int x = MARGIN;
-        final int y = height - MARGIN - legendHeight;
-        draw.fill(x, y, x + legendWidth, y + legendHeight, LOAD_STATE_LEGEND_BACKGROUND);
-        final String status = Texts.translatable(
-            chunkLoadStates.snapshot().complete()
-                ? "confluxmap.map.load_state.ready"
-                : "confluxmap.map.load_state.loading"
-        ).getString();
-        draw.drawTextWithShadow(this.textRenderer, status, x + 5, y + 4, TEXT_COLOR);
-        drawLegendRow(draw, x, y + 4 + rowHeight, ChunkLoadBand.ENTITY_TICKING);
-        drawLegendRow(draw, x, y + 4 + rowHeight * 2, ChunkLoadBand.BLOCK_TICKING);
-        drawLegendRow(draw, x, y + 4 + rowHeight * 3, ChunkLoadBand.BORDER);
-        drawLegendRow(draw, x, y + 4 + rowHeight * 4, ChunkLoadBand.UNLOADED);
-    }
-
-    private void drawLegendRow(
-        final GuiDraw draw,
-        final int x,
-        final int y,
-        final ChunkLoadBand band
-    ) {
-        draw.fill(x + 5, y + 1, x + 13, y + 9, LOAD_STATE_OUTLINE_COLOR);
-        draw.fill(x + 6, y + 2, x + 12, y + 8, loadStateColor(band));
-        draw.drawTextWithShadow(
-            this.textRenderer,
-            loadStateBandName(band),
-            x + 17,
-            y,
-            TEXT_COLOR
-        );
-    }
-
-    private static String loadStateBandName(final ChunkLoadBand band) {
-        return Texts.translatable(
-            "confluxmap.map.load_state.band." + band.name().toLowerCase(java.util.Locale.ROOT)
-        ).getString();
-    }
-
-    private void drawLocationMenu(final GuiDraw draw) {
-        if (locationMenuBounds == null) {
-            return;
-        }
-        FullscreenMapLocationMenu.drawPanel(draw, locationMenuBounds);
-    }
-
-    private TargetDropdown targetDropdown() {
-        final ButtonWidget trigger = openTargetSelector == TargetSelector.WORLD
-            ? worldSelectorButton
-            : openTargetSelector == TargetSelector.DIMENSION ? dimensionSelectorButton : null;
-        if (trigger == null) {
-            return null;
-        }
-        final int optionCount = targetOptions().size();
-        if (optionCount == 0) {
-            return null;
-        }
-        return new TargetDropdown(
-            Widgets.x(trigger),
-            Widgets.y(trigger) + trigger.getHeight(),
-            trigger.getWidth(),
-            Math.min(TARGET_DROPDOWN_MAX_ROWS, optionCount),
-            optionCount
-        );
-    }
-
-    private List<?> targetOptions() {
-        return openTargetSelector == TargetSelector.WORLD
-            ? worldOptions()
-            : openTargetSelector == TargetSelector.DIMENSION ? dimensionOptions() : List.of();
-    }
-
-    private String targetOptionLabel(final Object option) {
-        if (option instanceof WorldIdentity world) {
-            return worldLabel(world);
-        }
-        return dimensionDisplayName((DimensionId) option);
-    }
-
-    private boolean isTargetOptionSelected(final Object option) {
-        final SessionGuard.Session viewed = viewSession();
-        return option instanceof WorldIdentity world
-            ? world.equals(viewed.world())
-            : option.equals(viewed.dimension());
-    }
-
-    private boolean isOverTargetSelector(final double mouseX, final double mouseY) {
-        return contains(worldSelectorButton, mouseX, mouseY)
-            || contains(dimensionSelectorButton, mouseX, mouseY);
-    }
-
-    private static boolean contains(
-        final ButtonWidget button,
-        final double mouseX,
-        final double mouseY
-    ) {
-        return button != null
-            && mouseX >= Widgets.x(button) && mouseX < Widgets.x(button) + button.getWidth()
-            && mouseY >= Widgets.y(button) && mouseY < Widgets.y(button) + button.getHeight();
-    }
-
-    private boolean selectTargetDropdownOption(final double mouseX, final double mouseY) {
-        final TargetDropdown dropdown = targetDropdown();
-        if (dropdown == null || !dropdown.contains(mouseX, mouseY)) {
-            return false;
-        }
-        final List<?> options = targetOptions();
-        final int visibleIndex = (int) ((mouseY - dropdown.y()) / TARGET_DROPDOWN_ROW_HEIGHT);
-        final int optionIndex = targetDropdownScrollOffset + visibleIndex;
-        if (optionIndex >= 0 && optionIndex < options.size()) {
-            selectTargetOption(options.get(optionIndex));
-        }
-        return true;
-    }
-
-    private void selectTargetOption(final Object option) {
-        if (isTargetOptionSelected(option)) {
-            openTargetSelector = null;
-            targetDropdownScrollOffset = 0;
-            return;
-        }
-        final SessionGuard.Session viewed = viewSession();
-        if (option instanceof WorldIdentity world) {
-            final List<DimensionId> dimensions = mapBrowser.dimensions(
-                gameBridge.session(), world, advertisedDimensions()
-            );
-            if (dimensions.isEmpty()) {
-                return;
-            }
-            final DimensionId dimension = dimensions.contains(viewed.dimension())
-                ? viewed.dimension()
-                : dimensions.contains(DimensionId.OVERWORLD)
-                    ? DimensionId.OVERWORLD
-                    : dimensions.get(0);
-            selectViewTarget(new FullscreenMapBrowseService.Target(world, dimension));
-        } else {
-            selectViewTarget(new FullscreenMapBrowseService.Target(
-                viewed.world(), (DimensionId) option
-            ));
-        }
-        openTargetSelector = null;
-        targetDropdownScrollOffset = 0;
-    }
-
-    private void renderTargetDropdown(
-        final GuiDraw draw,
-        final int mouseX,
-        final int mouseY
-    ) {
-        final TargetDropdown dropdown = targetDropdown();
-        if (dropdown == null) {
-            return;
-        }
-        final List<?> options = targetOptions();
-        targetDropdownScrollOffset = DropdownScroll.clamp(
-            targetDropdownScrollOffset, options.size(), dropdown.visibleRows()
-        );
-        draw.fill(
-            dropdown.x() - 1,
-            dropdown.y() - 1,
-            dropdown.x() + dropdown.width() + 1,
-            dropdown.y() + dropdown.height() + 1,
-            0xFF000000
-        );
-        for (int visibleIndex = 0; visibleIndex < dropdown.visibleRows(); visibleIndex++) {
-            final int optionIndex = targetDropdownScrollOffset + visibleIndex;
-            if (optionIndex >= options.size()) {
-                break;
-            }
-            final Object option = options.get(optionIndex);
-            final int rowY = dropdown.y() + visibleIndex * TARGET_DROPDOWN_ROW_HEIGHT;
-            final boolean hovered = mouseX >= dropdown.x()
-                && mouseX < dropdown.x() + dropdown.width()
-                && mouseY >= rowY && mouseY < rowY + TARGET_DROPDOWN_ROW_HEIGHT;
-            final boolean selected = isTargetOptionSelected(option);
-            draw.fill(
-                dropdown.x(), rowY,
-                dropdown.x() + dropdown.width(), rowY + TARGET_DROPDOWN_ROW_HEIGHT,
-                hovered ? 0xFF6E6E6E : selected ? 0xFF505050 : 0xFF2A2A2A
-            );
-            if (selected) {
-                draw.fill(
-                    dropdown.x(), rowY + 2, dropdown.x() + 2,
-                    rowY + TARGET_DROPDOWN_ROW_HEIGHT - 2, 0xFFFFFFFF
-                );
-            }
-            //#if MC>=260100
-            //$$ final String label = this.font.plainSubstrByWidth(
-            //$$     targetOptionLabel(option), dropdown.width() - 10
-            //$$ );
-            //#else
-            final String label = this.textRenderer.trimToWidth(
-                targetOptionLabel(option), dropdown.width() - 10
-            );
-            //#endif
-            draw.drawTextWithShadow(
-                this.textRenderer,
-                label,
-                dropdown.x() + 5,
-                rowY + (TARGET_DROPDOWN_ROW_HEIGHT - this.textRenderer.fontHeight) / 2f,
-                selected ? 0xFFFFFFFF : 0xFFE0E0E0
-            );
-        }
-        drawListScrollbar(
-            draw,
-            dropdown.x() + dropdown.width() - 3,
-            dropdown.y(),
-            dropdown.height(),
-            options.size(),
-            dropdown.visibleRows(),
-            targetDropdownScrollOffset
-        );
-    }
 
     @Override
     protected void renderAfterWidgets(
@@ -3591,14 +1512,10 @@ public final class FullscreenMapScreen extends ConfluxScreen {
         final int mouseY,
         final float tickDelta
     ) {
-        if (locationMenuBounds != null) {
-            FullscreenMapLocationMenu.drawHotkeyHints(
-                draw, this.textRenderer, locationMenuBounds, locationMenuSpecs
-            );
-        }
-        renderTargetDropdown(draw, mouseX, mouseY);
-        final Text annotationTooltip = hoveredAnnotationTooltip();
-        final Text locationActionTooltip = hoveredLocationActionTooltip();
+        locationMenu.drawHotkeyHints(draw);
+        selectors.renderTargetDropdown(draw, mouseX, mouseY);
+        final Text annotationTooltip = annotations.hoveredAnnotationTooltip();
+        final Text locationActionTooltip = locationMenu.hoveredLocationActionTooltip();
         final Text tooltip;
         if (displayModeButton != null && displayModeButton.isHovered()) {
             tooltip = displayModeTooltip();
@@ -3612,16 +1529,10 @@ public final class FullscreenMapScreen extends ConfluxScreen {
                     : Texts.translatable("confluxmap.map.waypoints.shared.unavailable");
         } else if (manageWaypointsButton != null && manageWaypointsButton.isHovered()) {
             tooltip = Texts.translatable("confluxmap.map.waypoints.manage.tooltip");
-        } else if (locationActionHeightUnavailable()) {
+        } else if (locationMenu.locationActionHeightUnavailable()) {
             tooltip = Texts.translatable("confluxmap.map.location_menu.height_unavailable");
-        } else if (teleportLocationButton != null
-            && teleportLocationButton.isHovered()
-            && !teleportLocationButton.active) {
-            tooltip = Texts.translatable(
-                teleportLocationUnavailableKey == null
-                    ? "confluxmap.map.location_menu.teleport_unavailable"
-                    : teleportLocationUnavailableKey
-            );
+        } else if (locationMenu.teleportUnavailableTooltip() != null) {
+            tooltip = locationMenu.teleportUnavailableTooltip();
         } else if (locationActionTooltip != null) {
             tooltip = locationActionTooltip;
         } else if (structureSearchButton != null && structureSearchButton.isHovered()) {
@@ -3647,77 +1558,16 @@ public final class FullscreenMapScreen extends ConfluxScreen {
         draw.drawTooltip(this, this.textRenderer, tooltip, mouseX, mouseY);
     }
 
-    private Text hoveredLocationActionTooltip() {
-        for (final Map.Entry<ButtonWidget, String> entry : locationActionTooltips.entrySet()) {
-            if (entry.getKey().isHovered()) {
-                return Texts.translatable(entry.getValue());
-            }
-        }
-        return null;
-    }
 
-    private static String actionTooltipKey(final FullscreenMapLocationMenu.Action action) {
-        return switch (action) {
-            case SET_WAYPOINT -> "confluxmap.map.location_menu.set_waypoint.tooltip";
-            case EDIT_WAYPOINT -> "confluxmap.map.location_menu.edit_waypoint.tooltip";
-            case DELETE_WAYPOINT -> "confluxmap.map.location_menu.delete_waypoint.tooltip";
-            case SHARE_LOCATION -> "confluxmap.map.location_menu.share_location.tooltip";
-            case SHARE_WAYPOINT -> "confluxmap.map.location_menu.share_waypoint.tooltip";
-            case TELEPORT -> "confluxmap.map.location_menu.teleport.tooltip";
-            case HIGHLIGHT -> "confluxmap.map.location_menu.highlight.tooltip";
-            case HIGHLIGHT_WAYPOINT -> "confluxmap.map.location_menu.highlight_waypoint.tooltip";
-            case CLEAR_HIGHLIGHT -> "confluxmap.map.location_menu.clear_highlight.tooltip";
-            case HIGHLIGHT_PLAYER -> "confluxmap.map.location_menu.highlight_player.tooltip";
-            case CLEAR_PLAYER_HIGHLIGHT -> "confluxmap.map.location_menu.clear_player_highlight.tooltip";
-        };
-    }
 
-    private Text hoveredAnnotationTooltip() {
-        for (final Map.Entry<ButtonWidget, String> entry : annotationTooltips.entrySet()) {
-            if (!entry.getKey().isHovered()) {
-                continue;
-            }
-            if (entry.getKey() == annotationPersistenceButton) {
-                return Texts.translatable(
-                    entry.getValue(),
-                    Texts.translatable(
-                        selectedAnnotationPersistence() == AnnotationPersistence.PERSISTENT
-                            ? "confluxmap.map.annotation.persistent"
-                            : "confluxmap.map.annotation.transient"
-                    ).getString()
-                );
-            }
-            if (entry.getKey() == annotationEraserButton) {
-                return Texts.translatable(entry.getValue(), config.annotationEraserSize);
-            }
-            if (entry.getKey() == clientWorldButton) {
-                return Texts.translatable(
-                    entry.getValue(),
-                    clientMultiworld.currentProfile()
-                        .map(ClientWorldProfile::displayName)
-                        .orElse("?")
-                );
-            }
-            return Texts.translatable(entry.getValue());
-        }
-        return null;
-    }
 
-    private boolean locationActionHeightUnavailable() {
-        if (locationMenuTarget == null || locationMenuTarget.blockY().isPresent()) {
-            return false;
-        }
-        return (setWaypointLocationButton != null && setWaypointLocationButton.isHovered())
-            || (shareLocationButton != null && shareLocationButton.isHovered());
-    }
-
-    private record AnnotationToolbarBounds(int x, int y, int width, int height) {
+    record AnnotationToolbarBounds(int x, int y, int width, int height) {
         boolean contains(final double mouseX, final double mouseY) {
             return mouseX >= x && mouseX <= x + width && mouseY >= y && mouseY <= y + height;
         }
     }
 
-    private final class MapIconButton extends ButtonWidget {
+    final class MapIconButton extends ButtonWidget {
         private Identifier icon;
         private boolean selected;
 
@@ -3725,7 +1575,7 @@ public final class FullscreenMapScreen extends ConfluxScreen {
             final int x,
             final int y,
             final Identifier icon,
-            final PressAction onPress
+            final ButtonWidget.PressAction onPress
         ) {
             this(x, y, CONTROL_SIZE, icon, Texts.literal(""), onPress);
         }
@@ -3735,7 +1585,7 @@ public final class FullscreenMapScreen extends ConfluxScreen {
             final int y,
             final Identifier icon,
             final net.minecraft.text.Text message,
-            final PressAction onPress
+            final ButtonWidget.PressAction onPress
         ) {
             this(x, y, CONTROL_SIZE, icon, message, onPress);
         }
@@ -3746,7 +1596,7 @@ public final class FullscreenMapScreen extends ConfluxScreen {
             final int size,
             final Identifier icon,
             final net.minecraft.text.Text message,
-            final PressAction onPress
+            final ButtonWidget.PressAction onPress
         ) {
             //#if MC>=12111
             //$$ super(
@@ -3957,7 +1807,7 @@ public final class FullscreenMapScreen extends ConfluxScreen {
         }
     }
 
-    private int currentLod() {
+    int currentLod() {
         return TileMath.lodForScale(scale, this.config.mapQuality);
     }
 
@@ -3978,12 +1828,7 @@ public final class FullscreenMapScreen extends ConfluxScreen {
         final SessionGuard.Session selected = viewSession();
         if (targetChanged) {
             toolPanel.close();
-            annotationTool = AnnotationTool.SELECT;
-            annotationDraft = null;
-            movingAnnotation = null;
-            selectedAnnotationId = null;
-            annotationPointerPress = false;
-            erasingAnnotationIds.clear();
+            annotations.resetForTargetChange();
         }
         centerX = DimensionScale.convertHorizontal(
             previousCenterX, previous.dimension(), selected.dimension()
@@ -3999,37 +1844,37 @@ public final class FullscreenMapScreen extends ConfluxScreen {
         predictionTiles.clearViewport();
         ConfluxMapClient.get().mapSyncClient().clearViewport();
         chunkLoadStates.deactivate();
-        dismissLocationMenu();
+        locationMenu.dismissLocationMenu();
         rebuildWaypointControls();
     }
 
-    private SessionGuard.Session viewSession() {
+    SessionGuard.Session viewSession() {
         return mapBrowser.displayedSession(gameBridge.session());
     }
 
-    private boolean viewingLiveWorld() {
+    boolean viewingLiveWorld() {
         return viewSession().world().equals(gameBridge.session().world());
     }
 
-    private boolean viewingLiveSession() {
+    boolean viewingLiveSession() {
         final SessionGuard.Session viewed = viewSession();
         final SessionGuard.Session live = gameBridge.session();
         return viewed.world().equals(live.world()) && viewed.dimension().equals(live.dimension());
     }
 
-    private WaypointService viewWaypointService() {
+    WaypointService viewWaypointService() {
         return viewingLiveWorld() ? waypointService : mapBrowser.waypoints();
     }
 
-    private WaypointStore viewWaypointStore() {
+    WaypointStore viewWaypointStore() {
         return viewWaypointService().current();
     }
 
-    private WaypointRenderCatalog viewWaypointRenderCatalog() {
+    WaypointRenderCatalog viewWaypointRenderCatalog() {
         return viewingLiveWorld() ? waypointRenderCatalog : archivedWaypointRenderCatalog;
     }
 
-    private AnnotationStore viewAnnotationStore() {
+    AnnotationStore viewAnnotationStore() {
         final AnnotationService service = viewingLiveWorld()
             ? annotationService
             : mapBrowser.annotations();
@@ -4037,21 +1882,21 @@ public final class FullscreenMapScreen extends ConfluxScreen {
     }
 
     /** Fullscreen Nether maps default to the persistent top-of-roof surface, never the cave layer. */
-    private MapLayer viewLayer() {
+    MapLayer viewLayer() {
         return FullscreenMapLayerPolicy.select(
             viewSession().dimension(), viewingLiveSession(), layerSelector.current().layer()
         );
     }
 
-    private MapWorldService viewMapWorlds() {
+    MapWorldService viewMapWorlds() {
         return mapBrowser.browsing() ? mapBrowser.mapWorlds() : mapWorlds;
     }
 
-    private TileService viewTiles() {
+    TileService viewTiles() {
         return mapBrowser.browsing() ? mapBrowser.tiles() : tiles;
     }
 
-    private TileTextureManager viewTextures() {
+    TileTextureManager viewTextures() {
         return mapBrowser.browsing() ? mapBrowser.textures() : textures;
     }
 
@@ -4183,7 +2028,7 @@ public final class FullscreenMapScreen extends ConfluxScreen {
     }
 
     /** Seed prediction can additionally fill lower Nether biome planes; synchronization stays top-only. */
-    private boolean predictionActive(
+    boolean predictionActive(
         final MapLayer layer,
         final SessionGuard.Session session,
         final boolean biomeMode
@@ -4725,20 +2570,20 @@ public final class FullscreenMapScreen extends ConfluxScreen {
         return selected || !hasHighlight ? 1f : config.waypointHighlightDimOpacity / 100f;
     }
 
-    private boolean mapOverlayIntersectsUi(final MapOverlayBounds bounds) {
+    boolean mapOverlayIntersectsUi(final MapOverlayBounds bounds) {
         return mapOverlayIntersectsUi(
             bounds.left(), bounds.top(), bounds.right(), bounds.bottom()
         );
     }
 
     /** Keeps map overlays out of persistent controls; the location menu draws over them instead. */
-    private boolean mapOverlayIntersectsUi(
+    boolean mapOverlayIntersectsUi(
         final float left,
         final float top,
         final float right,
         final float bottom
     ) {
-        final TargetDropdown dropdown = targetDropdown();
+        final var dropdown = selectors.targetDropdown();
         if (dropdown != null && intersects(
             left, top, right, bottom,
             dropdown.x() - 1f, dropdown.y() - 1f,
@@ -4749,7 +2594,7 @@ public final class FullscreenMapScreen extends ConfluxScreen {
         }
         for (final var child : children()) {
             if (!(child instanceof ClickableWidget widget) || !widget.visible
-                || locationActionTooltips.containsKey(widget)) {
+                || locationMenu.ownsTooltipWidget(widget)) {
                 continue;
             }
             if (intersects(
@@ -4824,253 +2669,12 @@ public final class FullscreenMapScreen extends ConfluxScreen {
         }
     }
 
-    private void drawDimensionLabel(final GuiDraw draw) {
-        final SessionGuard.Session session = viewSession();
-        final String text = mapBrowser.browsing()
-            ? shortWorldId(session.world().worldId()) + " · "
-                + dimensionDisplayName(session.dimension())
-            : dimensionDisplayName(session.dimension());
-        draw.drawTextWithShadow(this.textRenderer, text, MARGIN, MARGIN, TEXT_COLOR);
-    }
 
-    private static String shortWorldId(final String worldId) {
-        return worldId.length() <= 16 ? worldId : worldId.substring(0, 8) + "…";
-    }
 
-    /** Deliverable D: the fullscreen map shows the active layer for the current dimension. */
-    private void drawLayerLabel(final GuiDraw draw) {
-        final MapLayer layer = viewLayer();
-        final int currentY = viewingLiveSession()
-            ? layerSelector.current().pivotY()
-            : layer.param();
-        final String text = MapLayerText.label(layer, currentY);
-        draw.drawTextWithShadow(this.textRenderer, text, MARGIN, MARGIN + this.textRenderer.fontHeight + 2, TEXT_COLOR);
-    }
 
-    private void drawPredictionLabel(final GuiDraw draw) {
-        if (!predictionLabelVisible()) {
-            return;
-        }
-        final DimensionId dimension = viewSession().dimension();
-        final WorldPreset preset = predictionState.preset(dimension);
-        final String text;
-        if (PredictionDimensions.supported(dimension) && !predictionState.predictable(dimension)) {
-            // Seed known but this dimension can't compose an underlay (debug/custom worldgen, or
-            // superflat without surface info): say so instead of silently dropping the label.
-            text = Texts.translatable(
-                "confluxmap.map.prediction_unavailable", presetDisplayName(preset)
-            ).getString();
-        } else {
-            final String mode = Texts.translatable(
-                "confluxmap.config.prediction.mode." + config.predictionViewMode.name().toLowerCase(java.util.Locale.ROOT)
-            ).getString();
-            final String modeLine = Texts.translatable("confluxmap.config.prediction.view_mode", mode).getString();
-            text = preset.terrainApproximate()
-                ? modeLine + Texts.translatable("confluxmap.map.prediction_approx_suffix", presetDisplayName(preset)).getString()
-                : modeLine;
-        }
-        draw.drawTextWithShadow(
-            this.textRenderer, text, MARGIN, MARGIN + this.textRenderer.fontHeight * 2 + 4, TEXT_COLOR
-        );
-    }
 
-    /** A seedless superflat session still predicts, so the label keys off either signal. */
-    private boolean predictionLabelVisible() {
-        return config.predictionEnabled
-            && viewingLiveWorld()
-            && (predictionState.seedKnown() || predictionState.predictable(viewSession().dimension()));
-    }
 
-    private static String presetDisplayName(final WorldPreset preset) {
-        return Texts.translatable(
-            "confluxmap.world_preset." + preset.name().toLowerCase(java.util.Locale.ROOT)
-        ).getString();
-    }
-
-    private void drawServerSyncLabel(final GuiDraw draw) {
-        if (!viewingLiveWorld()) {
-            return;
-        }
-        final MapSyncProgress.Snapshot status = ConfluxMapClient.get().mapSyncClient().status();
-        if (status.state() == MapSyncProgress.State.IDLE) {
-            return;
-        }
-        final String text;
-        final int color;
-        switch (status.state()) {
-            case SYNCING -> {
-                text = Texts.translatable(
-                    "confluxmap.map.server_sync.syncing",
-                    status.completedTiles(), status.totalTiles()
-                ).getString();
-                color = SYNCING_TEXT_COLOR;
-            }
-            case COMPLETED -> {
-                text = Texts.translatable(
-                    "confluxmap.map.server_sync.completed",
-                    formatSyncDuration(status.durationNanos()), formatSyncTraffic(status.trafficBytes())
-                ).getString();
-                color = SYNCED_TEXT_COLOR;
-            }
-            case FAILED -> {
-                text = Texts.translatable("confluxmap.map.server_sync.failed").getString();
-                color = SYNC_FAILED_TEXT_COLOR;
-            }
-            default -> {
-                return;
-            }
-        }
-        final int row = predictionLabelVisible() ? 3 : 2;
-        draw.drawTextWithShadow(this.textRenderer, text, MARGIN, MARGIN + row * (this.textRenderer.fontHeight + 2), color);
-    }
-
-    private static String formatSyncDuration(final long durationNanos) {
-        final long durationMillis = durationNanos / 1_000_000L;
-        if (durationMillis < 1_000L) {
-            return durationMillis + " ms";
-        }
-        return String.format(java.util.Locale.ROOT, "%.2f s", durationNanos / 1_000_000_000.0);
-    }
-
-    private static String formatSyncTraffic(final long trafficBytes) {
-        if (trafficBytes < 1_024L) {
-            return trafficBytes + " B";
-        }
-        if (trafficBytes < 1_048_576L) {
-            return String.format(java.util.Locale.ROOT, "%.1f KiB", trafficBytes / 1_024.0);
-        }
-        return String.format(java.util.Locale.ROOT, "%.2f MiB", trafficBytes / 1_048_576.0);
-    }
-
-    private void drawScaleLabel(final GuiDraw draw) {
-        final String text = Texts.translatable(
-            "confluxmap.map.scale", FullscreenZoomLabel.format(scale)
-        ).getString();
-        final int textWidth = this.textRenderer.getWidth(text);
-        final int x = embeddedLayout == null
-            ? width - MARGIN - textWidth
-            : embeddedLayout.mapRightAlignedX(textWidth, MARGIN);
-        draw.drawTextWithShadow(this.textRenderer, text, x, MARGIN, TEXT_COLOR);
-    }
-
-    /**
-     * Bottom-center footer: the raw cursor position, or - while hovering a marker
-     * (deliverable C) - that waypoint's own stored X/Y/Z instead. When not hovering a marker, the cursor's biome name
-     * (see {@link #cursorBiomeName}) is appended if it can be resolved.
-     */
-    private void drawCursorCoords(final GuiDraw draw, final int mouseX, final int mouseY) {
-        final String text;
-        if (hoveredWaypoint != null) {
-            text = (int) Math.floor(hoveredWaypoint.x()) + ", "
-                + (int) Math.floor(hoveredWaypoint.y()) + ", "
-                + (int) Math.floor(hoveredWaypoint.z())
-                + (hoveredWaypoint.originWorldLabel().isEmpty()
-                    ? ""
-                    : " · " + Texts.translatable(
-                        "confluxmap.screen.waypoints.cross_world_origin",
-                        hoveredWaypoint.originWorldLabel()
-                    ).getString());
-        } else if (hoveredStructure != null) {
-            text = Texts.translatable(hoveredStructure.translationKey()).getString()
-                + " · " + hoveredStructure.blockX() + ", " + hoveredStructure.blockZ();
-        } else if (loadStateMode()) {
-            text = chunkLoadStateCursorText(mouseX, mouseY);
-        } else {
-            final int blockX = (int) Math.floor(centerX + (mouseX - width / 2.0) * scale);
-            final int blockZ = (int) Math.floor(centerZ + (mouseY - height / 2.0) * scale);
-            final String biomeName = cursorBiomeName(blockX, blockZ);
-            text = blockX + ", " + blockZ + (biomeName == null ? "" : " · " + biomeName);
-        }
-        final int textWidth = this.textRenderer.getWidth(text);
-        draw.drawTextWithShadow(this.textRenderer, text, width / 2f - textWidth / 2f, height - MARGIN - 10, TEXT_COLOR);
-    }
-
-    private String chunkLoadStateCursorText(final int mouseX, final int mouseY) {
-        final int blockX = (int) Math.floor(centerX + (mouseX - width / 2.0) * scale);
-        final int blockZ = (int) Math.floor(centerZ + (mouseY - height / 2.0) * scale);
-        final int chunkX = TileMath.blockToChunk(blockX);
-        final int chunkZ = TileMath.blockToChunk(blockZ);
-        final Optional<LoadStateDeltaS2C.Entry> state = chunkLoadStates.snapshot().get(chunkX, chunkZ);
-        final String stateText;
-        if (state.isPresent()) {
-            final LoadStateDeltaS2C.Entry entry = state.get();
-            stateText = config.chunkLoadDetailMode == ChunkLoadDetailMode.EXACT
-                ? loadStateBandName(entry.band()) + " · L" + entry.level()
-                : loadStateBandName(entry.band());
-        } else {
-            stateText = Texts.translatable(
-                chunkLoadStates.snapshot().complete()
-                    ? "confluxmap.map.load_state.unloaded"
-                    : "confluxmap.map.load_state.unknown"
-            ).getString();
-        }
-        return blockX + ", " + blockZ + " · "
-            + Texts.translatable("confluxmap.map.load_state.chunk", chunkX, chunkZ).getString()
-            + " · " + stateText;
-    }
-
-    /**
-     * Best-effort biome name at the given column, for the footer readout. Loaded real chunks win;
-     * unexplored columns fall back to the same predicted biome sample and LOD as the rendered
-     * underlay. Returns null when neither source has a resolvable biome identifier.
-     */
-    private String cursorBiomeName(final int blockX, final int blockZ) {
-        final SessionGuard.Session session = viewSession();
-        final MapLayer layer = viewLayer();
-        final ClientWorld world = this.client.world;
-        if (viewingLiveSession() && world != null) {
-            final int playerY = gameBridge.player().map(p -> p.blockY()).orElse(world.getBottomY());
-            final int biomeY = FullscreenMapLayerPolicy.biomeSampleY(
-                layer, playerY, layerSelector.current().pivotY()
-            );
-            final BlockPos pos = new BlockPos(
-                blockX, MathHelper.clamp(biomeY, world.getBottomY(), world.getTopY() - 1), blockZ
-            );
-            if (ClientChunkLookup.isLoaded(world, blockX, blockZ)) {
-                final Identifier biomeId = Regs.biomeIdAt(world, pos);
-                if (biomeId != null) {
-                    return translatedBiomeName(biomeId);
-                }
-            }
-        }
-        if (!predictionActive(layer, session, biomeMode())) {
-            return null;
-        }
-        final OptionalInt predicted = predictionTiles.predictedBiomeAt(
-            session.dimension(), layer, currentLod(), blockX, blockZ
-        );
-        if (predicted.isEmpty()) {
-            return null;
-        }
-        return predictedBiomeName(predicted.getAsInt());
-    }
-
-    /**
-     * A predicted biome only knows its cubiomes id, whose canonical vanilla name is the 1.17-era
-     * one; biomes renamed since have no translation under the old key on modern versions, so the
-     * chain in {@link BiomeLabels#predictedDisplayName} also tries the datapack set and finally
-     * the canonical registry id instead of leaking a raw {@code biome.minecraft.snowy_tundra}.
-     */
-    private static String predictedBiomeName(final int cubiomesId) {
-        return BiomeLabels.predictedDisplayName(cubiomesId);
-    }
-
-    /** Bottom-right corner: a passive notice while a newer release is known (the chat line carries the clickable link). */
-    private void drawUpdateBadge(final GuiDraw draw) {
-        final Optional<UpdateCheckService.UpdateInfo> info = updateCheck.available();
-        if (info.isEmpty()) {
-            return;
-        }
-        final String text = Texts.translatable("confluxmap.map.update_badge", info.get().latestVersion()).getString();
-        final int textWidth = this.textRenderer.getWidth(text);
-        draw.drawTextWithShadow(this.textRenderer, text, width - MARGIN - textWidth, height - MARGIN - 10, UPDATE_TEXT_COLOR);
-    }
-
-    private static String translatedBiomeName(final Identifier biomeId) {
-        return BiomeLabels.displayName(biomeId);
-    }
-
-    private static String dimensionDisplayName(final DimensionId dimension) {
+    static String dimensionDisplayName(final DimensionId dimension) {
         if (dimension.equals(DimensionId.OVERWORLD)) {
             return Texts.translatable("confluxmap.dimension.overworld").getString();
         }
@@ -5187,5 +2791,69 @@ public final class FullscreenMapScreen extends ConfluxScreen {
     }
 
     private record InitialFocus(DimensionId dimension, double x, double z) {
+    }
+    TextRenderer font() {
+        return this.textRenderer;
+    }
+
+    MinecraftClient client() {
+        return this.client;
+    }
+
+    <T extends ClickableWidget> T addWidget(final T widget) {
+        return addDrawableChild(widget);
+    }
+
+    void clearWidgets() {
+        clearChildren();
+    }
+
+    MapIconButton iconButton(
+        final int x, final int y, final Identifier icon, final ButtonWidget.PressAction onPress
+    ) {
+        return new MapIconButton(x, y, icon, onPress);
+    }
+
+    MapIconButton iconButton(
+        final int x, final int y, final int size, final Identifier icon,
+        final Text message, final ButtonWidget.PressAction onPress
+    ) {
+        return new MapIconButton(x, y, size, icon, message, onPress);
+    }
+
+    MapIconButton iconButton(
+        final int x, final int y, final Identifier icon, final Text message, final ButtonWidget.PressAction onPress
+    ) {
+        return new MapIconButton(x, y, icon, message, onPress);
+    }
+
+    void beginExportSelection(final MapExportScreen screen) {
+        exportControls.beginExportSelection(screen);
+    }
+
+    MapExportRequest createExportRequest(
+        final MapExportBounds bounds,
+        final MapExportResolution resolution
+    ) {
+        return exportControls.createExportRequest(bounds, resolution);
+    }
+
+    void runLocationAction(
+        final FullscreenMapLocationMenu.Action action,
+        final FullscreenMapLocationMenu.Target target,
+        final WaypointRenderEntry waypoint,
+        final UUID playerId,
+        final Screen returnTo
+    ) {
+        locationMenu.runLocationAction(action, target, waypoint, playerId, returnTo);
+    }
+
+    List<FullscreenMapLocationMenu.ButtonSpec> locationMenuButtonSpecs(
+        final FullscreenMapLocationMenu.Target target,
+        final WaypointRenderEntry waypoint,
+        final UUID playerId,
+        final boolean deletePending
+    ) {
+        return locationMenu.locationMenuButtonSpecs(target, waypoint, playerId, deletePending);
     }
 }

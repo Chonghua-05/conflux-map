@@ -17,22 +17,26 @@ final class FullscreenMapTargetSelectorTest {
 
     @Test
     void targetSelectorsOnlyAppearInTerrainMode() throws IOException {
-        final String source = source();
+        final String map = Files.readString(projectRoot().resolve(
+            "src/main/java/cn/net/rms/confluxmap/mc/ui/screen/FullscreenMapScreen.java"
+        )).replace("\r\n", "\n");
         final String controls = between(
-            source,
-            "private void rebuildWaypointControls()",
+            map,
+            "void rebuildWaypointControls()",
             "    private MapIconButton addToolGroupButton"
         );
 
         assertTrue(
             controls.contains("if (displayMode() == FullscreenDisplayMode.TERRAIN) {\n"
-                + "            addTargetSelectors();\n"
+                + "            selectors.addTargetSelectors();\n"
+                + "        } else {\n"
+                + "            selectors.closeDropdown();\n"
                 + "        }"),
             "temporary world and dimension selectors must be hidden outside terrain mode"
         );
         assertTrue(
-            controls.contains("openTargetSelector = null;\n"
-                + "            targetDropdownScrollOffset = 0;"),
+            source().contains("openTargetSelector = null;\n"
+                + "        targetDropdownScrollOffset = 0;"),
             "leaving terrain mode must also close an open target dropdown"
         );
     }
@@ -46,7 +50,7 @@ final class FullscreenMapTargetSelectorTest {
         assertEquals(20, integerConstant(source, "RESOURCE_PACK_TARGET_SELECTOR_HEIGHT"));
         assertEquals(4, integerConstant(source, "TARGET_SELECTOR_GAP"));
         assertTrue(
-            source.contains("uiTheme.useVanillaButtonStyle()\n"
+            source.contains("screen.uiTheme.useVanillaButtonStyle()\n"
                 + "            ? RESOURCE_PACK_TARGET_SELECTOR_HEIGHT\n"
                 + "            : COMPACT_TARGET_SELECTOR_HEIGHT"),
             "resource-pack buttons need vanilla's standard 20px design height"
@@ -69,7 +73,7 @@ final class FullscreenMapTargetSelectorTest {
 
     private static String source() throws IOException {
         return Files.readString(projectRoot().resolve(
-            "src/main/java/cn/net/rms/confluxmap/mc/ui/screen/FullscreenMapScreen.java"
+            "src/main/java/cn/net/rms/confluxmap/mc/ui/screen/MapTargetSelectors.java"
         )).replace("\r\n", "\n");
     }
 

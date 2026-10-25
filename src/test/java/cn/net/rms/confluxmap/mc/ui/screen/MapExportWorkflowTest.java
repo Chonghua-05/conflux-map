@@ -11,13 +11,13 @@ import org.junit.jupiter.api.Test;
 final class MapExportWorkflowTest {
     @Test
     void exportStartsMapSelectionBeforeOpeningTheSettingsForm() throws IOException {
-        final String source = source("src/main/java/cn/net/rms/confluxmap/mc/ui/screen/FullscreenMapScreen.java");
-        final int start = source.indexOf("private void openMapExport()");
+        final String source = source("src/main/java/cn/net/rms/confluxmap/mc/ui/screen/MapExportSelectionController.java");
+        final int start = source.indexOf("void openMapExport()");
         final int end = source.indexOf("    void beginExportSelection", start);
 
         assertTrue(start >= 0 && end > start, "map export entry point must be present");
         assertTrue(
-            source.substring(start, end).contains("beginExportSelection(screen, false);"),
+            source.substring(start, end).contains("beginExportSelection(form, false);"),
             "opening export must enter map-selection mode before showing the settings form"
         );
     }
@@ -33,13 +33,13 @@ final class MapExportWorkflowTest {
 
     @Test
     void exportSelectionControlsAvoidMapStatusLabels() throws IOException {
-        final String source = source("src/main/java/cn/net/rms/confluxmap/mc/ui/screen/FullscreenMapScreen.java");
-        final int controlsStart = source.indexOf("private void rebuildExportSelectionControls()");
-        final int controlsEnd = source.indexOf("    private void rebuildWaypointControls", controlsStart);
+        final String source = source("src/main/java/cn/net/rms/confluxmap/mc/ui/screen/MapExportSelectionController.java");
+        final int controlsStart = source.indexOf("void rebuildExportSelectionControls()");
+        final int controlsEnd = source.indexOf("    void openMapExport()", controlsStart);
 
         assertTrue(controlsStart >= 0 && controlsEnd > controlsStart, "selection controls must be present");
         final String controls = source.substring(controlsStart, controlsEnd);
-        assertTrue(controls.contains("width - MARGIN - 80,\n            height - 32,"));
+        assertTrue(controls.contains("screen.width - MARGIN - 80,\n            screen.height - 32,"));
         assertFalse(
             controls.contains("confluxmap.screen.map_export.open_directory"),
             "the selection overlay must not cover the map's status labels with file actions"
@@ -48,14 +48,14 @@ final class MapExportWorkflowTest {
 
     @Test
     void cancellingExportSelectionReturnsToItsCaller() throws IOException {
-        final String source = source("src/main/java/cn/net/rms/confluxmap/mc/ui/screen/FullscreenMapScreen.java");
-        final int cancelStart = source.indexOf("private void cancelExportSelection()");
-        final int cancelEnd = source.indexOf("    private void finishExportSelection", cancelStart);
+        final String source = source("src/main/java/cn/net/rms/confluxmap/mc/ui/screen/MapExportSelectionController.java");
+        final int cancelStart = source.indexOf("void cancelExportSelection()");
+        final int cancelEnd = source.indexOf("    void finishExportSelection", cancelStart);
 
         assertTrue(cancelStart >= 0 && cancelEnd > cancelStart, "selection cancellation must be present");
         final String cancellation = source.substring(cancelStart, cancelEnd);
         assertTrue(cancellation.contains("rebuildWaypointControls();"));
-        assertTrue(cancellation.contains("if (screen != null && returnsToForm)"));
+        assertTrue(cancellation.contains("if (form != null && returnsToForm)"));
         assertTrue(cancellation.contains("MinecraftAccess.setScreen"));
     }
 
@@ -63,14 +63,14 @@ final class MapExportWorkflowTest {
     void rightClickCancelsTheEntireExportSelection() throws IOException {
         final String source = source("src/main/java/cn/net/rms/confluxmap/mc/ui/screen/FullscreenMapScreen.java");
         final int mouseClickedStart = source.indexOf("public boolean mouseClicked");
-        final int selectionStart = source.indexOf("if (exportSelectionScreen != null) {", mouseClickedStart);
+        final int selectionStart = source.indexOf("if (exportControls.selecting()) {", mouseClickedStart);
         final int selectionEnd = source.indexOf("if (button == MouseButtons.LEFT)", selectionStart);
 
         assertTrue(mouseClickedStart >= 0 && selectionStart >= 0 && selectionEnd > selectionStart,
             "selection click handling must be present");
         final String selectionClicks = source.substring(selectionStart, selectionEnd);
         assertTrue(selectionClicks.contains(
-            "if (button == MouseButtons.RIGHT) {\n                cancelExportSelection();"));
+            "if (button == MouseButtons.RIGHT) {\n                exportControls.cancelExportSelection();"));
         assertFalse(
             selectionClicks.contains("exportSelection.first().isEmpty()"),
             "right-click must not leave a partially completed export selection active"

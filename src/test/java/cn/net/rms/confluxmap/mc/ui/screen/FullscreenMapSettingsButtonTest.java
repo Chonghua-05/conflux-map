@@ -15,7 +15,7 @@ final class FullscreenMapSettingsButtonTest {
         );
         final String controls = between(
             mapSource,
-            "private void rebuildWaypointControls()",
+            "void rebuildWaypointControls()",
             "    private MapIconButton addToolGroupButton"
         );
 

@@ -25,7 +25,7 @@ final class FullscreenMapLoadStateRenderTest {
         final String renderContents = between(
             source,
             "protected void renderContents(",
-            "    private boolean loadStateMode()"
+            "    boolean loadStateMode()"
         );
         final int terrain = renderContents.indexOf("drawTiles(matrices);");
         final int overlay = renderContents.indexOf("drawChunkLoadStateOverlay(draw);");
@@ -43,7 +43,7 @@ final class FullscreenMapLoadStateRenderTest {
     void loadedChunkFillsRemainSemiTransparentOverTheMap() throws IOException {
         final String source = Files.readString(
             findProjectRoot().resolve(
-                "src/main/java/cn/net/rms/confluxmap/mc/ui/screen/FullscreenMapScreen.java"
+                "src/main/java/cn/net/rms/confluxmap/mc/ui/screen/MapLoadStateOverlay.java"
             )
         );
         final Matcher colors = LOADED_FILL_COLOR.matcher(source);
