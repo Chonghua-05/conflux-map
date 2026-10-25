@@ -14,15 +14,9 @@ class PortraitTextureLoaderTest {
         final ArrayDeque<Runnable> tasks = new ArrayDeque<>();
         final FakeImage image = new FakeImage();
         final PortraitTextureLoader<String> loader = new PortraitTextureLoader<>(tasks::add);
-        final float[] quad = {
-            0f, 0f, 0f, 0f, 0f,
-            32f, 0f, 0f, 1f, 0f,
-            32f, 32f, 0f, 1f, 1f,
-            0f, 32f, 0f, 0f, 1f
-        };
 
-        assertTrue(loader.request("portrait", quad, () -> image));
-        assertFalse(loader.request("portrait", quad, () -> image));
+        assertTrue(loader.request("portrait", quad(), () -> image));
+        assertFalse(loader.request("portrait", quad(), () -> image));
         assertTrue(loader.poll().isEmpty());
 
         tasks.remove().run();
@@ -32,6 +26,50 @@ class PortraitTextureLoaderTest {
         assertTrue(result.success());
         assertArrayEquals(new int[] {8, 4, 24, 28}, result.visibleBounds());
         assertEquals(16 * 24, result.visibleArea());
+    }
+
+    @Test
+    void clearDropsResultsOfTasksThatFinishAfterwards() {
+        final ArrayDeque<Runnable> tasks = new ArrayDeque<>();
+        final FakeImage image = new FakeImage();
+        final PortraitTextureLoader<String> loader = new PortraitTextureLoader<>(tasks::add);
+
+        assertTrue(loader.request("portrait", quad(), () -> image));
+        loader.clear();
+
+        tasks.remove().run();
+
+        assertTrue(image.closed);
+        assertTrue(loader.poll().isEmpty());
+        assertFalse(loader.isLoading("portrait"));
+    }
+
+    @Test
+    void staleCompletionDoesNotDisturbAReRequestedKey() {
+        final ArrayDeque<Runnable> tasks = new ArrayDeque<>();
+        final PortraitTextureLoader<String> loader = new PortraitTextureLoader<>(tasks::add);
+
+        assertTrue(loader.request("portrait", quad(), FakeImage::new));
+        loader.clear();
+        assertTrue(loader.request("portrait", quad(), FakeImage::new));
+
+        tasks.remove().run();
+        assertTrue(loader.isLoading("portrait"));
+        assertTrue(loader.poll().isEmpty());
+
+        tasks.remove().run();
+        final PortraitTextureLoader.Result<String> result = loader.poll().orElseThrow();
+        assertTrue(result.success());
+        assertFalse(loader.isLoading("portrait"));
+    }
+
+    private static float[] quad() {
+        return new float[] {
+            0f, 0f, 0f, 0f, 0f,
+            32f, 0f, 0f, 1f, 0f,
+            32f, 32f, 0f, 1f, 1f,
+            0f, 32f, 0f, 0f, 1f
+        };
     }
 
     private static final class FakeImage implements PortraitTextureLoader.SourceImage {

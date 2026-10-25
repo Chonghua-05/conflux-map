@@ -40,6 +40,7 @@ final class PortraitTextureLoader<K> {
     private final Executor executor;
     private final Set<K> inFlight = new HashSet<>();
     private final ArrayDeque<Result<K>> completed = new ArrayDeque<>();
+    private int generation;
 
     PortraitTextureLoader(final Executor executor) {
         this.executor = executor;
@@ -53,8 +54,9 @@ final class PortraitTextureLoader<K> {
         if (!inFlight.add(key)) {
             return false;
         }
+        final int taskGeneration = generation;
         try {
-            executor.execute(() -> inspect(key, geometry, image));
+            executor.execute(() -> inspect(taskGeneration, key, geometry, image));
         } catch (final RejectedExecutionException e) {
             inFlight.remove(key);
             completed.addLast(new Result<>(key, geometry, null, 0, e));
@@ -71,11 +73,13 @@ final class PortraitTextureLoader<K> {
     }
 
     synchronized void clear() {
+        generation++;
         inFlight.clear();
         completed.clear();
     }
 
     private void inspect(
+        final int taskGeneration,
         final K key,
         final float[] geometry,
         final Supplier<SourceImage> imageSupplier
@@ -96,6 +100,12 @@ final class PortraitTextureLoader<K> {
             result = new Result<>(key, geometry, null, 0, e);
         }
         synchronized (this) {
+            if (taskGeneration != generation) {
+                // Retired by clear(): this task belongs to an earlier session and its key
+                // may already be re-requested, so drop the result without touching the
+                // in-flight marker or the completed queue.
+                return;
+            }
             inFlight.remove(key);
             completed.addLast(result);
         }
