@@ -9,7 +9,7 @@ final class MinimapPlayerMarkerBoundsTest {
     void edgeClampReservesTheRotatedNativeMarkerRadius() {
         assertEquals(
             60f - Math.hypot(8f, 8f),
-            MinimapHudRenderer.playerMarkerEdgeLimit(120),
+            MinimapMarkerPainter.playerMarkerEdgeLimit(120),
             0.0001,
             "the edge inset must contain every corner of the rotated 16x16 marker"
         );

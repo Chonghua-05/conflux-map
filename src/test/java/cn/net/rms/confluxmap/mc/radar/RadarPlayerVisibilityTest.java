@@ -13,7 +13,7 @@ final class RadarPlayerVisibilityTest {
     void minimapAlwaysShowsPlayersAndRevealsNamesByPlayerListKeyOrAlwaysToggle() throws IOException {
         final Path root = findProjectRoot();
         final String minimap = Files.readString(root.resolve(
-            "src/main/java/cn/net/rms/confluxmap/mc/ui/hud/MinimapHudRenderer.java"
+            "src/main/java/cn/net/rms/confluxmap/mc/ui/hud/MinimapRadarPainter.java"
         ));
         final String fullscreen = Files.readString(root.resolve(
             "src/main/java/cn/net/rms/confluxmap/mc/ui/screen/FullscreenMapScreen.java"

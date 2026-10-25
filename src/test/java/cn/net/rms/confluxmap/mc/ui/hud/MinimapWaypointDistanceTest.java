@@ -22,16 +22,20 @@ final class MinimapWaypointDistanceTest {
     @Test
     void minimapRendererDoesNotConsumeTheWorldRenderCutoff() throws IOException {
         final Path root = findProjectRoot();
-        final String minimap = Files.readString(root.resolve(
+        final String orchestrator = Files.readString(root.resolve(
             "src/main/java/cn/net/rms/confluxmap/mc/ui/hud/MinimapHudRenderer.java"
         ));
+        final String markerPainter = Files.readString(root.resolve(
+            "src/main/java/cn/net/rms/confluxmap/mc/ui/hud/MinimapMarkerPainter.java"
+        ));
 
-        assertFalse(minimap.contains("waypointRenderDistance"));
+        assertFalse(orchestrator.contains("waypointRenderDistance"));
+        assertFalse(markerPainter.contains("waypointRenderDistance"));
     }
 
     @Test
     void farWaypointClampsToTheSquareFrameEdgeInsteadOfVanishing() {
-        final MinimapHudRenderer.WaypointMarkerOffset offset = MinimapHudRenderer.waypointMarkerOffset(
+        final MinimapMarkerPainter.WaypointMarkerOffset offset = MinimapMarkerPainter.waypointMarkerOffset(
             5000.0, 0.0, 0.5f, 1f, 0f, 60f, false, true
         );
 
@@ -42,7 +46,7 @@ final class MinimapWaypointDistanceTest {
 
     @Test
     void farWaypointClampsToTheCircleFrameRadius() {
-        final MinimapHudRenderer.WaypointMarkerOffset offset = MinimapHudRenderer.waypointMarkerOffset(
+        final MinimapMarkerPainter.WaypointMarkerOffset offset = MinimapMarkerPainter.waypointMarkerOffset(
             5000.0, 5000.0, 0.5f, 1f, 0f, 60f, true, true
         );
 
@@ -52,14 +56,14 @@ final class MinimapWaypointDistanceTest {
 
     @Test
     void offFrameWaypointIsSkippedWhenEdgeIndicatorsAreDisabled() {
-        assertNull(MinimapHudRenderer.waypointMarkerOffset(
+        assertNull(MinimapMarkerPainter.waypointMarkerOffset(
             5000.0, 0.0, 0.5f, 1f, 0f, 60f, false, false
         ));
     }
 
     @Test
     void inFrameWaypointKeepsItsExactRotatedOffset() {
-        final MinimapHudRenderer.WaypointMarkerOffset offset = MinimapHudRenderer.waypointMarkerOffset(
+        final MinimapMarkerPainter.WaypointMarkerOffset offset = MinimapMarkerPainter.waypointMarkerOffset(
             40.0, -20.0, 0.5f, 1f, 0f, 60f, false, true
         );
 
@@ -71,7 +75,7 @@ final class MinimapWaypointDistanceTest {
     void rotationMovesTheOffsetBeforeClamping() {
         final float cos = (float) Math.cos(Math.PI / 4);
         final float sin = (float) Math.sin(Math.PI / 4);
-        final MinimapHudRenderer.WaypointMarkerOffset inFrame = MinimapHudRenderer.waypointMarkerOffset(
+        final MinimapMarkerPainter.WaypointMarkerOffset inFrame = MinimapMarkerPainter.waypointMarkerOffset(
             80.0, 0.0, 0.5f, cos, sin, 60f, false, true
         );
 

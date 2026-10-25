@@ -24,7 +24,7 @@ final class DetachedCameraMapPolicyTest {
     @Test
     void minimapKeepsTheLocalPlayerMarkerDistinctFromTheCameraViewpoint() throws Exception {
         final String source = Files.readString(preprocessedSource(
-            "cn/net/rms/confluxmap/mc/ui/hud/MinimapHudRenderer.java"
+            "cn/net/rms/confluxmap/mc/ui/hud/MinimapMarkerPainter.java"
         ));
 
         assertTrue(source.contains("final Optional<PlayerView> localPlayer = gameBridge.player(tickDelta);"));
@@ -47,14 +47,14 @@ final class DetachedCameraMapPolicyTest {
     @Test
     void detachedCameraMarkerIsDrawnOnBothLiveMaps() throws Exception {
         final String minimap = Files.readString(preprocessedSource(
-            "cn/net/rms/confluxmap/mc/ui/hud/MinimapHudRenderer.java"
+            "cn/net/rms/confluxmap/mc/ui/hud/MinimapMarkerPainter.java"
         ));
         final String fullscreen = Files.readString(preprocessedSource(
             "cn/net/rms/confluxmap/mc/ui/screen/FullscreenMapScreen.java"
         ));
         final String minimapMarker = sourceBetween(
             minimap,
-            "private void drawCameraMarker(",
+            "void drawCameraMarker(",
             "\n    /** Draws the real player's position"
         );
         final String fullscreenMarker = sourceBetween(

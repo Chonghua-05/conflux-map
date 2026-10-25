@@ -9,7 +9,7 @@ import org.junit.jupiter.api.Test;
 class MinimapCaptureViewportTest {
     @Test
     void squareAtWorstCaseRotationPublishesItsWholeVisibleChunkSquare() {
-        final ChunkViewport viewport = MinimapHudRenderer.captureViewport(
+        final ChunkViewport viewport = MinimapTilePainter.captureViewport(
             0.0, 0.0, 90, 1.0, ConfluxConfig.Shape.SQUARE, 45.0
         );
 
@@ -19,7 +19,7 @@ class MinimapCaptureViewportTest {
 
     @Test
     void axisAlignedSquareDoesNotPublishTheUnusedRotationCorners() {
-        final ChunkViewport viewport = MinimapHudRenderer.captureViewport(
+        final ChunkViewport viewport = MinimapTilePainter.captureViewport(
             0.0, 0.0, 90, 1.0, ConfluxConfig.Shape.SQUARE, 0.0
         );
 
@@ -29,7 +29,7 @@ class MinimapCaptureViewportTest {
 
     @Test
     void circleDoesNotGrowWhenTheMapRotates() {
-        final ChunkViewport viewport = MinimapHudRenderer.captureViewport(
+        final ChunkViewport viewport = MinimapTilePainter.captureViewport(
             0.0, 0.0, 90, 1.0, ConfluxConfig.Shape.CIRCLE, 45.0
         );
 
@@ -39,7 +39,7 @@ class MinimapCaptureViewportTest {
 
     @Test
     void testedLargeZoomedMinimapHasABoundedWorstCaseViewport() {
-        final ChunkViewport viewport = MinimapHudRenderer.captureViewport(
+        final ChunkViewport viewport = MinimapTilePainter.captureViewport(
             0.0, 0.0, 128, 2.0, ConfluxConfig.Shape.SQUARE, 45.0
         );
 
