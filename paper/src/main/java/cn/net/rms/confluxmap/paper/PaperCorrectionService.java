@@ -249,6 +249,7 @@ final class PaperCorrectionService implements AutoCloseable {
         if (request.lod() > Proto.DEFAULT_MAX_PATCH_LOD
             || request.tiles().size() > config.maxTilesPerRequest
             || request.dimIndex() < 0
+            || worlds.at(request.dimIndex()) == null
             || !channel.budget.beginRequest(now)) {
             sender.send(new ErrorS2C(ErrorS2C.ERR_RATE_LIMITED, "map correction request is rate limited"));
             return;
@@ -414,6 +415,10 @@ final class PaperCorrectionService implements AutoCloseable {
     void tick() {
         final long now = System.nanoTime();
         liveDemand.tick(now);
+        // Each tickProgressive call advances exactly one incomplete tile by one worker
+        // step; two calls per server tick match the two-thread anvil pool, and a tile
+        // whose async step is still in flight is a no-op, so this never double-queues
+        // a single tile.
         tickProgressive(now);
         tickProgressive(now);
         for (final Map.Entry<UUID, PlayerChannel> entry : channels.entrySet()) {

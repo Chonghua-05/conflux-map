@@ -1,7 +1,9 @@
 package cn.net.rms.confluxmap.paper;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
 
+import cn.net.rms.confluxmap.core.net.ErrorS2C;
 import cn.net.rms.confluxmap.core.net.MapPatchS2C;
 import cn.net.rms.confluxmap.core.net.MapRegionPatchS2C;
 import cn.net.rms.confluxmap.core.net.MapRegionViewReqC2S;
@@ -18,9 +20,11 @@ import java.util.Map;
 import java.util.UUID;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicReference;
 import org.bukkit.NamespacedKey;
 import org.bukkit.World;
 import org.bukkit.WorldType;
+import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.ValueSource;
@@ -95,6 +99,61 @@ class PaperCorrectionLiveChangeTest {
                 1,
                 responses.get(),
                 "an accepted LOD " + lod + " tile request must receive a response"
+            );
+        }
+    }
+
+    @Test
+    void unknownDimensionTileRequestIsRejectedUpFront() throws Exception {
+        final PaperWorldDirectory worlds = directory(temporary);
+        final AtomicReference<ErrorS2C> error = new AtomicReference<>();
+        final AtomicInteger patches = new AtomicInteger();
+        final PaperCorrectionService.MessageSender sender =
+            new PaperCorrectionService.MessageSender() {
+                @Override
+                public void send(final Message message) {
+                    record(message);
+                }
+
+                @Override
+                public void sendEncoded(final Message message, final byte[] payload) {
+                    record(message);
+                }
+
+                private void record(final Message message) {
+                    if (message instanceof ErrorS2C) {
+                        error.set((ErrorS2C) message);
+                    } else if (message instanceof MapPatchS2C) {
+                        patches.incrementAndGet();
+                    }
+                }
+            };
+
+        try (PaperCorrectionService service = service(worlds)) {
+            service.requestTiles(
+                new UUID(3L, 3L),
+                new MapViewReqC2S(
+                    1,
+                    1,
+                    0,
+                    List.of(new MapViewReqC2S.TileReq(0, 0, Long.MIN_VALUE))
+                ),
+                64,
+                true,
+                sender
+            );
+
+            final ErrorS2C rejection = error.get();
+            assertNotNull(rejection, "an unknown dimension index must be rejected up front");
+            assertEquals(
+                ErrorS2C.ERR_RATE_LIMITED,
+                rejection.code(),
+                "the rejection must match the requestRegions dimension check"
+            );
+            assertEquals(
+                0,
+                patches.get(),
+                "a rejected request must not schedule tile work"
             );
         }
     }
