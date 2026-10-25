@@ -9,8 +9,8 @@ import org.junit.jupiter.api.Test;
 final class ConfigScreenPlayerMarkerPolicyTest {
     @Test
     void normalFallbackMarkerKeepsTheStyleControlEnabled() {
-        final ConfigScreen.PlayerMarkerSettingsAccess access =
-            ConfigScreen.PlayerMarkerSettingsAccess.from(false);
+        final PlayerMarkerSettingsAccess access =
+            PlayerMarkerSettingsAccess.from(false);
 
         assertTrue(access.controlsActive());
         assertNull(access.tooltipKey());
@@ -18,8 +18,8 @@ final class ConfigScreenPlayerMarkerPolicyTest {
 
     @Test
     void resourcePackMarkerDisablesTheStyleControlWithAnExactReason() {
-        final ConfigScreen.PlayerMarkerSettingsAccess access =
-            ConfigScreen.PlayerMarkerSettingsAccess.from(true);
+        final PlayerMarkerSettingsAccess access =
+            PlayerMarkerSettingsAccess.from(true);
 
         assertFalse(access.controlsActive());
         assertTrue(access.resourceOverride());

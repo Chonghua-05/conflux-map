@@ -13,9 +13,9 @@ import org.junit.jupiter.api.Test;
 class ConfigScreenRadarPolicyTest {
     @Test
     void allowedPolicyKeepsControlsInteractiveWithoutANotice() {
-        final ConfigScreen.RadarSettingsAccess access = ConfigScreen.RadarSettingsAccess.from(true);
+        final RadarSettingsAccess access = RadarSettingsAccess.from(true);
 
-        assertEquals(ConfigScreen.RadarSettingsAccess.ALLOWED, access);
+        assertEquals(RadarSettingsAccess.ALLOWED, access);
         assertTrue(access.controlsActive());
         assertNull(access.noticeKey());
         assertNull(access.tooltipKey());
@@ -23,9 +23,9 @@ class ConfigScreenRadarPolicyTest {
 
     @Test
     void forbiddenPolicyDisablesControlsAndExplainsWhy() {
-        final ConfigScreen.RadarSettingsAccess access = ConfigScreen.RadarSettingsAccess.from(false);
+        final RadarSettingsAccess access = RadarSettingsAccess.from(false);
 
-        assertEquals(ConfigScreen.RadarSettingsAccess.FORBIDDEN_BY_SERVER, access);
+        assertEquals(RadarSettingsAccess.FORBIDDEN_BY_SERVER, access);
         assertFalse(access.controlsActive());
         assertEquals("confluxmap.screen.config.radar.disabled_by_server", access.noticeKey());
         assertEquals("confluxmap.screen.config.radar.disabled_by_server", access.tooltipKey());
@@ -34,7 +34,7 @@ class ConfigScreenRadarPolicyTest {
     @Test
     void radarSettingsDoNotExposeRetiredIconAndMergeToggles() throws IOException {
         final String screen = Files.readString(findProjectRoot().resolve(
-            "src/main/java/cn/net/rms/confluxmap/mc/ui/screen/ConfigScreen.java"
+            "src/main/java/cn/net/rms/confluxmap/mc/ui/screen/ConfigRows.java"
         ));
 
         assertFalse(screen.contains("confluxmap.config.radar.icons_enabled"));
@@ -44,7 +44,7 @@ class ConfigScreenRadarPolicyTest {
     @Test
     void radarSettingsExposeTheDefaultDisplayModeSelector() throws IOException {
         final String screen = Files.readString(findProjectRoot().resolve(
-            "src/main/java/cn/net/rms/confluxmap/mc/ui/screen/ConfigScreen.java"
+            "src/main/java/cn/net/rms/confluxmap/mc/ui/screen/ConfigRows.java"
         ));
 
         assertTrue(screen.contains("confluxmap.config.radar.display_mode"));
