@@ -187,6 +187,8 @@ GPL-3.0，详见 [`LICENSE`](LICENSE)。第三方组件与参考来源记录于 
 
 ## 贡献者
 
+欢迎参与贡献——入门参见[贡献须知](CONTRIBUTING_CN.md)。
+
 [![Contributors](https://contrib.rocks/image?repo=Conflux-Union/conflux-map)](https://github.com/Conflux-Union/conflux-map/graphs/contributors)
 
 ## Star History

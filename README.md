@@ -189,6 +189,8 @@ GPL-3.0, see [`LICENSE`](LICENSE). Third-party components and behavior reference
 
 ## Contributors
 
+Contributions are welcome — see the [contributing guide](CONTRIBUTING.md) to get started.
+
 [![Contributors](https://contrib.rocks/image?repo=Conflux-Union/conflux-map)](https://github.com/Conflux-Union/conflux-map/graphs/contributors)
 
 ## Star History
