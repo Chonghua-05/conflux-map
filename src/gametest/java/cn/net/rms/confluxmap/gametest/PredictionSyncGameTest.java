@@ -60,6 +60,7 @@ public final class PredictionSyncGameTest implements FabricGameTest {
     private static final int BOMBARDMENT_FLOOR_SIZE = 32;
     private static final int TNT_COUNT = 4;
     private static final int TNT_FUSE_TICKS = 1;
+    private static final int RESPONSE_TIMEOUT_TICKS = 100;
     /**
      * Both tests write a stone floor into the tile they derive from their own test origin, and
      * vanilla runs a batch's tests concurrently a few dozen blocks apart - so both origins land in
@@ -164,99 +165,97 @@ public final class PredictionSyncGameTest implements FabricGameTest {
             responses::add
         );
 
-        require(context, responses.size() == 1, "expected one server response, got " + responses);
-        require(context, responses.get(0) instanceof MapPatchS2C, "expected MAP_PATCH, got " + responses.get(0));
-        final List<SyncPerformanceMonitor.LodSnapshot> performance = summaries.performance(player.getUuid());
-        require(context, performance.size() == 1, "expected one LOD performance bucket, got " + performance);
-        final SyncPerformanceMonitor.LodSnapshot sync = performance.get(0);
-        require(context, sync.lod() == 0 && sync.samples() == 1L, "wrong sync performance sample " + sync);
-        require(context, sync.averageTotalNanos() > 0L, "sync total duration was not measured");
-        require(context, sync.averageIoNanos() > 0L, "server I/O/scan duration was not measured");
-        require(context, sync.averageComputeNanos() > 0L, "server compute duration was not measured");
-        require(context, sync.averageTrafficBytes() > 0L, "sync payload traffic was not measured");
+        awaitPatch(context, summaries, server, responses, RESPONSE_TIMEOUT_TICKS, patch -> {
+            final List<SyncPerformanceMonitor.LodSnapshot> performance = summaries.performance(player.getUuid());
+            require(context, performance.size() == 1, "expected one LOD performance bucket, got " + performance);
+            final SyncPerformanceMonitor.LodSnapshot sync = performance.get(0);
+            require(context, sync.lod() == 0 && sync.samples() == 1L, "wrong sync performance sample " + sync);
+            require(context, sync.averageTotalNanos() > 0L, "sync total duration was not measured");
+            require(context, sync.averageIoNanos() > 0L, "server I/O/scan duration was not measured");
+            require(context, sync.averageComputeNanos() > 0L, "server compute duration was not measured");
+            require(context, sync.averageTrafficBytes() > 0L, "sync payload traffic was not measured");
+            try {
+                require(
+                    context,
+                    patch.mode() == Proto.PATCH_MODE_RESIDUAL,
+                    "expected residual patch, got mode " + patch.mode()
+                );
+                require(context, patch.reqId() == 7, "server did not preserve request id");
+                require(context, patch.tileX() == tileX && patch.tileZ() == tileZ, "server returned the wrong tile");
 
-        try {
-            final MapPatchS2C patch = (MapPatchS2C) MsgCodec.decode(MsgCodec.encode(responses.get(0)));
-            require(
-                context,
-                patch.mode() == Proto.PATCH_MODE_RESIDUAL,
-                "expected residual patch, got mode " + patch.mode()
-            );
-            require(context, patch.reqId() == 7, "server did not preserve request id");
-            require(context, patch.tileX() == tileX && patch.tileZ() == tileZ, "server returned the wrong tile");
+                final CorrectionTile correction = new CorrectionTile();
+                correction.applyPatch(patch.tileRevision(), patch.presence(), PatchCodec.decode(patch.body()));
+                final BaselineGrid baseline = LodSampling.sample(
+                    new NativeBaselineSampler(
+                        McVersions.toCubiomes(MinecraftVersion.current()).orElseThrow(), world.getSeed(), 0, 0
+                    ),
+                    false,
+                    0,
+                    tileOriginX,
+                    tileOriginZ
+                );
+                require(context, baseline != null, "client baseline sampling failed");
+                final DerivedGrid derived = BaselineDeriver.derive(baseline);
+                CanopyStylizer.apply(derived, baseline, world.getSeed(), 0, tileOriginX, tileOriginZ);
+                final int[] clientPixels = PredictedTileComposer.compose(
+                    derived,
+                    baseline,
+                    PredictionPalette.defaults(),
+                    correction,
+                    PredictionViewMode.EVERYWHERE,
+                    0
+                );
+                final int expectedStoneArgb = ShadingPipeline.applyShade(
+                    MapColorTable.argb(11),
+                    ShadingPipeline.detailedHeightShade(floorY, ShadingPipeline.REFERENCE_HEIGHT)
+                );
 
-            final CorrectionTile correction = new CorrectionTile();
-            correction.applyPatch(patch.tileRevision(), patch.presence(), PatchCodec.decode(patch.body()));
-            final BaselineGrid baseline = LodSampling.sample(
-                new NativeBaselineSampler(
-                    McVersions.toCubiomes(MinecraftVersion.current()).orElseThrow(), world.getSeed(), 0, 0
-                ),
-                false,
-                0,
-                tileOriginX,
-                tileOriginZ
-            );
-            require(context, baseline != null, "client baseline sampling failed");
-            final DerivedGrid derived = BaselineDeriver.derive(baseline);
-            CanopyStylizer.apply(derived, baseline, world.getSeed(), 0, tileOriginX, tileOriginZ);
-            final int[] clientPixels = PredictedTileComposer.compose(
-                derived,
-                baseline,
-                PredictionPalette.defaults(),
-                correction,
-                PredictionViewMode.EVERYWHERE,
-                0
-            );
-            final int expectedStoneArgb = ShadingPipeline.applyShade(
-                MapColorTable.argb(11),
-                ShadingPipeline.detailedHeightShade(floorY, ShadingPipeline.REFERENCE_HEIGHT)
-            );
-
-            for (int z = 0; z < FLOOR_SIZE; z++) {
-                for (int x = 0; x < FLOOR_SIZE; x++) {
-                    final int pixelX = floorMinX + x - tileOriginX;
-                    final int pixelZ = floorMinZ + z - tileOriginZ;
-                    final int pixel = pixelZ * 256 + pixelX;
-                    final PatchCodec.Sample sample = correction.sampleAt(pixel);
-                    require(context, sample != null, "server omitted stone floor pixel " + pixelX + "," + pixelZ);
-                    require(
-                        context,
-                        sample.surfaceY() == floorY,
-                        "wrong stone surface height at " + pixelX + "," + pixelZ
-                    );
-                    require(context, sample.kind() == SurfaceKind.LAND.ordinal(), "stone floor was not classified as land");
-                    require(context, sample.mapColorId() == 11, "stone floor used the wrong map color");
-                    // Edge pixels legitimately receive relief shading from predicted terrain just
-                    // outside the corrected floor. The interior has all relief samples on the flat
-                    // stone surface and must reconstruct the exact shaded map color.
-                    if (x > 0 && x < FLOOR_SIZE - 1 && z > 0 && z < FLOOR_SIZE - 1
-                        && clientPixels[pixel] != expectedStoneArgb) {
-                        // The shade comes from the (x-1, z+1) neighbor, so report that pixel too:
-                        // "absent" means the server dropped it, a mismatched y means something
-                        // else wrote into this tile.
-                        final int neighborX = pixelX - 1;
-                        final int neighborZ = pixelZ + 1;
-                        final PatchCodec.Sample neighbor = correction.sampleAt(neighborZ * 256 + neighborX);
-                        GameTestCompat.fail(
+                for (int z = 0; z < FLOOR_SIZE; z++) {
+                    for (int x = 0; x < FLOOR_SIZE; x++) {
+                        final int pixelX = floorMinX + x - tileOriginX;
+                        final int pixelZ = floorMinZ + z - tileOriginZ;
+                        final int pixel = pixelZ * 256 + pixelX;
+                        final PatchCodec.Sample sample = correction.sampleAt(pixel);
+                        require(context, sample != null, "server omitted stone floor pixel " + pixelX + "," + pixelZ);
+                        require(
                             context,
-                            "client did not reconstruct interior stone at " + pixelX + "," + pixelZ
-                                + ": floorY=" + floorY
-                                + " argb=" + Integer.toHexString(clientPixels[pixel])
-                                + " expected=" + Integer.toHexString(expectedStoneArgb)
-                                + " swNeighbor=" + neighborX + "," + neighborZ
-                                + (neighbor == null
-                                    ? " absent from patch"
-                                    : " y=" + neighbor.surfaceY()
-                                        + " kind=" + neighbor.kind()
-                                        + " color=" + neighbor.mapColorId())
+                            sample.surfaceY() == floorY,
+                            "wrong stone surface height at " + pixelX + "," + pixelZ
                         );
+                        require(context, sample.kind() == SurfaceKind.LAND.ordinal(), "stone floor was not classified as land");
+                        require(context, sample.mapColorId() == 11, "stone floor used the wrong map color");
+                        // Edge pixels legitimately receive relief shading from predicted terrain just
+                        // outside the corrected floor. The interior has all relief samples on the flat
+                        // stone surface and must reconstruct the exact shaded map color.
+                        if (x > 0 && x < FLOOR_SIZE - 1 && z > 0 && z < FLOOR_SIZE - 1
+                            && clientPixels[pixel] != expectedStoneArgb) {
+                            // The shade comes from the (x-1, z+1) neighbor, so report that pixel too:
+                            // "absent" means the server dropped it, a mismatched y means something
+                            // else wrote into this tile.
+                            final int neighborX = pixelX - 1;
+                            final int neighborZ = pixelZ + 1;
+                            final PatchCodec.Sample neighbor = correction.sampleAt(neighborZ * 256 + neighborX);
+                            GameTestCompat.fail(
+                                context,
+                                "client did not reconstruct interior stone at " + pixelX + "," + pixelZ
+                                    + ": floorY=" + floorY
+                                    + " argb=" + Integer.toHexString(clientPixels[pixel])
+                                    + " expected=" + Integer.toHexString(expectedStoneArgb)
+                                    + " swNeighbor=" + neighborX + "," + neighborZ
+                                    + (neighbor == null
+                                        ? " absent from patch"
+                                        : " y=" + neighbor.surfaceY()
+                                            + " kind=" + neighbor.kind()
+                                            + " color=" + neighbor.mapColorId())
+                            );
+                        }
                     }
                 }
+                context.complete();
+            } catch (final ProtoException e) {
+                GameTestCompat.fail(context, "sync protocol failed: " + e.getMessage());
             }
-            context.complete();
-        } catch (final ProtoException e) {
-            GameTestCompat.fail(context, "sync protocol failed: " + e.getMessage());
-        }
+        });
     }
 
     private static final class BombardmentRun {
@@ -303,8 +302,7 @@ public final class PredictionSyncGameTest implements FabricGameTest {
         }
 
         private void syncInitialFloor() {
-            try {
-                final MapPatchS2C patch = requestPatch(8, 0L);
+            requestPatch(8, 0L, patch -> {
                 require(
                     context,
                     patch.mode() == Proto.PATCH_MODE_RESIDUAL,
@@ -325,9 +323,7 @@ public final class PredictionSyncGameTest implements FabricGameTest {
                 );
                 spawnTnt();
                 context.waitAndRun(20L, this::saveBombardmentResult);
-            } catch (final ProtoException e) {
-                failProtocol(e);
-            }
+            });
         }
 
         private void saveBombardmentResult() {
@@ -342,8 +338,8 @@ public final class PredictionSyncGameTest implements FabricGameTest {
         }
 
         private void syncBombardmentResult(final int remainingStone) {
-            try {
-                applyCorrectionPatch(requestPatch(9, correction.revision()));
+            requestPatch(9, correction.revision(), patch -> {
+                applyCorrectionPatch(patch);
                 final int synchronizedStone = countSynchronizedStone();
                 require(
                     context,
@@ -356,12 +352,10 @@ public final class PredictionSyncGameTest implements FabricGameTest {
                     "stone reduction did not round-trip: server=" + remainingStone + ", client=" + synchronizedStone
                 );
                 context.complete();
-            } catch (final ProtoException e) {
-                failProtocol(e);
-            }
+            });
         }
 
-        private MapPatchS2C requestPatch(final int requestId, final long sinceRevision) throws ProtoException {
+        private void requestPatch(final int requestId, final long sinceRevision, final PatchStep then) {
             final List<Message> responses = new ArrayList<>();
             summaries.request(
                 server,
@@ -374,9 +368,7 @@ public final class PredictionSyncGameTest implements FabricGameTest {
                 ),
                 responses::add
             );
-            require(context, responses.size() == 1, "expected one server response, got " + responses);
-            require(context, responses.get(0) instanceof MapPatchS2C, "expected MAP_PATCH, got " + responses.get(0));
-            return (MapPatchS2C) MsgCodec.decode(MsgCodec.encode(responses.get(0)));
+            awaitPatch(context, summaries, server, responses, RESPONSE_TIMEOUT_TICKS, then);
         }
 
         private void applyCorrectionPatch(final MapPatchS2C patch) throws ProtoException {
@@ -452,10 +444,6 @@ public final class PredictionSyncGameTest implements FabricGameTest {
             return count;
         }
 
-        private void failProtocol(final ProtoException failure) {
-            GameTestCompat.fail(context, "sync protocol failed: " + failure.getMessage());
-        }
-
         private static int clampFloorStart(final int testCoordinate, final int tileOrigin) {
             return Math.max(
                 tileOrigin + 1,
@@ -510,6 +498,48 @@ public final class PredictionSyncGameTest implements FabricGameTest {
             index++;
         }
         throw new IllegalStateException("test world is not registered on the server");
+    }
+
+    /** One step of a round trip, run with the decoded patch once the server response lands. */
+    @FunctionalInterface
+    private interface PatchStep {
+        void accept(final MapPatchS2C patch) throws ProtoException;
+    }
+
+    /**
+     * Companion tile patches build on the anvil worker pool and are only delivered by a later
+     * service tick, not by the request call. Polls the test-owned service once per tick until the
+     * response lands, then checks the protocol shape and hands the decoded patch to the next step.
+     */
+    private static void awaitPatch(
+        final TestContext context,
+        final RegionSummaryService summaries,
+        final MinecraftServer server,
+        final List<Message> responses,
+        final int ticksLeft,
+        final PatchStep then
+    ) {
+        context.waitAndRun(1L, () -> {
+            summaries.tick(server);
+            if (responses.isEmpty()) {
+                if (ticksLeft > 0) {
+                    awaitPatch(context, summaries, server, responses, ticksLeft - 1, then);
+                } else {
+                    GameTestCompat.fail(
+                        context,
+                        "server response did not arrive within " + RESPONSE_TIMEOUT_TICKS + " ticks"
+                    );
+                }
+                return;
+            }
+            try {
+                require(context, responses.size() == 1, "expected one server response, got " + responses);
+                require(context, responses.get(0) instanceof MapPatchS2C, "expected MAP_PATCH, got " + responses.get(0));
+                then.accept((MapPatchS2C) MsgCodec.decode(MsgCodec.encode(responses.get(0))));
+            } catch (final ProtoException e) {
+                GameTestCompat.fail(context, "sync protocol failed: " + e.getMessage());
+            }
+        });
     }
 
     private static void require(final TestContext context, final boolean condition, final String message) {
