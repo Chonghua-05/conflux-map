@@ -31,6 +31,7 @@ jobs:
     runs-on: ubuntu-24.04
     outputs:
       versions: ${{ steps.Get_Versions.outputs.versions }}
+      latest: ${{ steps.Get_Versions.outputs.latest }}
     steps:
       - name: Checkout repository
         uses: actions/checkout@v5
@@ -39,6 +40,7 @@ jobs:
         run: |
           VERSIONS=$(find versions -maxdepth 1 -type d -name "[0-9]*.[0-9]*" | xargs -I {} basename {} | sort -V | jq -R . | jq -s -c .)
           echo "versions=$VERSIONS" >> $GITHUB_OUTPUT
+          echo "latest=$(echo "$VERSIONS" | jq -r '.[-1]')" >> $GITHUB_OUTPUT
   Build-Matrix:
     runs-on: ubuntu-24.04
     needs: Get-Versions
@@ -59,15 +61,19 @@ jobs:
         with:
           java-version: '22'
           distribution: 'temurin'
+      # One shared cache for the whole matrix: every job builds the preprocessor
+      # chain up to its version, so the highest version's cache is the union.
+      # Only that job saves - a shared key never gets overwritten, so a lower
+      # version saving first would pin the entry to partial content forever.
       - name: Cache Gradle packages
-        uses: actions/cache@v5
+        uses: actions/cache/restore@v5
         with:
           path: |
             ~/.gradle/caches
             ~/.gradle/wrapper
-          key: ${{ runner.os }}-gradle-${{ matrix.minecraft_version }}-${{ hashFiles('**/*.gradle*', '**/gradle-wrapper.properties') }}
+          key: ${{ runner.os }}-gradle-unified-${{ hashFiles('**/*.gradle*', '**/gradle-wrapper.properties') }}
           restore-keys: |
-            ${{ runner.os }}-gradle-${{ matrix.minecraft_version }}-
+            ${{ runner.os }}-gradle-unified-
             ${{ runner.os }}-gradle-
       - name: Make Gradle wrapper executable
         run: chmod +x ./gradlew
@@ -337,6 +343,14 @@ jobs:
       - name: Stop Gradle daemon
         if: always()
         run: ./gradlew --stop
+      - name: Save unified Gradle cache
+        if: always() && matrix.minecraft_version == needs.Get-Versions.outputs.latest
+        uses: actions/cache/save@v5
+        with:
+          path: |
+            ~/.gradle/caches
+            ~/.gradle/wrapper
+          key: ${{ runner.os }}-gradle-unified-${{ hashFiles('**/*.gradle*', '**/gradle-wrapper.properties') }}
   Build-Paper:
     runs-on: ubuntu-24.04
     steps:

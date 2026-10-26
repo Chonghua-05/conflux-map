@@ -20,11 +20,12 @@ jobs:
           echo "versions=$VERSIONS" >> $GITHUB_OUTPUT
 
   Refresh-Matrix:
+    # One job refreshes the single unified cache (same key as check.yml's
+    # Build-Matrix): it walks every version so the entry covers the whole
+    # preprocessor chain plus each version's client assets, which the matrix
+    # jobs' Connect steps otherwise re-download from Mojang on cold caches.
     runs-on: ubuntu-24.04
     needs: Get-Versions
-    strategy:
-      matrix:
-        minecraft_version: ${{ fromJson(needs.Get-Versions.outputs.versions) }}
     steps:
       - name: Checkout repository
         uses: actions/checkout@v5
@@ -43,15 +44,21 @@ jobs:
           path: |
             ~/.gradle/caches
             ~/.gradle/wrapper
-          key: ${{ runner.os }}-gradle-${{ matrix.minecraft_version }}-${{ hashFiles('**/*.gradle*', '**/gradle-wrapper.properties') }}
+          key: ${{ runner.os }}-gradle-unified-${{ hashFiles('**/*.gradle*', '**/gradle-wrapper.properties') }}
           restore-keys: |
-            ${{ runner.os }}-gradle-${{ matrix.minecraft_version }}-
+            ${{ runner.os }}-gradle-unified-
             ${{ runner.os }}-gradle-
       - name: Make Gradle wrapper executable
         run: chmod +x ./gradlew
-      - name: Refresh cache for ${{ matrix.minecraft_version }}
-        run: ./gradlew :${{ matrix.minecraft_version }}:dependencies
+      - name: Refresh cache for every Minecraft version
+        env:
+          VERSIONS: ${{ needs.Get-Versions.outputs.versions }}
+        run: |
+          for version in $(echo "$VERSIONS" | jq -r '.[]'); do
+            ./gradlew ":$version:dependencies" ":$version:downloadAssets"
+          done
       - name: Stop Gradle daemon
+        if: always()
         run: ./gradlew --stop
 
   Refresh-Paper:
