@@ -30,7 +30,7 @@ jobs:
   Get-Versions:
     runs-on: ubuntu-24.04
     outputs:
-      versions: ${{ steps.Get_Versions.outputs.versions }}
+      shards: ${{ steps.Get_Versions.outputs.shards }}
       latest: ${{ steps.Get_Versions.outputs.latest }}
     steps:
       - name: Checkout repository
@@ -38,16 +38,23 @@ jobs:
       - name: Get Minecraft versions
         id: Get_Versions
         run: |
-          VERSIONS=$(find versions -maxdepth 1 -type d -name "[0-9]*.[0-9]*" | xargs -I {} basename {} | sort -V | jq -R . | jq -s -c .)
-          echo "versions=$VERSIONS" >> $GITHUB_OUTPUT
-          echo "latest=$(echo "$VERSIONS" | jq -r '.[-1]')" >> $GITHUB_OUTPUT
+          VERSIONS=$(find versions -maxdepth 1 -type d -name "[0-9]*.[0-9]*" | xargs -I {} basename {} | sort -V)
+          # Round-robin into four balanced shards so each shard mixes slow (26.x) and fast
+          # versions, and two concurrent runs stay inside the account's parallel-job budget
+          # (8 shards + Get-Versions + Paper + Api per run).
+          SHARDS=$(echo "$VERSIONS" | jq -R -s -c 'split("\n") | map(select(length > 0)) as $v | reduce range(0; ($v|length)) as $i ([[],[],[],[]]; .[$i % 4] += [$v[$i]])')
+          echo "shards=$SHARDS" >> $GITHUB_OUTPUT
+          echo "latest=$(echo "$VERSIONS" | tail -1)" >> $GITHUB_OUTPUT
   Build-Matrix:
     runs-on: ubuntu-24.04
     needs: Get-Versions
+    name: Check (${{ join(matrix.shard, ', ') }})
     strategy:
       fail-fast: true
       matrix:
-        minecraft_version: ${{ fromJson(needs.Get-Versions.outputs.versions) }}
+        shard: ${{ fromJson(needs.Get-Versions.outputs.shards) }}
+    env:
+      SHARD_VERSIONS: ${{ toJson(matrix.shard) }}
     steps:
       - name: Checkout repository
         uses: actions/checkout@v5
@@ -61,10 +68,10 @@ jobs:
         with:
           java-version: '22'
           distribution: 'temurin'
-      # One shared cache for the whole matrix: every job builds the preprocessor
-      # chain up to its version, so the highest version's cache is the union.
-      # Only that job saves - a shared key never gets overwritten, so a lower
-      # version saving first would pin the entry to partial content forever.
+      # One shared cache for the whole matrix: every shard builds the preprocessor
+      # chain up to its versions, so the shard containing the highest version has
+      # the union. Only that shard saves - a shared key never gets overwritten, so
+      # another shard saving first would pin the entry to partial content forever.
       - name: Cache Gradle packages
         uses: actions/cache/restore@v5
         with:
@@ -81,15 +88,27 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends mesa-vulkan-drivers
-      - name: Check ${{ matrix.minecraft_version }}
+      - name: Check shard
         id: check
-        run: ./gradlew -Pversion="$BUILD_VERSION" :${{ matrix.minecraft_version }}:check
-      - name: Connect client to server for ${{ matrix.minecraft_version }}
-        timeout-minutes: 12
+        run: |
+          tasks=""
+          for v in $(echo "$SHARD_VERSIONS" | jq -r '.[]'); do
+            tasks="$tasks :$v:check"
+          done
+          # Gametest servers all bind the default port, so they cannot run as parallel
+          # tasks inside one invocation; the GameTest-Matrix job runs them instead.
+          ./gradlew -Pversion="$BUILD_VERSION" $tasks -x runGametest
+      - name: Connect client to server for shard
+        timeout-minutes: 45
         env:
           LIBGL_ALWAYS_SOFTWARE: '1'
-          MINECRAFT_VERSION: ${{ matrix.minecraft_version }}
         run: |
+          set -Eeuo pipefail
+
+          for v in $(echo "$SHARD_VERSIONS" | jq -r '.[]'); do
+            export MINECRAFT_VERSION="$v"
+            echo "=== Connection check for $v ==="
+            (
           set -Eeuo pipefail
 
           minecraft_version="$MINECRAFT_VERSION"
@@ -222,44 +241,48 @@ jobs:
 
           grep -Em1 'logged in with entity id [0-9]+ at|joined the game' "$server_output"
           echo "Client-server connection smoke test passed for Minecraft $minecraft_version"
-      - name: Upload build for ${{ matrix.minecraft_version }}
+            )
+          done
+      - name: Upload build for shard
         uses: actions/upload-artifact@v5
         with:
-          name: confluxmap-${{ matrix.minecraft_version }}-${{ env.BUILD_VERSION }}
-          path: versions/${{ matrix.minecraft_version }}/build/libs/*.jar
+          name: confluxmap-shard-${{ strategy.job-index }}-${{ env.BUILD_VERSION }}
+          path: versions/*/build/libs/*.jar
           if-no-files-found: error
-      - name: Upload connection smoke logs for ${{ matrix.minecraft_version }}
+      - name: Upload connection smoke logs for shard
         if: always()
         uses: actions/upload-artifact@v5
         with:
-          name: client-server-smoke-logs-${{ matrix.minecraft_version }}
+          name: client-server-smoke-logs-shard-${{ strategy.job-index }}
           path: |
-            versions/${{ matrix.minecraft_version }}/build/connection-smoke/server-output.log
-            versions/${{ matrix.minecraft_version }}/build/connection-smoke/client-output.log
-            versions/${{ matrix.minecraft_version }}/build/connection-smoke/server/logs/latest.log
-            versions/${{ matrix.minecraft_version }}/build/connection-smoke/client/logs/latest.log
-            versions/${{ matrix.minecraft_version }}/build/client-gametest/logs/latest.log
-            versions/${{ matrix.minecraft_version }}/build/client-gametest/crash-reports/
+            versions/*/build/connection-smoke/server-output.log
+            versions/*/build/connection-smoke/client-output.log
+            versions/*/build/connection-smoke/server/logs/latest.log
+            versions/*/build/connection-smoke/client/logs/latest.log
+            versions/*/build/client-gametest/logs/latest.log
+            versions/*/build/client-gametest/crash-reports/
           if-no-files-found: warn
           retention-days: 7
       - name: Publish prediction quality summary
         if: always()
         env:
-          ARTIFACT_NAME: prediction-quality-${{ matrix.minecraft_version }}
+          ARTIFACT_NAME: prediction-quality-shard-${{ strategy.job-index }}
           CHECK_OUTCOME: ${{ steps.check.outcome }}
-          MINECRAFT_VERSION: ${{ matrix.minecraft_version }}
-          REPORT_PATH: versions/${{ matrix.minecraft_version }}/build/reports/prediction-quality/report.json
         run: |
-          if [[ ! -f "$REPORT_PATH" ]]; then
-            {
-              echo "## Prediction quality - Minecraft $MINECRAFT_VERSION"
-              echo
-              echo "> The check finished with \`$CHECK_OUTCOME\`, but no prediction quality report was generated."
-            } >> "$GITHUB_STEP_SUMMARY"
-            exit 0
-          fi
+          for v in $(echo "$SHARD_VERSIONS" | jq -r '.[]'); do
+            export MINECRAFT_VERSION="$v"
+            export REPORT_PATH="versions/$v/build/reports/prediction-quality/report.json"
 
-          python - <<'PY' >> "$GITHUB_STEP_SUMMARY"
+            if [[ ! -f "$REPORT_PATH" ]]; then
+              {
+                echo "## Prediction quality - Minecraft $v"
+                echo
+                echo "> The check finished with \`$CHECK_OUTCOME\`, but no prediction quality report was generated."
+              } >> "$GITHUB_STEP_SUMMARY"
+              continue
+            fi
+
+            python - <<'PY' >> "$GITHUB_STEP_SUMMARY"
           import json
           import os
 
@@ -313,13 +336,13 @@ jobs:
               "| Sample | Dimension | Tile | Biome | Combined | Coverage | Kind | "
               "Height MAE / bias / P95 | Fluid | Color | SSIM | Exact edge F1 | Tolerant edge F1 |"
           )
-          print("| --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |")
+          print("| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |")
           for sample in report["samples"]:
               metrics = sample["metrics"]
               height = f"{metrics['heightMae']:.2f} / {metrics['heightBias']:+.2f} / {metrics['heightP95']:.0f}"
               print(
                   f"| `{sample['id']}` | `{sample['dimension']}` | "
-                  f"{sample['tileX']}, {sample['tileZ']} | {sample['dominantBiomeId']} | "
+                  f"{sample['tileX']}, {sample['tileZ']} | `{sample['dominantBiomeId']}` | "
                   f"{percent(metrics['combinedScore'])} | {percent(metrics['coverageAccuracy'])} | "
                   f"{percent(metrics['surfaceKindAccuracy'])} | {height} | "
                   f"{percent(metrics['fluidBucketAccuracy'])} | {percent(metrics['colorSimilarity'])} | "
@@ -333,24 +356,83 @@ jobs:
               f"the [{artifact_name}]({artifact_url}) artifact."
           )
           PY
+          done
       - name: Upload prediction quality report
         if: always()
         uses: actions/upload-artifact@v5
         with:
-          name: prediction-quality-${{ matrix.minecraft_version }}
-          path: versions/${{ matrix.minecraft_version }}/build/reports/prediction-quality/
+          name: prediction-quality-shard-${{ strategy.job-index }}
+          path: versions/*/build/reports/prediction-quality/
           if-no-files-found: warn
       - name: Stop Gradle daemon
         if: always()
         run: ./gradlew --stop
       - name: Save unified Gradle cache
-        if: always() && matrix.minecraft_version == needs.Get-Versions.outputs.latest
+        if: always() && contains(matrix.shard, needs.Get-Versions.outputs.latest)
         uses: actions/cache/save@v5
         with:
           path: |
             ~/.gradle/caches
             ~/.gradle/wrapper
           key: ${{ runner.os }}-gradle-unified-${{ hashFiles('**/*.gradle*', '**/gradle-wrapper.properties') }}
+  GameTest-Matrix:
+    runs-on: ubuntu-24.04
+    needs: Get-Versions
+    name: Gametest (${{ join(matrix.shard, ', ') }})
+    strategy:
+      fail-fast: true
+      matrix:
+        shard: ${{ fromJson(needs.Get-Versions.outputs.shards) }}
+    env:
+      SHARD_VERSIONS: ${{ toJson(matrix.shard) }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+          submodules: true
+      - name: Validate Gradle wrapper
+        uses: gradle/actions/wrapper-validation@v5
+      - name: Setup JDK
+        uses: actions/setup-java@v5
+        with:
+          java-version: '22'
+          distribution: 'temurin'
+      - name: Cache Gradle packages
+        uses: actions/cache/restore@v5
+        with:
+          path: |
+            ~/.gradle/caches
+            ~/.gradle/wrapper
+          key: ${{ runner.os }}-gradle-unified-${{ hashFiles('**/*.gradle*', '**/gradle-wrapper.properties') }}
+          restore-keys: |
+            ${{ runner.os }}-gradle-unified-
+            ${{ runner.os }}-gradle-
+      - name: Make Gradle wrapper executable
+        run: chmod +x ./gradlew
+      - name: Run gametests for shard
+        run: |
+          # Gametest servers all bind the default port, so the shard's versions must run
+          # one at a time; separate shards still parallelize across jobs.
+          for v in $(echo "$SHARD_VERSIONS" | jq -r '.[]'); do
+            echo "::group::Gametest $v"
+            ./gradlew ":$v:runGametest" --console=plain
+            echo "::endgroup::"
+          done
+      - name: Upload gametest logs for shard
+        if: failure()
+        uses: actions/upload-artifact@v5
+        with:
+          name: gametest-logs-shard-${{ strategy.job-index }}
+          path: |
+            versions/*/build/gametest-results.xml
+            versions/*/build/gametest/logs/
+            versions/*/build/gametest/crash-reports/
+          if-no-files-found: warn
+          retention-days: 7
+      - name: Stop Gradle daemon
+        if: always()
+        run: ./gradlew --stop
   Build-Paper:
     runs-on: ubuntu-24.04
     steps:
@@ -367,7 +449,7 @@ jobs:
           java-version: '22'
           distribution: 'temurin'
       - name: Cache Gradle packages
-        uses: actions/cache@v5
+        uses: actions/cache/restore@v5
         with:
           path: |
             ~/.gradle/caches
@@ -405,7 +487,7 @@ jobs:
           java-version: '22'
           distribution: 'temurin'
       - name: Cache Gradle packages
-        uses: actions/cache@v5
+        uses: actions/cache/restore@v5
         with:
           path: |
             ~/.gradle/caches
