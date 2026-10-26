@@ -12,6 +12,7 @@ import cn.net.rms.confluxmap.ConfluxMapMod;
 import cn.net.rms.confluxmap.compat.Dimensions;
 import cn.net.rms.confluxmap.compat.MinecraftAccess;
 import cn.net.rms.confluxmap.compat.Texts;
+import cn.net.rms.confluxmap.core.util.CoordinateText;
 import cn.net.rms.confluxmap.server.shared.SharedWaypointCommandService;
 import cn.net.rms.confluxmap.server.shared.SharedWaypointService;
 import java.nio.charset.StandardCharsets;
@@ -135,9 +136,9 @@ final class ConfluxMapCommands {
                 "[" + entry.idPrefix() + "] " + entry.waypoint().name()
                     + " by " + entry.waypoint().publisherName()
                     + " @ " + entry.waypoint().dimensionId()
-                    + " (" + coordinate(entry.waypoint().x())
-                    + ", " + coordinate(entry.waypoint().y())
-                    + ", " + coordinate(entry.waypoint().z()) + ")"
+                    + " (" + CoordinateText.plain(entry.waypoint().x())
+                    + ", " + CoordinateText.plain(entry.waypoint().y())
+                    + ", " + CoordinateText.plain(entry.waypoint().z()) + ")"
             ), false);
             MinecraftAccess.sendFeedback(source, Texts.literal(entry.xaeroMessage()), false);
         }
@@ -269,10 +270,6 @@ final class ConfluxMapCommands {
             case ID_GENERATION_FAILED -> "The server could not allocate a waypoint ID.";
             default -> "Shared waypoint command failed: " + error;
         };
-    }
-
-    private static String coordinate(final double value) {
-        return Double.toString(value);
     }
 
     private static int performance(

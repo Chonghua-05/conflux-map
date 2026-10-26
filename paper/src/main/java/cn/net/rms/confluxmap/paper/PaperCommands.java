@@ -1,6 +1,7 @@
 package cn.net.rms.confluxmap.paper;
 
 import cn.net.rms.confluxmap.core.model.DimensionId;
+import cn.net.rms.confluxmap.core.util.CoordinateText;
 import cn.net.rms.confluxmap.core.util.TileMath;
 import cn.net.rms.confluxmap.server.ServerConfig;
 import cn.net.rms.confluxmap.server.SyncPerformanceFormatter;
@@ -135,8 +136,9 @@ final class PaperCommands implements CommandExecutor, TabCompleter {
                 "[" + entry.idPrefix() + "] " + entry.waypoint().name()
                     + " by " + entry.waypoint().publisherName()
                     + " @ " + entry.waypoint().dimensionId()
-                    + " (" + entry.waypoint().x() + ", " + entry.waypoint().y()
-                    + ", " + entry.waypoint().z() + ")"
+                    + " (" + CoordinateText.plain(entry.waypoint().x())
+                    + ", " + CoordinateText.plain(entry.waypoint().y())
+                    + ", " + CoordinateText.plain(entry.waypoint().z()) + ")"
             );
             sender.sendMessage(entry.xaeroMessage());
         }

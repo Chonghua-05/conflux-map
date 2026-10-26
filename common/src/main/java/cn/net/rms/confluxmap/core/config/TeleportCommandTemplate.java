@@ -2,7 +2,7 @@ package cn.net.rms.confluxmap.core.config;
 
 import cn.net.rms.confluxmap.core.model.DimensionId;
 import cn.net.rms.confluxmap.core.model.WorldIdentity;
-import java.util.Locale;
+import cn.net.rms.confluxmap.core.util.CoordinateText;
 import java.util.Optional;
 
 /** Validates and renders the client-configured fullscreen-map teleport command. */
@@ -54,28 +54,11 @@ public final class TeleportCommandTemplate {
             throw new IllegalArgumentException("invalid teleport command template");
         }
         return stripLeadingSlash(template.trim())
-            .replace(X, coordinate(x))
-            .replace(Y, coordinate(y))
-            .replace(Z, coordinate(z))
+            .replace(X, CoordinateText.plain(x))
+            .replace(Y, CoordinateText.plain(y))
+            .replace(Z, CoordinateText.plain(z))
             .replace(DIMENSION, dimension.toString())
             .replace(WORLD, world.worldId());
-    }
-
-    /**
-     * Fixed-point coordinate text. {@link Double#toString} switches to computerized scientific
-     * notation ("1.0E7") for magnitudes at or above 1e7 and below 1e-3, both reachable inside
-     * the world border, and vanilla command parsing accepts only digits, '.', and '-'.
-     */
-    private static String coordinate(final double value) {
-        final String fixed = String.format(Locale.ROOT, "%.6f", value);
-        int end = fixed.length();
-        while (end > 0 && fixed.charAt(end - 1) == '0') {
-            end--;
-        }
-        if (fixed.charAt(end - 1) == '.') {
-            end--;
-        }
-        return fixed.substring(0, end);
     }
 
     private static String stripLeadingSlash(final String command) {

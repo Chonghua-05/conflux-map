@@ -21,6 +21,16 @@ final class WaypointSearchTest {
         assertTrue(matches("   "));
     }
 
+    @Test
+    void matchesFarWorldCoordinatesTypedAsPlainDigits() {
+        assertTrue(WaypointSearch.matches(
+            "12345678", "Base", "", "Overworld", 12345678.5, 64.0, 320.25
+        ));
+        assertTrue(WaypointSearch.matches(
+            "-29999984", "Base", "", "Overworld", 12.5, 64.0, -29999984.0
+        ));
+    }
+
     private static boolean matches(final String query) {
         return WaypointSearch.matches(
             query,

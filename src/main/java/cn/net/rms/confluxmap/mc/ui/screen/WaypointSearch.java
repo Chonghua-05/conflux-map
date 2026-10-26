@@ -1,5 +1,6 @@
 package cn.net.rms.confluxmap.mc.ui.screen;
 
+import cn.net.rms.confluxmap.core.util.CoordinateText;
 import java.util.Locale;
 
 /** Search matching shared by local and public waypoint lists. */
@@ -23,9 +24,9 @@ final class WaypointSearch {
         return contains(name, query)
             || contains(secondaryText, query)
             || contains(dimensionText, query)
-            || Double.toString(x).contains(query)
-            || Double.toString(y).contains(query)
-            || Double.toString(z).contains(query);
+            || CoordinateText.plain(x).contains(query)
+            || CoordinateText.plain(y).contains(query)
+            || CoordinateText.plain(z).contains(query);
     }
 
     private static boolean contains(final String value, final String query) {
