@@ -10,6 +10,7 @@ import cn.net.rms.confluxmap.core.color.XaeroMapStyle;
 import cn.net.rms.confluxmap.core.color.LightTint;
 import cn.net.rms.confluxmap.core.color.MaterialDetailProfile;
 import cn.net.rms.confluxmap.core.color.ShadingPipeline;
+import cn.net.rms.confluxmap.core.model.ChunkSnapshot;
 import cn.net.rms.confluxmap.core.model.SurfaceKind;
 import cn.net.rms.confluxmap.core.net.PatchCodec;
 import cn.net.rms.confluxmap.core.net.Proto;
@@ -91,6 +92,34 @@ class PredictedTileComposerTest {
         )[0];
 
         assertArrayEquals(expected, composed);
+    }
+
+    /** A synchronized void column must erase the predicted terrain instead of showing it. */
+    @Test
+    void synchronizedVoidErasesThePredictedTerrainUnderneath() {
+        final BaselineGrid grid = flatGrid(1);
+        final DerivedGrid derived = flatDerived(80);
+        final byte[] evaluated = new byte[PatchCodec.MASK_BYTES];
+        Arrays.fill(evaluated, (byte) 0xFF);
+        final CorrectionTile corrections = new CorrectionTile();
+        corrections.applyPatch(
+            1L,
+            new byte[Proto.PATCH_PRESENCE_BYTES],
+            new PatchCodec.Patch(evaluated, java.util.List.of(
+                new PatchCodec.Sample(
+                    0, 1, ChunkSnapshot.NO_SURFACE, SurfaceKind.VOID.ordinal(), Proto.MAP_COLOR_NONE, 0
+                )
+            ))
+        );
+
+        final int[] composed = PredictedTileComposer.compose(
+            derived, grid, PredictionPalette.defaults(), corrections,
+            PredictionViewMode.EVERYWHERE, 0, Proto.MAP_COLOR_NONE,
+            derived, grid, Proto.MAP_COLOR_NONE
+        );
+
+        assertEquals(Argb.TRANSPARENT, composed[0]);
+        assertNotEquals(Argb.TRANSPARENT, composed[1], "uncorrected pixels keep the prediction");
     }
 
     private static BaselineGrid flatGrid(final int biome) {

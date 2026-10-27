@@ -1,6 +1,7 @@
 package cn.net.rms.confluxmap.server;
 
 import cn.net.rms.confluxmap.core.color.OverlayVisibility;
+import cn.net.rms.confluxmap.core.model.ChunkSnapshot;
 import cn.net.rms.confluxmap.core.model.SurfaceKind;
 import cn.net.rms.confluxmap.core.net.SummaryCodec;
 
@@ -71,6 +72,9 @@ public final class ChunkColumnSummarizer {
         final int z
     ) {
         final int groundY = source.motionBlockingHeight(x, z) - 1;
+        if (groundY < source.bottomY()) {
+            return voidColumn(source, x, z);
+        }
         int surfaceY = groundY;
         BlockInfo surface = blockAt(source, x, groundY, z);
         String overlayMaterial = "";
@@ -161,6 +165,32 @@ public final class ChunkColumnSummarizer {
             materialId(surface.kind, source.materialIdAt(x, surfaceY, z)),
             floorMaterial,
             overlayMaterial
+        );
+    }
+
+    /**
+     * A generated chunk column with no motion-blocking block anywhere (the End beyond the
+     * islands, a cleared quadra-gen quadrant, a void preset). The heightmap proves emptiness,
+     * so the column is authoritative VOID - clients erase the predicted underlay under it
+     * instead of falling back to it as they must for an unsummarizable UNKNOWN column. The
+     * biome is read at the first in-world Y because the column itself holds nothing to sample.
+     */
+    private static SummaryCodec.Column voidColumn(
+        final ChunkColumnSource source,
+        final int x,
+        final int z
+    ) {
+        return new SummaryCodec.Column(
+            source.biomeIdAt(x, source.bottomY(), z) & 255,
+            ChunkSnapshot.NO_SURFACE,
+            SurfaceKind.VOID.ordinal(),
+            MAP_COLOR_NONE,
+            0,
+            MAP_COLOR_NONE,
+            0,
+            "",
+            "",
+            ""
         );
     }
 

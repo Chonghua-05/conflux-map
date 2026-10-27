@@ -1291,6 +1291,56 @@ class PredictionTileServiceTest {
         }
     }
 
+    /**
+     * A synchronized void correction must surface as "known, no surface" for teleport staging.
+     * The wire surfaceY of a void sample is the short-domain NO_SURFACE sentinel, which the
+     * metadata lookup compares against BaselineGrid.NO_SURFACE - unmapped, the column would
+     * masquerade as a teleport target at a fabricated height.
+     */
+    @Test
+    void synchronizedVoidSurfacesAsKnownNoSurface(@TempDir final Path tempDir) throws InterruptedException {
+        final SessionGuard sessionGuard = new SessionGuard();
+        final MapExecutors executors = new MapExecutors();
+        final TileService uploads = new TileService(new MapWorldService(), executors, new ConfluxConfig(), new DaylightModel());
+        final PredictionState state = new PredictionState();
+        state.setPresets(WorldPreset.FLAT, WorldPreset.DEFAULT);
+        state.setFlatBaseline(new FlatBaseline(1, 63, SurfaceKind.LAND.ordinal(), 11, 0));
+        final PredictionTileService predictionTiles = newService(sessionGuard, state, executors, uploads);
+        final CorrectionStore corrections = new CorrectionStore(tempDir);
+        final byte[] evaluated = new byte[PatchCodec.MASK_BYTES];
+        Arrays.fill(evaluated, (byte) 0xFF);
+        corrections.apply(
+            new CorrectionStore.Key(DIM.toString(), 0, 0, 0),
+            1L,
+            new byte[Proto.PATCH_PRESENCE_BYTES],
+            new PatchCodec.Patch(evaluated, List.of(
+                new PatchCodec.Sample(
+                    0, 1, ChunkSnapshot.NO_SURFACE, SurfaceKind.VOID.ordinal(), Proto.MAP_COLOR_NONE, 0
+                )
+            )),
+            Proto.PATCH_MODE_RESIDUAL,
+            PredictorVersion.full(),
+            1_000L
+        );
+        predictionTiles.bindCorrectionStore(corrections);
+        sessionGuard.begin(WORLD, DIM);
+
+        try {
+            predictionTiles.requestTile(new TileKey(WORLD, DIM, "surface!pred", 0, 0, 0));
+            awaitIdle(predictionTiles, 10_000L);
+
+            final ColumnStore.SurfaceLookup lookup = predictionTiles.predictedSurfaceAt(DIM, 0, 0, 0);
+            assertTrue(lookup.known(), "a synchronized void column is known terrain state");
+            assertFalse(lookup.surfaceY().isPresent(), "it must not offer a fabricated teleport Y");
+
+            final ColumnStore.SurfaceLookup neighbor = predictionTiles.predictedSurfaceAt(DIM, 0, 1, 0);
+            assertTrue(neighbor.surfaceY().isPresent(), "uncorrected columns keep the baseline height");
+            assertEquals(63, neighbor.surfaceY().orElseThrow());
+        } finally {
+            executors.shutdown(2000);
+        }
+    }
+
     private static TileUpdate latestUpdate(final TileService uploads, final TileKey key) {
         return uploads.drainUploads(64).stream()
             .filter(update -> update.key().equals(key))

@@ -2,11 +2,31 @@ package cn.net.rms.confluxmap.server;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 
+import cn.net.rms.confluxmap.core.model.ChunkSnapshot;
 import cn.net.rms.confluxmap.core.model.SurfaceKind;
+import cn.net.rms.confluxmap.core.net.Proto;
 import cn.net.rms.confluxmap.core.net.SummaryCodec;
 import org.junit.jupiter.api.Test;
 
 class ChunkColumnSummarizerTest {
+    @Test
+    void emptyGeneratedColumnSummarizesAsAuthoritativeVoid() {
+        final ChunkColumnSummarizer summarizer = new ChunkColumnSummarizer(name -> 3);
+
+        final SummaryCodec.Column column = summarizer.summarize(
+            new LayeredColumn().motionTopExclusive(-64)
+        ).columns()[0];
+
+        // A heightmap that found nothing in a generated chunk proves emptiness: the column
+        // must be VOID (clients erase the prediction under it), not UNKNOWN (they keep it).
+        assertEquals(SurfaceKind.VOID.ordinal(), column.kind());
+        assertEquals(ChunkSnapshot.NO_SURFACE, column.surfaceY());
+        assertEquals(Proto.MAP_COLOR_NONE, column.mapColorId());
+        assertEquals(0, column.fluidDepth());
+        assertEquals("", column.overlayMaterialId());
+        assertEquals(1, column.biomeId(), "the biome is read at the first in-world Y");
+    }
+
     @Test
     void platformAdapterSuppliesColumnsWithoutMinecraftTypes() {
         final ChunkColumnSummarizer summarizer = new ChunkColumnSummarizer(name -> 3);

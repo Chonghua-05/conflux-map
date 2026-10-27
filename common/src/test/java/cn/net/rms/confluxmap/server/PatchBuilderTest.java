@@ -3,6 +3,7 @@ package cn.net.rms.confluxmap.server;
 import cn.net.rms.confluxmap.core.net.PatchCodec;
 import cn.net.rms.confluxmap.core.net.Proto;
 import cn.net.rms.confluxmap.core.net.SummaryCodec;
+import cn.net.rms.confluxmap.core.model.ChunkSnapshot;
 import cn.net.rms.confluxmap.core.model.DimensionId;
 import cn.net.rms.confluxmap.core.model.SurfaceKind;
 import cn.net.rms.confluxmap.core.predict.BaselineDeriver;
@@ -279,6 +280,60 @@ class PatchBuilderTest {
             80,
             PatchCodec.decode(residual.body()).sampleAt(2 * 256 + 32).surfaceY()
         );
+    }
+
+    /**
+     * A genuinely empty generated column is authoritative void: it must be published as an
+     * evaluated VOID sample so clients erase the predicted terrain, instead of falling through
+     * to the predicted underlay the way an unsummarizable UNKNOWN column does.
+     */
+    @Test
+    void voidColumnsEraseThePredictedTerrain() throws Exception {
+        final SummaryCodec.Chunk[] chunks = new SummaryCodec.Chunk[SummaryCodec.CHUNKS];
+        Arrays.fill(chunks, SummaryCodec.Chunk.empty());
+        chunks[0] = voidChunk(20L);
+        final SummaryTile summary = new SummaryTile(
+            0, 0, 0, List.of(new SummaryCodec.Region(0, 0, 0L, chunks))
+        );
+
+        final PatchBuilder.Result result = new PatchBuilder().build(
+            summary, 0L, baselineAt(70), false
+        );
+
+        assertEquals(Proto.PATCH_MODE_RESIDUAL, result.mode());
+        final PatchCodec.Patch patch = PatchCodec.decode(result.body());
+        assertEquals(256, patch.size(), "every predicted-land pixel needs a void sample");
+        assertTrue(patch.evaluatedAt(0));
+        assertEquals(SurfaceKind.VOID.ordinal(), patch.sampleAt(0).kind());
+    }
+
+    /** Void over a predicted-void baseline is semantically equal, so the diff carries no samples. */
+    @Test
+    void voidColumnsMatchingAPredictedVoidBaselineCostNoSamples() throws Exception {
+        final SummaryCodec.Chunk[] chunks = new SummaryCodec.Chunk[SummaryCodec.CHUNKS];
+        Arrays.fill(chunks, SummaryCodec.Chunk.empty());
+        chunks[0] = voidChunk(20L);
+        final SummaryTile summary = new SummaryTile(
+            0, 0, 0, List.of(new SummaryCodec.Region(0, 0, 0L, chunks))
+        );
+        final BaselineGrid baseline = new BaselineGrid();
+        Arrays.fill(baseline.biomeId, 1);
+        Arrays.fill(baseline.terrainY, BaselineGrid.NO_SURFACE);
+
+        final PatchBuilder.Result result = new PatchBuilder().build(summary, 0L, baseline, false);
+
+        assertEquals(Proto.PATCH_MODE_RESIDUAL, result.mode());
+        final PatchCodec.Patch patch = PatchCodec.decode(result.body());
+        assertEquals(0, patch.size(), "void equals void regardless of biome or surfaceY");
+        assertTrue(patch.evaluatedAt(0));
+    }
+
+    private static SummaryCodec.Chunk voidChunk(final long revision) {
+        final SummaryCodec.Column[] columns = new SummaryCodec.Column[SummaryCodec.COLUMNS];
+        Arrays.fill(columns, new SummaryCodec.Column(
+            1, ChunkSnapshot.NO_SURFACE, SurfaceKind.VOID.ordinal(), Proto.MAP_COLOR_NONE, 0
+        ));
+        return new SummaryCodec.Chunk(true, revision, columns);
     }
 
     private static SummaryTile singleChunkTile(final SummaryCodec.Chunk chunk) {

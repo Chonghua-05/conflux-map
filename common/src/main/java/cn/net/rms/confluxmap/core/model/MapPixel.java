@@ -82,11 +82,18 @@ public record MapPixel(
     /**
      * Legacy residual equality. Material identity affects colour, not predicted terrain shape,
      * so the base and floor material ids are excluded; the overlay is included because its
-     * presence or absence changes which block the pixel visibly shows.
+     * presence or absence changes which block the pixel visibly shows. Two void pixels are
+     * always equal: void renders as nothing, so biome, height, and colour carry no visible
+     * difference, and suppressing these samples keeps a void-over-predicted-void diff empty.
      */
     public boolean sameTerrainSemantics(final MapPixel other) {
-        return other != null
-            && biomeId == other.biomeId
+        if (other == null) {
+            return false;
+        }
+        if (kind == SurfaceKind.VOID.ordinal() && other.kind == SurfaceKind.VOID.ordinal()) {
+            return true;
+        }
+        return biomeId == other.biomeId
             && surfaceY == other.surfaceY
             && kind == other.kind
             && mapColorId == other.mapColorId

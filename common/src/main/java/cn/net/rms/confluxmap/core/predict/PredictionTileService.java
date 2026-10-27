@@ -1664,13 +1664,19 @@ public final class PredictionTileService {
                 }
             }
             for (final PatchCodec.Sample sample : correctionPatch.samples()) {
-                if (SurfaceKind.byOrdinal(sample.kind()) == SurfaceKind.UNKNOWN) {
-                    final int pixel = sample.pixelIndex();
+                final SurfaceKind sampleKind = SurfaceKind.byOrdinal(sample.kind());
+                final int pixel = sample.pixelIndex();
+                if (sampleKind == SurfaceKind.UNKNOWN) {
                     surfaces[pixel] = derived.surfaceY[
                         BaselineGrid.index(pixel & 255, pixel >>> 8)
                     ];
+                } else if (sampleKind == SurfaceKind.VOID) {
+                    // The wire carries a short-domain sentinel here; the lookup reads back
+                    // against BaselineGrid.NO_SURFACE, and a synchronized void column must
+                    // surface as "known, no surface" to teleport staging.
+                    surfaces[pixel] = BaselineGrid.NO_SURFACE;
                 } else {
-                    surfaces[sample.pixelIndex()] = sample.surfaceY();
+                    surfaces[pixel] = sample.surfaceY();
                 }
             }
         }

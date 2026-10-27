@@ -130,13 +130,12 @@ public final class RegionPatchBuilder {
         final int tilePixelZ
     ) {
         final int index = BaselineGrid.index(tilePixelX, tilePixelZ);
-        final MapPixel expected = new MapPixel(
+        final MapPixel expected = PatchBuilder.baselinePixel(
             baseline.biomeId[index],
             derived.surfaceY[index],
             derived.kind[index] & 255,
             baselineMapColorId,
-            derived.fluidDepth[index],
-            MapPixel.MAP_COLOR_NONE
+            derived.fluidDepth[index]
         );
         return !expected.sameTerrainSemantics(actual.pixel());
     }
