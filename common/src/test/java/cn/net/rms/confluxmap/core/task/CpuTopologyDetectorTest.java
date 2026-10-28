@@ -4,6 +4,7 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
+import java.util.Arrays;
 import java.util.Map;
 import org.junit.jupiter.api.Test;
 
@@ -86,12 +87,52 @@ final class CpuTopologyDetectorTest {
     }
 
     @Test
+    void hybridCoreTypesSplitPerformanceFromEfficiencyCores() {
+        // A real hybrid desktop as CPUID labels it: 8 Core logical processors, 12 Atom.
+        final int[] coreTypes = new int[20];
+        Arrays.fill(coreTypes, 0x20);
+        Arrays.fill(coreTypes, 0, 8, 0x40);
+
+        final CpuTopology topology = CpuTopologyDetector.fromHybridCoreTypes(20, coreTypes);
+
+        assertTrue(topology.hybrid());
+        assertEquals(8, topology.performanceProcessors());
+        assertEquals(20, topology.logicalProcessors());
+    }
+
+    @Test
+    void oneCoreTypeIsUniform() {
+        // P cores binned at different clocks still carry the same 0x40 label, so
+        // they are one tier; only a genuine Core/Atom mix is hybrid.
+        final CpuTopology topology = CpuTopologyDetector.fromHybridCoreTypes(
+            8, new int[] {0x40, 0x40, 0x40, 0x40, 0x40, 0x40, 0x40, 0x40}
+        );
+
+        assertFalse(topology.hybrid());
+    }
+
+    @Test
+    void unknownCoreTypesCountAsEfficiency() {
+        // A future part may label a tier this build has never seen; only 0x40 is
+        // known to be performance, so an unknown label stays out of the P count.
+        final CpuTopology topology = CpuTopologyDetector.fromHybridCoreTypes(
+            8, new int[] {0x40, 0x40, 0x30, 0x30, 0x20, 0x20, 0x20, 0x20}
+        );
+
+        assertTrue(topology.hybrid());
+        assertEquals(2, topology.performanceProcessors());
+    }
+
+    @Test
     void windowsDispatchReadsEfficiencyClasses() {
         final CpuTopologyDetector detector = new CpuTopologyDetector(
             () -> {
                 throw new AssertionError("sysfs must not be read on Windows");
             },
-            () -> new int[] {1, 1, 1, 1, 0, 0, 0, 0}
+            () -> new int[] {1, 1, 1, 1, 0, 0, 0, 0},
+            () -> {
+                throw new AssertionError("the cpuid probe must not be called on Windows");
+            }
         );
 
         final CpuTopology topology = detector.detect("Windows 10", 8);
@@ -101,12 +142,35 @@ final class CpuTopologyDetectorTest {
     }
 
     @Test
-    void linuxDispatchReadsFrequencyGroups() {
+    void linuxDispatchPrefersCpuidCoreTypesOverSysfs() {
+        final int[] coreTypes = new int[20];
+        Arrays.fill(coreTypes, 0x20);
+        Arrays.fill(coreTypes, 0, 8, 0x40);
+        final CpuTopologyDetector detector = new CpuTopologyDetector(
+            () -> {
+                throw new AssertionError("sysfs must not be read when the CPU labels its cores");
+            },
+            () -> {
+                throw new AssertionError("the windows probe must not be called on Linux");
+            },
+            () -> coreTypes
+        );
+
+        final CpuTopology topology = detector.detect("Linux", 20);
+
+        assertTrue(topology.hybrid());
+        assertEquals(8, topology.performanceProcessors());
+        assertEquals(20, topology.logicalProcessors());
+    }
+
+    @Test
+    void linuxFallsBackToSysfsWhenTheCpuLabelsNothing() {
         final CpuTopologyDetector detector = new CpuTopologyDetector(
             () -> Map.of(39L * GHZ / 10, 4, 55L * GHZ / 10, 4),
             () -> {
-                throw new AssertionError("the native probe must not be called on Linux");
-            }
+                throw new AssertionError("the windows probe must not be called on Linux");
+            },
+            () -> new int[0]
         );
 
         final CpuTopology topology = detector.detect("Linux", 8);
@@ -122,7 +186,10 @@ final class CpuTopologyDetectorTest {
                 throw new AssertionError("sysfs must not be read on macOS");
             },
             () -> {
-                throw new AssertionError("the native probe must not be called on macOS");
+                throw new AssertionError("the windows probe must not be called on macOS");
+            },
+            () -> {
+                throw new AssertionError("the cpuid probe must not be called on macOS");
             }
         );
 

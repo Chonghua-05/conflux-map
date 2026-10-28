@@ -194,8 +194,9 @@ public final class ConfluxMapClient implements ClientModInitializer {
         final Path cacheRoot = confluxRoot.resolve("cache");
         // Beside (not inside) the cache/waypoints directories below, same confluxmap/ root; a
         // failed load just leaves NativeLib.available() false and prediction permanently disabled.
-        // Loading before the worker pool is created also lets Windows topology detection ask the
-        // library for CPU efficiency classes; without it the pool falls back to a uniform CPU.
+        // Loading before the worker pool is created also lets topology detection ask the
+        // library for CPU labels (Windows efficiency classes, Linux CPUID hybrid core types);
+        // without it the pool falls back to sysfs grouping or a uniform CPU.
         NativeLib.init(confluxRoot);
         cpuTopology = CpuTopologyDetector.defaults().detect();
         executors = new MapExecutors(
