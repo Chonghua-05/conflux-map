@@ -15,6 +15,7 @@ import cn.net.rms.confluxmap.core.model.DimensionId;
 import cn.net.rms.confluxmap.core.net.shared.SharedWaypointAvailability;
 import cn.net.rms.confluxmap.core.net.shared.SharedWaypointClientState;
 import cn.net.rms.confluxmap.core.shared.SharedWaypoint;
+import cn.net.rms.confluxmap.core.shared.SharedWaypointGroup;
 import cn.net.rms.confluxmap.core.waypoint.CrossWorldWaypointService;
 import cn.net.rms.confluxmap.core.waypoint.DimensionScale;
 import cn.net.rms.confluxmap.core.waypoint.SiblingWaypoint;
@@ -34,9 +35,12 @@ import cn.net.rms.confluxmap.mc.ui.GuiDraw;
 import cn.net.rms.confluxmap.mc.ui.WaypointMarkerRenderer;
 import cn.net.rms.confluxmap.mc.ui.widget.ConfluxTextButton;
 import java.util.ArrayList;
+import java.util.Comparator;
 import java.util.IdentityHashMap;
+import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
 import java.util.UUID;
@@ -136,7 +140,8 @@ public final class WaypointListScreen extends ConfluxScreen {
         int y,
         double distance,
         String dimensionText,
-        boolean crossDimensionVisible
+        boolean crossDimensionVisible,
+        String sharedGroupLabel
     ) {
         UUID id() {
             return local != null ? local.id
@@ -159,9 +164,12 @@ public final class WaypointListScreen extends ConfluxScreen {
                     "confluxmap.screen.waypoints.cross_world_origin", sibling.worldLabel()
                 ).getString();
             }
-            return Texts.translatable(
+            final String publisher = Texts.translatable(
                 "confluxmap.screen.waypoints.shared_by", shared.publisherName()
             ).getString();
+            return sharedGroupLabel == null
+                ? publisher
+                : sharedGroupLabel + " \u00b7 " + publisher;
         }
 
         WaypointRenderEntry renderEntry() {
@@ -383,7 +391,11 @@ public final class WaypointListScreen extends ConfluxScreen {
         final List<RowInfo> sorted = buildRows(currentDimension, px, py, pz);
         sorted.removeIf(row -> !matchesSearch(row, observedSearch));
         totalRowCount = sorted.size();
-        sorted.sort((a, b) -> Double.compare(a.distance(), b.distance()));
+        // The public tab already clusters by group inside buildRows; a plain distance sort
+        // here would dissolve those clusters.
+        if (tab != Tab.PUBLIC) {
+            sorted.sort((a, b) -> Double.compare(a.distance(), b.distance()));
+        }
         filteredLocalIds = tab == Tab.LOCAL
             ? sorted.stream().filter(row -> row.local() != null).map(RowInfo::id).toList()
             : List.of();
@@ -409,7 +421,8 @@ public final class WaypointListScreen extends ConfluxScreen {
             final RowInfo row = new RowInfo(
                 source.local(), source.shared(), source.sibling(),
                 listTop() + (i - scrollOffset) * ROW_HEIGHT,
-                source.distance(), source.dimensionText(), source.crossDimensionVisible()
+                source.distance(), source.dimensionText(), source.crossDimensionVisible(),
+                source.sharedGroupLabel()
             );
             rows.add(row);
             addRowWidgets(row, store);
@@ -793,7 +806,8 @@ public final class WaypointListScreen extends ConfluxScreen {
                         currentDimension, px, py, pz, waypoint.crossDimensionVisible
                     ),
                     dimensionLabel(waypoint.dimensionId),
-                    waypoint.crossDimensionVisible
+                    waypoint.crossDimensionVisible,
+                    null
                 ));
             }
             // Seed-sibling rows are read-only guests: shown when the toggle is on, never part of
@@ -814,11 +828,20 @@ public final class WaypointListScreen extends ConfluxScreen {
                             currentDimension, px, py, pz, waypoint.crossDimensionVisible
                         ),
                         dimensionLabel(waypoint.dimensionId),
-                        waypoint.crossDimensionVisible
+                        waypoint.crossDimensionVisible,
+                        null
                     ));
                 }
             }
             return result;
+        }
+        // Public waypoints display grouped by set: groups in server creation order with their
+        // members clustered together (nearest first inside a group), ungrouped rows last.
+        final Map<UUID, String> groupLabels = new LinkedHashMap<>();
+        final Map<UUID, Integer> groupOrder = new LinkedHashMap<>();
+        for (final SharedWaypointGroup group : sharedWaypoints.groups()) {
+            groupLabels.putIfAbsent(group.id(), group.name());
+            groupOrder.putIfAbsent(group.id(), groupOrder.size());
         }
         for (final SharedWaypoint waypoint : WaypointListFilter.shared(
             sharedWaypoints.list(), currentDimension, dimensionFilter
@@ -835,9 +858,15 @@ public final class WaypointListScreen extends ConfluxScreen {
                     currentDimension, px, py, pz, crossDimension
                 ),
                 dimensionLabel(waypoint.dimensionId()),
-                crossDimension
+                crossDimension,
+                waypoint.groupId() == null ? null : groupLabels.get(waypoint.groupId())
             ));
         }
+        result.sort(Comparator
+            .comparingInt((RowInfo row) -> row.shared().groupId() == null
+                ? Integer.MAX_VALUE
+                : groupOrder.getOrDefault(row.shared().groupId(), Integer.MAX_VALUE - 1))
+            .thenComparingDouble(RowInfo::distance));
         return result;
     }
 

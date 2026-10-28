@@ -9,6 +9,8 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 import cn.net.rms.confluxmap.core.model.DimensionId;
 import cn.net.rms.confluxmap.core.net.shared.CreateC2S;
 import cn.net.rms.confluxmap.core.net.shared.DeleteC2S;
+import cn.net.rms.confluxmap.core.net.shared.GroupRemoveS2C;
+import cn.net.rms.confluxmap.core.net.shared.GroupUpsertS2C;
 import cn.net.rms.confluxmap.core.net.shared.HelloC2S;
 import cn.net.rms.confluxmap.core.net.shared.LockC2S;
 import cn.net.rms.confluxmap.core.net.shared.ResultS2C;
@@ -404,6 +406,46 @@ class SharedWaypointSessionHandlerTest {
         }
     }
 
+    @Test
+    void subscribeDeliversGroupsAndCommandDeltasMapToGroupMessages() {
+        final Fixture fixture = fixture(true);
+        final SharedWaypointService.MutationResult created = fixture.service.createGroup(
+            actorOf(PLAYER),
+            new SharedWaypointService.GroupCreateRequest(uuid(400), 0L, "Villages")
+        );
+        assertTrue(created.applied());
+
+        compatibleHello(fixture, PLAYER);
+        final SnapshotS2C snapshot = assertInstanceOf(
+            SnapshotS2C.class,
+            fixture.handler.handle(PLAYER, new SubscribeC2S(), fixture.environment).direct().get(0)
+        );
+        assertEquals(1, snapshot.groups().size());
+        assertEquals("Villages", snapshot.groups().get(0).name());
+        assertEquals(1L, snapshot.revision());
+
+        final GroupUpsertS2C upsert = assertInstanceOf(
+            GroupUpsertS2C.class,
+            SharedWaypointSessionHandler.deltaMessage(created)
+        );
+        assertEquals(1L, upsert.revision());
+        assertEquals("Villages", upsert.group().name());
+
+        final SharedWaypointService.MutationResult deleted = fixture.service.deleteGroup(
+            actorOf(PLAYER),
+            new SharedWaypointService.GroupDeleteRequest(
+                uuid(401), snapshot.groups().get(0).revision(), snapshot.groups().get(0).id()
+            )
+        );
+        assertTrue(deleted.applied());
+        final GroupRemoveS2C remove = assertInstanceOf(
+            GroupRemoveS2C.class,
+            SharedWaypointSessionHandler.deltaMessage(deleted)
+        );
+        assertEquals(2L, remove.revision());
+        assertEquals(snapshot.groups().get(0).id(), remove.groupId());
+    }
+
     private static SharedWaypointSessionHandler.Dispatch compatibleHello(
         final Fixture fixture,
         final SharedWaypointSessionHandler.Peer peer
@@ -455,6 +497,10 @@ class SharedWaypointSessionHandlerTest {
             service,
             new SharedWaypointSessionHandler.Environment(enabled, "world-id", 20, 10, service)
         );
+    }
+
+    private static SharedWaypointService.Actor actorOf(final SharedWaypointSessionHandler.Peer peer) {
+        return new SharedWaypointService.Actor(peer.id(), peer.name(), peer.operator());
     }
 
     private static SharedWaypointSessionHandler.Peer peer(

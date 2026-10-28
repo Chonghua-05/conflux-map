@@ -2,6 +2,8 @@ package cn.net.rms.confluxmap.server.shared;
 
 import cn.net.rms.confluxmap.core.net.shared.CreateC2S;
 import cn.net.rms.confluxmap.core.net.shared.DeleteC2S;
+import cn.net.rms.confluxmap.core.net.shared.GroupRemoveS2C;
+import cn.net.rms.confluxmap.core.net.shared.GroupUpsertS2C;
 import cn.net.rms.confluxmap.core.net.shared.HelloC2S;
 import cn.net.rms.confluxmap.core.net.shared.LockC2S;
 import cn.net.rms.confluxmap.core.net.shared.RemoveS2C;
@@ -179,7 +181,7 @@ public final class SharedWaypointSessionHandler {
             session.subscribed = true;
             final SharedWaypointStore.Snapshot snapshot = environment.service().snapshot();
             return Dispatch.direct(new SnapshotS2C(
-                snapshot.revision(), peer.operator(), snapshot.waypoints()
+                snapshot.revision(), peer.operator(), snapshot.waypoints(), snapshot.groups()
             ));
         }
         if (message instanceof final CreateC2S create) {
@@ -406,6 +408,8 @@ public final class SharedWaypointSessionHandler {
         return switch (mutation.delta().kind()) {
             case UPSERT -> new UpsertS2C(mutation.delta().revision(), mutation.delta().waypoint());
             case REMOVE -> new RemoveS2C(mutation.delta().revision(), mutation.delta().removedId());
+            case GROUP_UPSERT -> new GroupUpsertS2C(mutation.delta().revision(), mutation.delta().group());
+            case GROUP_REMOVE -> new GroupRemoveS2C(mutation.delta().revision(), mutation.delta().removedGroupId());
             case NOOP -> null;
         };
     }
@@ -432,6 +436,9 @@ public final class SharedWaypointSessionHandler {
                 : SharedWaypointProto.RESULT_ERROR_INVALID_REQUEST;
             case PERSISTENCE_FAILED -> SharedWaypointProto.RESULT_ERROR_PERSISTENCE_FAILED;
             case ID_GENERATION_FAILED -> SharedWaypointProto.RESULT_ERROR_ID_GENERATION_FAILED;
+            // Group quota is command-originated only, so the wire never carries it in this
+            // protocol revision; the closest stable wire error is the world quota.
+            case GROUP_QUOTA_EXCEEDED -> SharedWaypointProto.RESULT_ERROR_WORLD_QUOTA_EXCEEDED;
         };
     }
 }

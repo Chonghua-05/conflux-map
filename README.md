@@ -118,6 +118,8 @@ Players without Conflux Map can work with the same list through commands:
 - `/confluxmap waypoints add <name>` publishes a waypoint at the player's current position
 - `/confluxmap waypoints list [page]` lists entries with pagination, each including an Xaero chat format for one-click import
 - `/confluxmap waypoints edit <id> <name>` / `move <id>` / `delete <id>` rename, move, or delete an entry using the short ID shown in the list
+- `/confluxmap waypoints group list` / `create <name>` / `rename <id> <name>` / `delete <id>` manage waypoint sets that group the shared list; clients with Conflux Map display entries grouped by set
+- `/confluxmap waypoints group assign <waypoint> <group|none>` moves an entry into a set or back to the ungrouped list
 - Operators can control the feature with `/confluxmap waypoints disable`, `enable`, and `status`
 
 Per-world and per-player limits are configured in `config/confluxmap/server.json`.

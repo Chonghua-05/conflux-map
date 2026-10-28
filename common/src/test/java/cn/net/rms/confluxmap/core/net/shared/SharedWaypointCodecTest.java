@@ -2,11 +2,14 @@ package cn.net.rms.confluxmap.core.net.shared;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertArrayEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import cn.net.rms.confluxmap.core.model.DimensionId;
 import cn.net.rms.confluxmap.core.shared.SharedWaypoint;
+import cn.net.rms.confluxmap.core.shared.SharedWaypointGroup;
 import cn.net.rms.confluxmap.core.waypoint.Waypoint;
 import java.io.ByteArrayOutputStream;
 import java.io.DataOutputStream;
@@ -24,6 +27,7 @@ class SharedWaypointCodecTest {
     private static final UUID OPERATION_ID = UUID.fromString("00112233-4455-6677-8899-aabbccddeeff");
     private static final UUID WAYPOINT_ID = UUID.fromString("12345678-1234-5678-9abc-def012345678");
     private static final UUID PUBLISHER_ID = UUID.fromString("fedcba98-7654-3210-fedc-ba9876543210");
+    private static final UUID GROUP_ID = UUID.fromString("0f0e0d0c-0b0a-4909-8877-665544332211");
 
     @Test
     void everyMessageTypeRoundTrips() throws SharedWaypointProtocolException {
@@ -321,6 +325,72 @@ class SharedWaypointCodecTest {
         assertTrue(rejected > 0);
     }
 
+    @Test
+    void groupMessagesRoundTripAndRequireNegotiatedMinorFour()
+        throws SharedWaypointProtocolException {
+        final SharedWaypointGroup group = group("Villages", 41L);
+        final GroupUpsertS2C upsert = new GroupUpsertS2C(42L, group);
+        final GroupRemoveS2C remove = new GroupRemoveS2C(43L, GROUP_ID);
+
+        assertEquals(upsert, roundTrip(upsert));
+        assertEquals(remove, roundTrip(remove));
+
+        assertThrows(SharedWaypointProtocolException.class, () -> SharedWaypointCodec.encode(upsert, 3));
+        assertThrows(SharedWaypointProtocolException.class, () -> SharedWaypointCodec.encode(remove, 3));
+        assertFalse(SharedWaypointCodec.encodableAt(upsert, 3));
+        assertFalse(SharedWaypointCodec.encodableAt(remove, 0));
+        assertTrue(SharedWaypointCodec.encodableAt(upsert, 4));
+        assertTrue(SharedWaypointCodec.encodableAt(remove, SharedWaypointProto.PROTO_MINOR));
+        assertTrue(SharedWaypointCodec.encodableAt(new ResultS2C(OPERATION_ID, 0, 0), 0));
+        assertTrue(SharedWaypointCodec.encodableAt(new SubscribeC2S(), 1));
+    }
+
+    @Test
+    void minorFourSnapshotsCarryGroupsWhileMinorThreeKeepsItsWireShape()
+        throws SharedWaypointProtocolException {
+        final SharedWaypointGroup group = group("Villages", 41L);
+        final SharedWaypoint grouped = groupedWaypoint(group.id(), 42L);
+        final SnapshotS2C snapshot = new SnapshotS2C(42L, true, List.of(grouped), List.of(group));
+
+        assertEquals(snapshot, roundTrip(snapshot));
+
+        final byte[] legacy = SharedWaypointCodec.encode(snapshot, 3);
+        final SnapshotS2C legacyView = (SnapshotS2C) SharedWaypointCodec.decodeS2C(legacy, 3);
+        assertTrue(legacyView.groups().isEmpty());
+        assertNull(legacyView.list().get(0).groupId());
+        assertTrue(SharedWaypointCodec.encode(snapshot, 4).length > legacy.length);
+
+        // A minor-3 peer must also tolerate a waypoint that carries a group reference.
+        final byte[] legacyUpsert = SharedWaypointCodec.encode(new UpsertS2C(43L, grouped), 3);
+        assertNull(((UpsertS2C) SharedWaypointCodec.decodeS2C(legacyUpsert, 3)).waypoint().groupId());
+        assertEquals(
+            grouped,
+            ((UpsertS2C) SharedWaypointCodec.decodeS2C(
+                SharedWaypointCodec.encode(new UpsertS2C(43L, grouped), 4), 4
+            )).waypoint()
+        );
+    }
+
+    @Test
+    void snapshotGroupCountAboveCapIsRejected() throws IOException {
+        final ByteArrayOutputStream raw = new ByteArrayOutputStream();
+        final DataOutputStream out = new DataOutputStream(raw);
+        out.writeByte(SharedWaypointProto.MSG_SNAPSHOT_S2C);
+        out.writeLong(1L);
+        out.writeByte(0);
+        out.writeShort(0);
+        out.writeShort(SharedWaypointProto.MAX_SNAPSHOT_GROUPS + 1);
+        assertThrows(SharedWaypointProtocolException.class,
+            () -> SharedWaypointCodec.decodeS2C(raw.toByteArray()));
+
+        final List<SharedWaypointGroup> tooMany = new ArrayList<>();
+        for (int i = 0; i <= SharedWaypointProto.MAX_SNAPSHOT_GROUPS; i++) {
+            tooMany.add(group("g" + i, 1L));
+        }
+        assertThrows(SharedWaypointProtocolException.class,
+            () -> SharedWaypointCodec.encode(new SnapshotS2C(1L, false, List.of(), tooMany)));
+    }
+
     private static SharedWaypointMessage roundTrip(final SharedWaypointMessage message)
         throws SharedWaypointProtocolException {
         return decodeFor(message, SharedWaypointCodec.encode(message));
@@ -357,7 +427,23 @@ class SharedWaypointCodecTest {
             new SnapshotS2C(9, true, List.of(waypoint)),
             new UpsertS2C(9, waypoint),
             new RemoveS2C(10, WAYPOINT_ID),
+            new GroupUpsertS2C(11, group("g", 9L)),
+            new GroupRemoveS2C(12, WAYPOINT_ID),
             new ResultS2C(OPERATION_ID, 1, 0)
+        );
+    }
+
+    private static SharedWaypointGroup group(final String name, final long revision) {
+        return new SharedWaypointGroup(
+            GROUP_ID, PUBLISHER_ID, name, 1_721_555_200_000L, revision
+        );
+    }
+
+    private static SharedWaypoint groupedWaypoint(final UUID groupId, final long revision) {
+        return new SharedWaypoint(
+            WAYPOINT_ID, PUBLISHER_ID, "Builder", "Spawn", DimensionId.OVERWORLD,
+            12.5, -4.25, 88.0, 0xFFAABBCC, Waypoint.Type.NORMAL,
+            "", "", 1_721_555_200_000L, revision, groupId
         );
     }
 

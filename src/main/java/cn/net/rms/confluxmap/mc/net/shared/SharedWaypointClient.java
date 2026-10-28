@@ -7,6 +7,8 @@ import cn.net.rms.confluxmap.core.config.ConfigIo;
 import cn.net.rms.confluxmap.core.config.ConfluxConfig;
 import cn.net.rms.confluxmap.core.net.shared.CreateC2S;
 import cn.net.rms.confluxmap.core.net.shared.DeleteC2S;
+import cn.net.rms.confluxmap.core.net.shared.GroupRemoveS2C;
+import cn.net.rms.confluxmap.core.net.shared.GroupUpsertS2C;
 import cn.net.rms.confluxmap.core.net.shared.HelloC2S;
 import cn.net.rms.confluxmap.core.net.shared.RemoveS2C;
 import cn.net.rms.confluxmap.core.net.shared.ResultS2C;
@@ -22,6 +24,7 @@ import cn.net.rms.confluxmap.core.net.shared.SubscribeC2S;
 import cn.net.rms.confluxmap.core.net.shared.UpsertS2C;
 import cn.net.rms.confluxmap.core.net.shared.UpdateC2S;
 import cn.net.rms.confluxmap.core.shared.SharedWaypoint;
+import cn.net.rms.confluxmap.core.shared.SharedWaypointGroup;
 import cn.net.rms.confluxmap.core.shared.SharedWaypointLocationKey;
 import cn.net.rms.confluxmap.core.waypoint.Waypoint;
 import cn.net.rms.confluxmap.compat.Texts;
@@ -143,6 +146,11 @@ public final class SharedWaypointClient {
     /** Immutable, atomically published shared-waypoint catalog. */
     public List<SharedWaypoint> list() {
         return stateMachine.view().list();
+    }
+
+    /** Immutable, atomically published shared-waypoint groups in server creation order. */
+    public List<SharedWaypointGroup> groups() {
+        return stateMachine.view().groups();
     }
 
     public boolean isOperator() {
@@ -491,6 +499,10 @@ public final class SharedWaypointClient {
             action = stateMachine.onUpsert(upsert);
         } else if (message instanceof final RemoveS2C remove) {
             action = stateMachine.onRemove(remove);
+        } else if (message instanceof final GroupUpsertS2C groupUpsert) {
+            action = stateMachine.onGroupUpsert(groupUpsert);
+        } else if (message instanceof final GroupRemoveS2C groupRemove) {
+            action = stateMachine.onGroupRemove(groupRemove);
         } else {
             ConfluxMapMod.LOGGER.warn(
                 "shared-waypoint: unexpected S2C {}",
@@ -644,7 +656,8 @@ public final class SharedWaypointClient {
         }
         if (before.revision() != after.revision()
             || before.synchronizedSnapshot() != after.synchronizedSnapshot()
-            || !before.list().equals(after.list())) {
+            || !before.list().equals(after.list())
+            || !before.groups().equals(after.groups())) {
             applyPendingCrossDimensionPreferences(after.list());
             for (final Listener listener : listeners) {
                 try {

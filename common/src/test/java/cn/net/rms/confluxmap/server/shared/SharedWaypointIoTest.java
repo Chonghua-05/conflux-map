@@ -2,11 +2,13 @@ package cn.net.rms.confluxmap.server.shared;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import cn.net.rms.confluxmap.core.model.DimensionId;
 import cn.net.rms.confluxmap.core.shared.SharedWaypoint;
+import cn.net.rms.confluxmap.core.shared.SharedWaypointGroup;
 import cn.net.rms.confluxmap.core.waypoint.Waypoint;
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
@@ -43,12 +45,94 @@ class SharedWaypointIoTest {
         assertEquals(worldRoot.resolve("confluxmap/shared_waypoints.json"), io.file());
         assertFalse(Files.exists(io.file().resolveSibling("shared_waypoints.json.tmp")));
         final String json = Files.readString(io.file(), StandardCharsets.UTF_8);
-        assertTrue(json.contains("\"schemaVersion\": 2"));
+        assertTrue(json.contains("\"schemaVersion\": 3"));
         assertFalse(json.contains("\"locked\""));
         assertTrue(json.contains("\"publisherId\""));
         assertTrue(json.contains("村庄"));
         assertTrue(json.contains("\"iconItemId\": \"minecraft:emerald\""));
         assertTrue(json.contains("\"markerLabel\": \"村\""));
+    }
+
+    @Test
+    void groupsAndMembershipRoundTrip(@TempDir final Path worldRoot) throws Exception {
+        final SharedWaypointIo io = new SharedWaypointIo(worldRoot, SURVIVAL_INSTANCE, LOGGER);
+        final UUID groupId = UUID.fromString("00000000-0000-0000-0000-0000000000aa");
+        final UUID creatorId = UUID.fromString("00000000-0000-0000-0000-000000000002");
+        final SharedWaypointGroup group = new SharedWaypointGroup(
+            groupId, creatorId, "村庄集", 1_234L, 2L
+        );
+        final SharedWaypoint member = new SharedWaypoint(
+            UUID.fromString("00000000-0000-0000-0000-000000000003"), creatorId,
+            "PlayerOne", "Home", DimensionId.OVERWORLD,
+            12.5d, 64d, -8.25d, 0xFF33AA66, Waypoint.Type.NORMAL,
+            1_234L, 3L, groupId
+        );
+        final SharedWaypoint ungrouped = waypoint();
+
+        io.save(new SharedWaypointStore.Snapshot(3L, List.of(member, ungrouped), List.of(group)));
+        final SharedWaypointStore.Snapshot loaded = io.load();
+
+        assertEquals(List.of(group), loaded.groups());
+        assertEquals(2, loaded.waypoints().size());
+        assertEquals(groupId, loaded.waypoints().get(0).groupId());
+        assertNull(loaded.waypoints().get(1).groupId());
+        final String json = Files.readString(io.file(), StandardCharsets.UTF_8);
+        assertTrue(json.contains("\"groups\""));
+        assertTrue(json.contains("村庄集"));
+        assertTrue(json.contains("\"groupId\": \"00000000-0000-0000-0000-0000000000aa\""));
+    }
+
+    /** Schema 2 predates groups entirely: no groups key, no groupId on waypoints. */
+    @Test
+    void legacySchemaTwoFileLoadsUngroupedAndMigrates(@TempDir final Path worldRoot)
+        throws Exception {
+        final SharedWaypointIo io = new SharedWaypointIo(worldRoot, SURVIVAL_INSTANCE, LOGGER);
+        Files.createDirectories(io.file().getParent());
+        Files.writeString(
+            io.file(),
+            "{\"schemaVersion\":2,\"revision\":2,\"ownerInstanceId\":\""
+                + SURVIVAL_INSTANCE + "\",\"waypoints\":[{"
+                + "\"id\":\"00000000-0000-0000-0000-000000000001\","
+                + "\"publisherId\":\"00000000-0000-0000-0000-000000000002\","
+                + "\"publisherName\":\"Player\",\"name\":\"Spawn\","
+                + "\"dimensionId\":\"minecraft:overworld\","
+                + "\"x\":0,\"y\":64,\"z\":0,\"colorArgb\":-1,"
+                + "\"type\":\"NORMAL\","
+                + "\"createdAtEpochMs\":1,\"revision\":2}]}",
+            StandardCharsets.UTF_8
+        );
+
+        final SharedWaypointStore.Snapshot loaded = io.load();
+
+        assertEquals(1, loaded.waypoints().size());
+        assertNull(loaded.waypoints().get(0).groupId());
+        assertTrue(loaded.groups().isEmpty());
+        final String migrated = Files.readString(io.file(), StandardCharsets.UTF_8);
+        assertTrue(migrated.contains("\"schemaVersion\": 3"));
+        assertTrue(migrated.contains("\"groups\": ["));
+    }
+
+    @Test
+    void waypointReferencingAnUnknownGroupIsQuarantined(@TempDir final Path worldRoot)
+        throws Exception {
+        final SharedWaypointIo io = new SharedWaypointIo(worldRoot, SURVIVAL_INSTANCE, LOGGER);
+        Files.createDirectories(io.file().getParent());
+        Files.writeString(
+            io.file(),
+            "{\"schemaVersion\":3,\"revision\":2,\"waypoints\":[{"
+                + "\"id\":\"00000000-0000-0000-0000-000000000001\","
+                + "\"publisherId\":\"00000000-0000-0000-0000-000000000002\","
+                + "\"publisherName\":\"Player\",\"name\":\"Spawn\","
+                + "\"dimensionId\":\"minecraft:overworld\","
+                + "\"x\":0,\"y\":64,\"z\":0,\"colorArgb\":-1,"
+                + "\"type\":\"NORMAL\","
+                + "\"groupId\":\"00000000-0000-0000-0000-0000000000aa\","
+                + "\"createdAtEpochMs\":1,\"revision\":2}]}",
+            StandardCharsets.UTF_8
+        );
+
+        assertTrue(io.load().waypoints().isEmpty());
+        assertTrue(Files.exists(io.file().resolveSibling("shared_waypoints.json.bad")));
     }
 
     @Test
@@ -74,7 +158,7 @@ class SharedWaypointIoTest {
         assertEquals(1, loaded.waypoints().size());
         assertEquals("Spawn", loaded.waypoints().get(0).name());
         final String migrated = Files.readString(io.file(), StandardCharsets.UTF_8);
-        assertTrue(migrated.contains("\"schemaVersion\": 2"));
+        assertTrue(migrated.contains("\"schemaVersion\": 3"));
         assertFalse(migrated.contains("\"locked\""));
     }
 
@@ -160,14 +244,14 @@ class SharedWaypointIoTest {
     void futureSchemaIsRejectedWithoutQuarantine(@TempDir final Path worldRoot) throws Exception {
         final SharedWaypointIo io = new SharedWaypointIo(worldRoot, LOGGER);
         Files.createDirectories(io.file().getParent());
-        Files.writeString(io.file(), "{\"schemaVersion\":3,\"revision\":0,\"waypoints\":[]}", StandardCharsets.UTF_8);
+        Files.writeString(io.file(), "{\"schemaVersion\":4,\"revision\":0,\"waypoints\":[]}", StandardCharsets.UTF_8);
 
         final SharedWaypointIo.UnsupportedSchemaVersionException error = assertThrows(
             SharedWaypointIo.UnsupportedSchemaVersionException.class,
             io::load
         );
 
-        assertEquals(3, error.schemaVersion());
+        assertEquals(4, error.schemaVersion());
         assertTrue(Files.exists(io.file()));
         assertFalse(Files.exists(io.file().resolveSibling("shared_waypoints.json.bad")));
     }

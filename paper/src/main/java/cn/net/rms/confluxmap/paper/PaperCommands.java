@@ -9,8 +9,10 @@ import cn.net.rms.confluxmap.server.shared.SharedWaypointCommandService;
 import cn.net.rms.confluxmap.server.shared.SharedWaypointService;
 import java.nio.charset.StandardCharsets;
 import java.util.Arrays;
+import java.util.HashMap;
 import java.util.List;
 import java.util.Locale;
+import java.util.Map;
 import java.util.UUID;
 import org.bukkit.command.Command;
 import org.bukkit.command.CommandExecutor;
@@ -46,7 +48,7 @@ final class PaperCommands implements CommandExecutor, TabCompleter {
             && ("hide".equalsIgnoreCase(args[1]) || "show".equalsIgnoreCase(args[1]))) {
             return webMapPrivacy(sender, "hide".equalsIgnoreCase(args[1]));
         }
-        sender.sendMessage("Usage: /confluxmap <performance|webmap hide|show|waypoints list|add|edit|move|delete>");
+        sender.sendMessage("Usage: /confluxmap <performance|webmap hide|show|waypoints list|add|edit|move|delete|group ...>");
         return true;
     }
 
@@ -63,9 +65,13 @@ final class PaperCommands implements CommandExecutor, TabCompleter {
         if (args.length == 2 && "waypoints".equalsIgnoreCase(args[0])
         ) {
             final List<String> values = sender.hasPermission("confluxmap.admin")
-                ? List.of("list", "add", "edit", "move", "delete", "status", "enable", "disable")
-                : List.of("list", "add", "edit", "move", "delete");
+                ? List.of("list", "add", "edit", "move", "delete", "group", "status", "enable", "disable")
+                : List.of("list", "add", "edit", "move", "delete", "group");
             return prefix(args[1], values);
+        }
+        if (args.length == 3 && "waypoints".equalsIgnoreCase(args[0])
+            && "group".equalsIgnoreCase(args[1])) {
+            return prefix(args[2], List.of("list", "create", "rename", "delete", "assign"));
         }
         if (args.length == 2 && "webmap".equalsIgnoreCase(args[0])) {
             return prefix(args[1], List.of("hide", "show"));
@@ -97,6 +103,9 @@ final class PaperCommands implements CommandExecutor, TabCompleter {
         if ("delete".equals(action) && args.length == 3) {
             return delete(sender, args[2]);
         }
+        if ("group".equals(action) && args.length >= 3) {
+            return group(sender, args);
+        }
         if (!sender.hasPermission("confluxmap.admin")) {
             sender.sendMessage("Only administrators may perform this action.");
             return true;
@@ -119,6 +128,10 @@ final class PaperCommands implements CommandExecutor, TabCompleter {
             return true;
         }
         final SharedWaypointCommandService.Page page = commands.list(pageNumber);
+        final Map<UUID, String> groupNames = new HashMap<>();
+        for (final SharedWaypointCommandService.GroupEntry group : commands.listGroups()) {
+            groupNames.put(group.group().id(), group.group().name());
+        }
         if (!page.valid()) {
             sender.sendMessage("Page must be between 1 and " + page.totalPages() + ".");
             return true;
@@ -132,6 +145,7 @@ final class PaperCommands implements CommandExecutor, TabCompleter {
             return true;
         }
         for (final SharedWaypointCommandService.Entry entry : page.entries()) {
+            final String groupName = groupNames.get(entry.waypoint().groupId());
             sender.sendMessage(
                 "[" + entry.idPrefix() + "] " + entry.waypoint().name()
                     + " by " + entry.waypoint().publisherName()
@@ -139,6 +153,7 @@ final class PaperCommands implements CommandExecutor, TabCompleter {
                     + " (" + CoordinateText.plain(entry.waypoint().x())
                     + ", " + CoordinateText.plain(entry.waypoint().y())
                     + ", " + CoordinateText.plain(entry.waypoint().z()) + ")"
+                    + (groupName == null ? "" : " in [" + groupName + "]")
             );
             sender.sendMessage(entry.xaeroMessage());
         }
@@ -185,6 +200,101 @@ final class PaperCommands implements CommandExecutor, TabCompleter {
         return commands == null
             ? disabled(sender)
             : result(sender, commands.delete(actor(sender), id), "Shared waypoint deleted.");
+    }
+
+    /** Handles {@code /confluxmap waypoints group <list|create|rename|delete|assign> ...}. */
+    private boolean group(final CommandSender sender, final String[] args) {
+        final SharedWaypointCommandService commands = commands();
+        if (commands == null) {
+            return disabled(sender);
+        }
+        final String action = args[2].toLowerCase(Locale.ROOT);
+        if ("list".equals(action) && args.length == 3) {
+            return listGroups(sender, commands);
+        }
+        if ("create".equals(action) && args.length >= 4) {
+            return groupResult(
+                sender,
+                commands.createGroup(actor(sender), join(args, 3)),
+                "Shared waypoint group created."
+            );
+        }
+        if ("rename".equals(action) && args.length >= 5) {
+            return groupResult(
+                sender,
+                commands.renameGroup(actor(sender), args[3], join(args, 4)),
+                "Shared waypoint group renamed."
+            );
+        }
+        if ("delete".equals(action) && args.length == 4) {
+            return groupResult(
+                sender,
+                commands.deleteGroup(actor(sender), args[3]),
+                "Shared waypoint group deleted; its waypoints are now ungrouped."
+            );
+        }
+        if ("assign".equals(action) && args.length == 5) {
+            return groupResult(
+                sender,
+                commands.setWaypointGroup(actor(sender), args[3], args[4]),
+                "Shared waypoint group membership updated."
+            );
+        }
+        sender.sendMessage(
+            "Usage: /confluxmap waypoints group <list|create <name>|rename <id> <name>"
+                + "|delete <id>|assign <waypoint> <group|none>>"
+        );
+        return true;
+    }
+
+    private boolean listGroups(
+        final CommandSender sender,
+        final SharedWaypointCommandService commands
+    ) {
+        final List<SharedWaypointCommandService.GroupEntry> groups = commands.listGroups();
+        if (groups.isEmpty()) {
+            sender.sendMessage("No shared waypoint groups.");
+            return true;
+        }
+        sender.sendMessage("Shared waypoint groups (total " + groups.size() + ")");
+        for (final SharedWaypointCommandService.GroupEntry entry : groups) {
+            sender.sendMessage("[" + entry.idPrefix() + "] " + entry.group().name());
+        }
+        return true;
+    }
+
+    private boolean groupResult(
+        final CommandSender sender,
+        final SharedWaypointCommandService.Result result,
+        final String success
+    ) {
+        if (result.applied()) {
+            sender.sendMessage(success);
+            return true;
+        }
+        sender.sendMessage(switch (result.status()) {
+            case INVALID_ID -> "Invalid group or waypoint ID.";
+            case UNKNOWN_ID -> "Shared waypoint or group not found.";
+            case AMBIGUOUS_ID -> "ID prefix is ambiguous; use the longer ID shown by list.";
+            case FORBIDDEN -> "You do not have permission to manage this shared waypoint group.";
+            case REJECTED -> groupMutationError(result.mutation().error());
+            default -> "Shared waypoint group command failed.";
+        });
+        return true;
+    }
+
+    private static String groupMutationError(final SharedWaypointService.MutationError error) {
+        return switch (error) {
+            case INVALID_REQUEST -> "The group name is invalid.";
+            case REVISION_CONFLICT -> "The group or waypoint changed; run the list command and try again.";
+            case NOT_FOUND -> "Shared waypoint or group not found.";
+            case FORBIDDEN -> "You do not have permission to manage this shared waypoint group.";
+            case RATE_LIMITED -> "Too many waypoint changes; try again shortly.";
+            case GROUP_QUOTA_EXCEEDED -> "The server shared-waypoint group limit has been reached.";
+            case PERSISTENCE_FAILED -> "The group could not be saved.";
+            case ID_GENERATION_FAILED -> "The server could not allocate a group ID.";
+            default -> "Shared waypoint group command failed: " + error;
+        };
     }
 
     private SharedWaypointCommandService commands() {

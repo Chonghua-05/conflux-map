@@ -2,11 +2,13 @@ package cn.net.rms.confluxmap.core.net.shared;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import cn.net.rms.confluxmap.core.model.DimensionId;
 import cn.net.rms.confluxmap.core.shared.SharedWaypoint;
+import cn.net.rms.confluxmap.core.shared.SharedWaypointGroup;
 import cn.net.rms.confluxmap.core.waypoint.Waypoint;
 import java.util.List;
 import java.util.UUID;
@@ -15,6 +17,7 @@ import org.junit.jupiter.api.Test;
 class SharedWaypointClientStateTest {
     private static final UUID ID = UUID.fromString("12345678-1234-5678-9abc-def012345678");
     private static final UUID PUBLISHER = UUID.fromString("fedcba98-7654-3210-fedc-ba9876543210");
+    private static final UUID GROUP_ID = UUID.fromString("0f0e0d0c-0b0a-4909-8877-665544332211");
 
     @Test
     void unavailableChannelAndHandshakeTimeoutSafelyBecomeUnsupported() {
@@ -235,6 +238,94 @@ class SharedWaypointClientStateTest {
         assertEquals(SharedWaypointClientState.State.UNSUPPORTED, formattedNameState.view().state());
     }
 
+    @Test
+    void groupDeltasApplyInOrderAndCarryMembershipOnWaypoints() {
+        final SharedWaypointClientState state = enabledHandshake(state());
+        state.onStatus(status(true, 4L, false, 32, 8));
+        state.onSnapshot(new SnapshotS2C(4L, false, List.of(waypoint(ID, "Spawn", 3L))));
+
+        final SharedWaypointClientState.Action created =
+            state.onGroupUpsert(new GroupUpsertS2C(5L, group("Villages", 5L)));
+        assertFalse(created.subscribe());
+        assertFalse(created.protocolRejected());
+        assertEquals(1, state.view().groups().size());
+        assertEquals(5L, state.view().revision());
+
+        final SharedWaypointClientState.Action moved =
+            state.onUpsert(new UpsertS2C(6L, groupedWaypoint("Moved", 6L)));
+        assertFalse(moved.subscribe());
+        assertFalse(moved.protocolRejected());
+        assertEquals(GROUP_ID, state.view().list().get(0).groupId());
+
+        final SharedWaypointClientState.Action renamed =
+            state.onGroupUpsert(new GroupUpsertS2C(7L, group("Renamed", 7L)));
+        assertFalse(renamed.subscribe());
+        assertFalse(renamed.protocolRejected());
+        assertEquals(1, state.view().groups().size());
+        assertEquals("Renamed", state.view().groups().get(0).name());
+        assertEquals(7L, state.view().revision());
+
+        state.onGroupUpsert(new GroupUpsertS2C(7L, group("DuplicateRevision", 7L)));
+        assertEquals("Renamed", state.view().groups().get(0).name());
+    }
+
+    @Test
+    void groupRemovalUngroupsMembersAndResubscribesOnRevisionGap() {
+        final SharedWaypointClientState state = enabledHandshake(state());
+        state.onStatus(status(true, 5L, false, 32, 8));
+        state.onSnapshot(new SnapshotS2C(
+            5L, false, List.of(groupedWaypoint("Spawn", 4L)), List.of(group("Villages", 2L))
+        ));
+        assertEquals(GROUP_ID, state.view().list().get(0).groupId());
+
+        final SharedWaypointClientState.Action removed =
+            state.onGroupRemove(new GroupRemoveS2C(6L, GROUP_ID));
+        assertFalse(removed.subscribe());
+        assertFalse(removed.protocolRejected());
+        assertEquals(6L, state.view().revision());
+        assertTrue(state.view().groups().isEmpty());
+        assertNull(state.view().list().get(0).groupId());
+        assertEquals("Spawn", state.view().list().get(0).name());
+
+        state.onGroupRemove(new GroupRemoveS2C(6L, GROUP_ID));
+        assertEquals(6L, state.view().revision());
+
+        final SharedWaypointClientState.Action gap = state.onGroupRemove(
+            new GroupRemoveS2C(9L, GROUP_ID)
+        );
+        assertTrue(gap.subscribe());
+        assertFalse(state.canMutate());
+    }
+
+    @Test
+    void unknownGroupReferencesRejectTheProtocol() {
+        final SharedWaypointClientState snapshotState = enabledHandshake(state());
+        snapshotState.onStatus(status(true, 5L, false, 32, 8));
+        final SharedWaypointClientState.Action badSnapshot = snapshotState.onSnapshot(
+            new SnapshotS2C(5L, false, List.of(groupedWaypoint("Orphan", 5L)))
+        );
+        assertTrue(badSnapshot.protocolRejected());
+        assertEquals(SharedWaypointClientState.State.UNSUPPORTED, snapshotState.view().state());
+
+        final SharedWaypointClientState upsertState = synchronizedState(4L);
+        final SharedWaypointClientState.Action badUpsert = upsertState.onUpsert(
+            new UpsertS2C(5L, groupedWaypoint("Orphan", 5L))
+        );
+        assertTrue(badUpsert.protocolRejected());
+        assertEquals(SharedWaypointClientState.State.UNSUPPORTED, upsertState.view().state());
+
+        final SharedWaypointClientState blankNameState = enabledHandshake(state());
+        blankNameState.onStatus(status(true, 5L, false, 32, 8));
+        blankNameState.onSnapshot(new SnapshotS2C(
+            5L, false, List.of(waypoint(ID, "Spawn", 4L)), List.of(group("Villages", 2L))
+        ));
+        final SharedWaypointClientState.Action blankName = blankNameState.onGroupUpsert(
+            new GroupUpsertS2C(6L, blankNameGroup())
+        );
+        assertTrue(blankName.protocolRejected());
+        assertEquals(SharedWaypointClientState.State.UNSUPPORTED, blankNameState.view().state());
+    }
+
     private static SharedWaypointClientState state() {
         return new SharedWaypointClientState();
     }
@@ -290,5 +381,21 @@ class SharedWaypointClientStateTest {
             1L,
             revision
         );
+    }
+
+    private static SharedWaypoint groupedWaypoint(final String name, final long revision) {
+        return new SharedWaypoint(
+            ID, PUBLISHER, "Player", name, DimensionId.OVERWORLD,
+            1.5d, 64d, -3.25d, 0xFF55AAFF, Waypoint.Type.NORMAL,
+            1L, revision, GROUP_ID
+        );
+    }
+
+    private static SharedWaypointGroup group(final String name, final long revision) {
+        return new SharedWaypointGroup(GROUP_ID, PUBLISHER, name, 1L, revision);
+    }
+
+    private static SharedWaypointGroup blankNameGroup() {
+        return new SharedWaypointGroup(GROUP_ID, PUBLISHER, "  ", 1L, 5L);
     }
 }
