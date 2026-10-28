@@ -32,6 +32,18 @@ final class CubiomesNative {
     /** Returns the shim's {@code CFX_ABI} constant, so Java can detect a stale/mismatched native build. */
     static native int cfxAbi();
 
+    /**
+     * Windows-only CPU topology query used for worker-pool sizing; no other platform
+     * reports data. Calling with a {@code null} array returns the total number of
+     * logical processors (0 when unknown); calling with an array fills it with one
+     * efficiency class per logical processor (0 = efficiency/E, higher = performance/P,
+     * grouped by {@code GetLogicalProcessorInformationEx}) and returns the count written,
+     * or 0 when the array is too small or the topology cannot be read. A library
+     * predating this export throws {@link UnsatisfiedLinkError}; callers must treat
+     * that and a 0 return as "no data".
+     */
+    static native int cfxCpuEfficiencyClasses(int[] outClasses);
+
     /** Selectively parses one uncompressed chunk NBT payload into coarse centered columns. */
     static native int cfxScanChunkNbt(
         byte[] nbt,

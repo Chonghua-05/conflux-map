@@ -44,7 +44,7 @@ final class FullscreenMapSettingsButtonTest {
         final String close = between(
             configSource,
             "public void onClose()",
-            "    private void rebuild()"
+            "    void rebuild()"
         );
         assertTrue(
             close.contains("MinecraftAccess.setScreen(MinecraftClient.getInstance(), parent);"),

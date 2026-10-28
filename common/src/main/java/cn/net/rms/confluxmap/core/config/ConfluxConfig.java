@@ -62,6 +62,9 @@ public final class ConfluxConfig {
     public static final int MIN_PORTAL_ICON_SIZE = 8;
     public static final int MAX_PORTAL_ICON_SIZE = 32;
     public static final int DEFAULT_PORTAL_ICON_SIZE = 14;
+    public static final int MIN_WORKER_THREADS = 1;
+    public static final int MAX_WORKER_THREADS = 32;
+    public static final int DEFAULT_CUSTOM_WORKER_THREADS = 4;
     public static final int MIN_PORTAL_ICON_OPACITY = 0;
     public static final int MAX_PORTAL_ICON_OPACITY = 100;
     public static final int DEFAULT_PORTAL_ICON_OPACITY = 90;
@@ -145,6 +148,13 @@ public final class ConfluxConfig {
     /** Which dimensions the waypoint list shows when summoned by the mod's own hotkey. */
     public enum WaypointListDefaultDimension { CURRENT, ALL }
 
+    /**
+     * How the shared worker-pool size is chosen (see {@code core.task.WorkerThreadPolicy}).
+     * The pool serves every background pipeline of the mod, not just prediction, so the
+     * setting lives under the general performance group.
+     */
+    public enum WorkerThreadMode { AUTO, ALL_THREADS, CUSTOM }
+
     public boolean minimapEnabled = true;
     /** Legacy schema-v1 field. Null after migration and omitted from newly written JSON. */
     @Deprecated
@@ -206,6 +216,13 @@ public final class ConfluxConfig {
     /** Tick window during which packet-driven marks on a just-captured chunk are deferred; 0 disables. */
     public int recaptureHoldoffTicks = 10;
     public int gpuTileCacheLimit = 256;
+    /**
+     * Shared worker-pool sizing mode; applied when the client services start, so a
+     * change takes effect on the next game launch.
+     */
+    public WorkerThreadMode workerThreadMode = WorkerThreadMode.AUTO;
+    /** Worker-pool size used while {@link #workerThreadMode} is {@link WorkerThreadMode#CUSTOM}. */
+    public int workerThreadCount = DEFAULT_CUSTOM_WORKER_THREADS;
 
     /** Master toggle for the whole entity-radar overlay (docs/reference-specs/radar-icons.md sec 4). */
     public boolean radarEnabled = true;
@@ -382,6 +399,8 @@ public final class ConfluxConfig {
         c.snapshotBudgetPerTick = snapshotBudgetPerTick;
         c.recaptureHoldoffTicks = recaptureHoldoffTicks;
         c.gpuTileCacheLimit = gpuTileCacheLimit;
+        c.workerThreadMode = workerThreadMode;
+        c.workerThreadCount = workerThreadCount;
         c.portalMarkersEnabled = portalMarkersEnabled;
         c.portalIconsEnabled = portalIconsEnabled;
         c.portalIconTextureNether = portalIconTextureNether;
@@ -598,6 +617,10 @@ public final class ConfluxConfig {
         snapshotBudgetPerTick = clamp(snapshotBudgetPerTick, 1, 64);
         recaptureHoldoffTicks = clamp(recaptureHoldoffTicks, 0, 100);
         gpuTileCacheLimit = clamp(gpuTileCacheLimit, 16, 2048);
+        if (workerThreadMode == null) {
+            workerThreadMode = WorkerThreadMode.AUTO;
+        }
+        workerThreadCount = clamp(workerThreadCount, MIN_WORKER_THREADS, MAX_WORKER_THREADS);
         radarMaxEntities = clamp(radarMaxEntities, 1, 500);
         radarIconSize = clamp(radarIconSize, MIN_RADAR_ICON_SIZE, MAX_RADAR_ICON_SIZE);
         radarIconOutlineThickness = clamp(

@@ -491,6 +491,29 @@ final class ConfigRows {
                     y, "confluxmap.config.performance.gpu_tile_cache_limit", 16, 2048,
                     () -> config.gpuTileCacheLimit, v -> config.gpuTileCacheLimit = v, ConfigValueLabels::plainText
                 );
+                y = addEnumRow(
+                    y, "confluxmap.config.performance.worker_threads",
+                    ConfluxConfig.WorkerThreadMode.values(),
+                    () -> config.workerThreadMode,
+                    v -> {
+                        config.workerThreadMode = v;
+                        configIo.save(config);
+                        // The custom-count row only exists in CUSTOM mode; rebuild so it
+                        // appears or disappears under the button just clicked.
+                        screen.rebuild();
+                    },
+                    ConfigValueLabels::workerThreadModeKey,
+                    "confluxmap.config.performance.worker_threads.tooltip"
+                );
+                if (config.workerThreadMode == ConfluxConfig.WorkerThreadMode.CUSTOM) {
+                    y = addIntSliderRow(
+                        y, "confluxmap.config.performance.worker_thread_count",
+                        ConfluxConfig.MIN_WORKER_THREADS, ConfluxConfig.MAX_WORKER_THREADS,
+                        () -> config.workerThreadCount, v -> config.workerThreadCount = v,
+                        ConfigValueLabels::plainText,
+                        "confluxmap.config.performance.worker_threads.tooltip"
+                    );
+                }
                 y = addToggleRow(
                     y, "confluxmap.config.performance.update_check",
                     () -> config.updateCheckEnabled, v -> config.updateCheckEnabled = v
@@ -549,7 +572,19 @@ final class ConfigRows {
         final Consumer<T> setter,
         final Function<T, String> valueKeyFn
     ) {
-        return addEnumRow(y, labelKey, values, getter, setter, valueKeyFn, true, null);
+        return addEnumRow(y, labelKey, values, getter, setter, valueKeyFn, true, null, null);
+    }
+
+    private <T> int addEnumRow(
+        final int y,
+        final String labelKey,
+        final T[] values,
+        final Supplier<T> getter,
+        final Consumer<T> setter,
+        final Function<T, String> valueKeyFn,
+        final String hoverTooltipKey
+    ) {
+        return addEnumRow(y, labelKey, values, getter, setter, valueKeyFn, true, null, hoverTooltipKey);
     }
 
     private <T> int addEnumRow(
@@ -561,6 +596,20 @@ final class ConfigRows {
         final Function<T, String> valueKeyFn,
         final boolean active,
         final String disabledTooltipKey
+    ) {
+        return addEnumRow(y, labelKey, values, getter, setter, valueKeyFn, active, disabledTooltipKey, null);
+    }
+
+    private <T> int addEnumRow(
+        final int y,
+        final String labelKey,
+        final T[] values,
+        final Supplier<T> getter,
+        final Consumer<T> setter,
+        final Function<T, String> valueKeyFn,
+        final boolean active,
+        final String disabledTooltipKey,
+        final String hoverTooltipKey
     ) {
         if (screen.rowVisible(y)) {
             final ButtonWidget button = screen.addRowWidget(Widgets.button(
@@ -575,6 +624,7 @@ final class ConfigRows {
             ));
             button.active = active;
             screen.setDisabledTooltip(button, disabledTooltipKey);
+            screen.setHoverTooltip(button, hoverTooltipKey);
         }
         return y + ConfigScreen.ROW_HEIGHT;
     }
@@ -689,6 +739,19 @@ final class ConfigRows {
         final IntSupplier getter,
         final IntConsumer setter,
         final IntFunction<String> valueText,
+        final String hoverTooltipKey
+    ) {
+        return addIntSliderRow(y, labelKey, min, max, getter, setter, valueText, true, null, hoverTooltipKey);
+    }
+
+    private int addIntSliderRow(
+        final int y,
+        final String labelKey,
+        final int min,
+        final int max,
+        final IntSupplier getter,
+        final IntConsumer setter,
+        final IntFunction<String> valueText,
         final boolean active
     ) {
         return addIntSliderRow(y, labelKey, min, max, getter, setter, valueText, active, null);
@@ -704,6 +767,21 @@ final class ConfigRows {
         final IntFunction<String> valueText,
         final boolean active,
         final String disabledTooltipKey
+    ) {
+        return addIntSliderRow(y, labelKey, min, max, getter, setter, valueText, active, disabledTooltipKey, null);
+    }
+
+    private int addIntSliderRow(
+        final int y,
+        final String labelKey,
+        final int min,
+        final int max,
+        final IntSupplier getter,
+        final IntConsumer setter,
+        final IntFunction<String> valueText,
+        final boolean active,
+        final String disabledTooltipKey,
+        final String hoverTooltipKey
     ) {
         if (screen.rowVisible(y)) {
             final IntSliderInput sliderInput = new IntSliderInput(
@@ -727,6 +805,8 @@ final class ConfigRows {
             screen.addRowWidget(sliderInput.input());
             screen.setDisabledTooltip(sliderInput.slider(), disabledTooltipKey);
             screen.setDisabledTooltip(sliderInput.input(), disabledTooltipKey);
+            screen.setHoverTooltip(sliderInput.slider(), hoverTooltipKey);
+            screen.setHoverTooltip(sliderInput.input(), hoverTooltipKey);
         }
         return y + ConfigScreen.ROW_HEIGHT;
     }

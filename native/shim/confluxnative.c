@@ -1642,3 +1642,102 @@ JNIEXPORT jint JNICALL Java_cn_net_rms_confluxmap_nativepredict_CubiomesNative_c
     }
     return cfxIsViableStructure(ctx, structType, blockX, blockZ) != 0 ? 1 : 0;
 }
+
+/*
+ * CPU topology query, the one export here that has nothing to do with cubiomes:
+ * the Java worker-pool sizing needs Windows' per-core efficiency classes, and
+ * this library is the only native code the mod already ships and loads. The
+ * export exists on every target, but only Windows ever reports data; Java reads
+ * sysfs on Linux and assumes a uniform CPU everywhere else, so any 0 return or
+ * UnsatisfiedLinkError just means "no data" and falls back to a uniform CPU.
+ */
+#ifdef _WIN32
+#include <windows.h>
+
+static int cfxWindowsEfficiencyClasses(JNIEnv *env, jintArray out) {
+    DWORD size = 0;
+    /* Sizing call: succeeds only when there is nothing to ask for. */
+    if (!GetLogicalProcessorInformationEx(RelationProcessorCore, NULL, &size)
+        || GetLastError() != ERROR_INSUFFICIENT_BUFFER || size == 0) {
+        return 0;
+    }
+    SYSTEM_LOGICAL_PROCESSOR_INFORMATION_EX *buffer = malloc(size);
+    if (buffer == NULL) {
+        return 0;
+    }
+    if (!GetLogicalProcessorInformationEx(RelationProcessorCore, buffer, &size)) {
+        free(buffer);
+        return 0;
+    }
+    DWORD offset = 0;
+    int total = 0;
+    while (offset < size) {
+        SYSTEM_LOGICAL_PROCESSOR_INFORMATION_EX *entry =
+            (SYSTEM_LOGICAL_PROCESSOR_INFORMATION_EX *) ((char *) buffer + offset);
+        if (entry->Relationship == RelationProcessorCore) {
+            for (WORD group = 0; group < entry->Processor.GroupCount; group++) {
+                KAFFINITY mask = entry->Processor.GroupMask[group].Mask;
+                while (mask != 0) {
+                    if (mask & 1) {
+                        total++;
+                    }
+                    mask >>= 1;
+                }
+            }
+        }
+        offset += entry->Size;
+    }
+    if (out == NULL || (*env)->GetArrayLength(env, out) < total) {
+        free(buffer);
+        return out == NULL ? total : 0;
+    }
+    jint *classes = malloc((size_t) total * sizeof(jint));
+    if (classes == NULL) {
+        free(buffer);
+        return 0;
+    }
+    offset = 0;
+    int written = 0;
+    while (offset < size) {
+        SYSTEM_LOGICAL_PROCESSOR_INFORMATION_EX *entry =
+            (SYSTEM_LOGICAL_PROCESSOR_INFORMATION_EX *) ((char *) buffer + offset);
+        if (entry->Relationship == RelationProcessorCore) {
+            for (WORD group = 0; group < entry->Processor.GroupCount; group++) {
+                KAFFINITY mask = entry->Processor.GroupMask[group].Mask;
+                while (mask != 0) {
+                    if (mask & 1) {
+                        classes[written++] = (jint) entry->Processor.EfficiencyClass;
+                    }
+                    mask >>= 1;
+                }
+            }
+        }
+        offset += entry->Size;
+    }
+    (*env)->SetIntArrayRegion(env, out, 0, total, classes);
+    free(classes);
+    free(buffer);
+    return written;
+}
+
+JNIEXPORT jint JNICALL
+Java_cn_net_rms_confluxmap_nativepredict_CubiomesNative_cfxCpuEfficiencyClasses(
+    JNIEnv *env, jclass clazz, jintArray outClasses
+) {
+    (void) clazz;
+    return cfxWindowsEfficiencyClasses(env, outClasses);
+}
+
+#else /* !_WIN32 */
+
+JNIEXPORT jint JNICALL
+Java_cn_net_rms_confluxmap_nativepredict_CubiomesNative_cfxCpuEfficiencyClasses(
+    JNIEnv *env, jclass clazz, jintArray outClasses
+) {
+    (void) env;
+    (void) clazz;
+    (void) outClasses;
+    return 0;
+}
+
+#endif /* _WIN32 */

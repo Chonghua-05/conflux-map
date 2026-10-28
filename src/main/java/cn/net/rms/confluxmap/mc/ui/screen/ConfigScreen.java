@@ -236,7 +236,8 @@ public final class ConfigScreen extends ConfluxScreen {
         }
     }
 
-    private void rebuild() {
+    /** Rebuilds every row; also callable from a row's own click handler (e.g. to reveal a follow-up row). */
+    void rebuild() {
         sharedAvailability = sharedWaypoints.availability();
         radarAccess = RadarSettingsAccess.from(companionSession.entityRadarAllowed());
         predictionAccess = predictionSettingsAccess();

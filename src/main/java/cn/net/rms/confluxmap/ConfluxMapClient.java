@@ -32,8 +32,11 @@ import cn.net.rms.confluxmap.core.radar.ServerPlayerRadarState;
 import cn.net.rms.confluxmap.core.shared.SharedWaypoint;
 import cn.net.rms.confluxmap.core.store.MapWorldService;
 import cn.net.rms.confluxmap.core.store.NamespaceAdoption;
+import cn.net.rms.confluxmap.core.task.CpuTopology;
+import cn.net.rms.confluxmap.core.task.CpuTopologyDetector;
 import cn.net.rms.confluxmap.core.task.MapExecutors;
 import cn.net.rms.confluxmap.core.task.SessionGuard;
+import cn.net.rms.confluxmap.core.task.WorkerThreadPolicy;
 import cn.net.rms.confluxmap.core.tile.TileService;
 import cn.net.rms.confluxmap.core.trail.PlayerTrail;
 import cn.net.rms.confluxmap.core.update.GithubReleaseFetcher;
@@ -96,6 +99,7 @@ import net.minecraft.resource.ResourceType;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.List;
+import java.util.Locale;
 import java.util.OptionalInt;
 import java.util.UUID;
 
@@ -106,6 +110,7 @@ public final class ConfluxMapClient implements ClientModInitializer {
     private ConfluxConfig config;
     private ConfigIo configIo;
     private MapExecutors executors;
+    private CpuTopology cpuTopology;
     private SessionGuard sessionGuard;
     private WorldSessionTracker sessionTracker;
     private ClientMultiworldService clientMultiworldService;
@@ -187,7 +192,15 @@ public final class ConfluxMapClient implements ClientModInitializer {
         unsupportedPlatformWarningNotifier.register();
         final Path confluxRoot = FabricLoader.getInstance().getGameDir().resolve(ConfluxMapMod.ID);
         final Path cacheRoot = confluxRoot.resolve("cache");
-        executors = new MapExecutors();
+        // Beside (not inside) the cache/waypoints directories below, same confluxmap/ root; a
+        // failed load just leaves NativeLib.available() false and prediction permanently disabled.
+        // Loading before the worker pool is created also lets Windows topology detection ask the
+        // library for CPU efficiency classes; without it the pool falls back to a uniform CPU.
+        NativeLib.init(confluxRoot);
+        cpuTopology = CpuTopologyDetector.defaults().detect();
+        executors = new MapExecutors(
+            WorkerThreadPolicy.resolve(config.workerThreadMode, config.workerThreadCount, cpuTopology)
+        );
         sessionGuard = new SessionGuard();
         gameBridge = new McGameBridge(client, sessionGuard);
         companionSession = new CompanionSession();
@@ -240,9 +253,6 @@ public final class ConfluxMapClient implements ClientModInitializer {
         );
         tileService.bindRegionCache(regionCache);
 
-        // Beside (not inside) the cache/waypoints directories above, same confluxmap/ root; a
-        // failed load just leaves NativeLib.available() false and prediction permanently disabled.
-        NativeLib.init(confluxRoot);
         predictionState = new PredictionState();
         spriteColorSampler = new SpriteColorSampler(client);
         biomeTintResolver = new BiomeTintResolver(client);
@@ -489,7 +499,10 @@ public final class ConfluxMapClient implements ClientModInitializer {
         dispatchApiPlugins(api);
 
         ClientLifecycleEvents.CLIENT_STOPPING.register(client2 -> shutdown());
-        ConfluxMapMod.LOGGER.info("Conflux Map client services started ({} workers)", executors.workerCount());
+        ConfluxMapMod.LOGGER.info(
+            "Conflux Map client services started ({} workers, worker threads mode {}, cpu: {})",
+            executors.workerCount(), config.workerThreadMode.toString().toLowerCase(Locale.ROOT), cpuTopology.description()
+        );
     }
 
     /** Invokes every third-party "confluxmap" entrypoint; one failing plugin never blocks the rest. */
