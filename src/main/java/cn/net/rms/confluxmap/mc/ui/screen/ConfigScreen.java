@@ -334,6 +334,7 @@ public final class ConfigScreen extends ConfluxScreen {
         final String title = getTitle().getString();
         draw.drawTextWithShadow(this.textRenderer, title, width / 2f - this.textRenderer.getWidth(title) / 2f, 8, 0xFFFFFFFF);
         rows.drawIconTextureLabels(draw);
+        rows.drawSectionLabels(draw);
         if (category == Category.RADAR && radarAccess.noticeKey() != null) {
             drawRadarPolicyNotice(draw);
         }

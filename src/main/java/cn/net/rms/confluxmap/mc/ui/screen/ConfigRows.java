@@ -30,13 +30,17 @@ import net.minecraft.text.Text;
 
 /**
  * Builds the settings screen's widget rows: the generic toggle/enum/slider/action
- * row factories and the per-category row wiring for every {@link ConfluxConfig}
+ * row factories, the non-interactive section headers that visually group long
+ * category lists, and the per-category row wiring for every {@link ConfluxConfig}
  * field. Owns the per-rebuild input widget lists ({@code tick}ing sliders and
  * text fields, and the static labels drawn beside portal-icon text fields) so
  * {@link ConfigScreen} only has to orchestrate tabs, scrolling and policy state.
  * Every row mutates and saves the shared config immediately.
  */
 final class ConfigRows {
+    private static final int SECTION_TEXT_COLOR = 0xFFA0A0A0;
+    private static final int SECTION_LINE_COLOR = 0xFF3A3A3A;
+
     private final ConfigScreen screen;
     private final ConfluxConfig config;
     private final ConfigIo configIo;
@@ -45,9 +49,14 @@ final class ConfigRows {
     private final List<DecimalSliderInput> decimalSliderInputs = new ArrayList<>();
     private final List<TextFieldWidget> textFields = new ArrayList<>();
     private final List<IconTextureLabel> iconTextureLabels = new ArrayList<>();
+    private final List<SectionLabel> sectionLabels = new ArrayList<>();
 
     /** Static label drawn beside a portal-icon text-field row; the row widget is the field itself. */
     private record IconTextureLabel(int y, String key) {
+    }
+
+    /** Non-interactive section header row drawn as a label above a divider line. */
+    private record SectionLabel(int y, String key) {
     }
 
     ConfigRows(final ConfigScreen screen, final ConfluxConfig config, final ConfigIo configIo) {
@@ -62,6 +71,7 @@ final class ConfigRows {
         decimalSliderInputs.clear();
         textFields.clear();
         iconTextureLabels.clear();
+        sectionLabels.clear();
     }
 
     void tickInputs() {
@@ -83,6 +93,20 @@ final class ConfigRows {
                 screen.textRenderer(), label, screen.rowX(),
                 rowLabel.y() + (ConfigScreen.ROW_HEIGHT - 2 - screen.textRenderer().fontHeight) / 2f,
                 0xFFE0E0E0
+            );
+        }
+    }
+
+    void drawSectionLabels(final GuiDraw draw) {
+        for (final SectionLabel section : sectionLabels) {
+            final Text label = Texts.translatable(section.key());
+            final int textY = section.y() + 1;
+            draw.drawTextWithShadow(
+                screen.textRenderer(), label, screen.rowX(), textY, SECTION_TEXT_COLOR
+            );
+            final int lineY = textY + screen.textRenderer().fontHeight + 2;
+            draw.fill(
+                screen.rowX(), lineY, screen.rowX() + screen.rowWidth, lineY + 1, SECTION_LINE_COLOR
             );
         }
     }
@@ -135,6 +159,7 @@ final class ConfigRows {
                 y = addToggleRow(y, "confluxmap.config.minimap.show_biome", () -> config.showBiome, v -> config.showBiome = v);
                 break;
             case MAP:
+                y = addSectionRow(y, "confluxmap.screen.config.section.layers");
                 y = addEnumRow(
                     y, "confluxmap.config.layers.override", ConfluxConfig.LayerOverride.values(),
                     () -> config.layerOverride, v -> config.layerOverride = v, ConfigValueLabels::layerOverrideKey
@@ -148,6 +173,7 @@ final class ConfigRows {
                     y, "confluxmap.config.layers.nether_slice_y", 0, 127,
                     () -> config.netherSliceY, v -> config.netherSliceY = v, ConfigValueLabels::plainText
                 );
+                y = addSectionRow(y, "confluxmap.screen.config.section.map_style");
                 y = addToggleRow(
                     y, "confluxmap.config.map.dynamic_lighting", () -> config.dynamicLighting, v -> config.dynamicLighting = v
                 );
@@ -327,6 +353,7 @@ final class ConfigRows {
                 );
                 break;
             case WAYPOINTS:
+                y = addSectionRow(y, "confluxmap.screen.config.section.teleport");
                 y = addActionRow(
                     y,
                     "confluxmap.config.waypoints.teleport_command",
@@ -339,6 +366,7 @@ final class ConfigRows {
                     y, "confluxmap.config.waypoints.teleport_close_map",
                     () -> config.teleportCloseMap, v -> config.teleportCloseMap = v
                 );
+                y = addSectionRow(y, "confluxmap.screen.config.section.visibility");
                 y = addToggleRow(
                     y, "confluxmap.config.waypoints.show_local",
                     () -> config.localWaypointsVisible, v -> config.localWaypointsVisible = v
@@ -357,6 +385,7 @@ final class ConfigRows {
                             : null
                     );
                 }
+                y = addSectionRow(y, "confluxmap.screen.config.section.waypoint_list");
                 y = addEnumRow(
                     y, "confluxmap.config.waypoints.list_default_tab",
                     ConfluxConfig.WaypointListTab.values(),
@@ -371,16 +400,17 @@ final class ConfigRows {
                     ConfigValueLabels::waypointListDefaultDimensionKey
                 );
                 y = addIntSliderRow(
+                    y, "confluxmap.config.waypoints.death_points_kept", 0, 50,
+                    () -> config.deathPointsKept, v -> config.deathPointsKept = v, ConfigValueLabels::plainText
+                );
+                y = addSectionRow(y, "confluxmap.screen.config.section.in_world_rendering");
+                y = addIntSliderRow(
                     y, "confluxmap.config.waypoints.render_distance", 0, 100_000,
                     () -> config.waypointRenderDistance, v -> config.waypointRenderDistance = v, ConfigValueLabels::renderDistanceText
                 );
                 y = addToggleRow(
                     y, "confluxmap.config.waypoints.edge_indicators",
                     () -> config.waypointEdgeIndicatorsEnabled, v -> config.waypointEdgeIndicatorsEnabled = v
-                );
-                y = addIntSliderRow(
-                    y, "confluxmap.config.waypoints.death_points_kept", 0, 50,
-                    () -> config.deathPointsKept, v -> config.deathPointsKept = v, ConfigValueLabels::plainText
                 );
                 y = addToggleRow(
                     y, "confluxmap.config.waypoints.beams_enabled",
@@ -500,6 +530,18 @@ final class ConfigRows {
                 break;
         }
         return y;
+    }
+
+    /**
+     * Non-interactive section header that breaks a long category list into functional
+     * groups. Occupies a full {@code ROW_HEIGHT} slot so scrolling stays row-aligned;
+     * the label itself is drawn in {@code renderContents} like the icon-texture labels.
+     */
+    private int addSectionRow(final int y, final String labelKey) {
+        if (screen.rowVisible(y)) {
+            sectionLabels.add(new SectionLabel(y, labelKey));
+        }
+        return y + ConfigScreen.ROW_HEIGHT;
     }
 
     private int addToggleRow(final int y, final String labelKey, final BooleanSupplier getter, final Consumer<Boolean> setter) {
