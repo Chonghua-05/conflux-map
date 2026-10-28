@@ -164,7 +164,7 @@ import net.minecraft.util.math.MathHelper;
  */
 public final class FullscreenMapScreen extends ConfluxScreen {
 
-    private static final double MIN_SCALE = 0.25;
+    private static final double MIN_SCALE = 0.125;
     private static final double MAX_SCALE = 16.0;
     private static final double DEFAULT_SCALE = 2.0;
     private static final double ZOOM_STEP = 1.26;
