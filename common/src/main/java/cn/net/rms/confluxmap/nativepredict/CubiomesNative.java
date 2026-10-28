@@ -32,6 +32,33 @@ final class CubiomesNative {
     /** Returns the shim's {@code CFX_ABI} constant, so Java can detect a stale/mismatched native build. */
     static native int cfxAbi();
 
+    /**
+     * Windows-only CPU topology query used for worker-pool sizing; no other platform
+     * reports data. Calling with a {@code null} array returns the total number of
+     * logical processors (0 when unknown); calling with an array fills it with one
+     * efficiency class per logical processor (0 = efficiency/E, higher = performance/P,
+     * grouped by {@code GetLogicalProcessorInformationEx}) and returns the count written,
+     * or 0 when the array is too small or the topology cannot be read. A library
+     * predating this export throws {@link UnsatisfiedLinkError}; callers must treat
+     * that and a 0 return as "no data".
+     */
+    static native int cfxCpuEfficiencyClasses(int[] outClasses);
+
+    /**
+     * Linux x86_64-only CPU topology query used for worker-pool sizing; no other
+     * platform reports data. Same two-call protocol as {@link #cfxCpuEfficiencyClasses}:
+     * calling with a {@code null} array returns the number of logical processors this
+     * process may use (0 when the CPU reports no CPUID hybrid information, or anything
+     * along the way fails); calling with an array fills it with one CPUID leaf 0x1A
+     * core type per logical processor (0x40 = Core/P, 0x20 = Atom/E) and returns the
+     * count written, or 0 when the array is too small or the topology cannot be read.
+     * The shim moves the calling thread across the allowed CPUs to read each label
+     * and restores its original affinity mask before returning. A library predating
+     * this export throws {@link UnsatisfiedLinkError}; callers must treat that and
+     * a 0 return as "no data".
+     */
+    static native int cfxCpuHybridCoreTypes(int[] outTypes);
+
     /** Selectively parses one uncompressed chunk NBT payload into coarse centered columns. */
     static native int cfxScanChunkNbt(
         byte[] nbt,

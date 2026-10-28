@@ -92,6 +92,33 @@ final class ConfluxConfigTest {
     }
 
     @Test
+    void workerThreadDefaultsAreAutoAndSurviveCopy() {
+        final ConfluxConfig config = new ConfluxConfig();
+
+        assertEquals(ConfluxConfig.WorkerThreadMode.AUTO, config.workerThreadMode);
+        assertEquals(ConfluxConfig.DEFAULT_CUSTOM_WORKER_THREADS, config.workerThreadCount);
+
+        config.workerThreadMode = ConfluxConfig.WorkerThreadMode.ALL_THREADS;
+        config.workerThreadCount = 12;
+
+        final ConfluxConfig copy = config.copy();
+        assertEquals(ConfluxConfig.WorkerThreadMode.ALL_THREADS, copy.workerThreadMode);
+        assertEquals(12, copy.workerThreadCount);
+    }
+
+    @Test
+    void normalizeRestoresWorkerThreadModeAndClampsCount() {
+        final ConfluxConfig config = new ConfluxConfig();
+        config.workerThreadMode = null;
+        config.workerThreadCount = 999;
+
+        config.normalize();
+
+        assertEquals(ConfluxConfig.WorkerThreadMode.AUTO, config.workerThreadMode);
+        assertEquals(ConfluxConfig.MAX_WORKER_THREADS, config.workerThreadCount);
+    }
+
+    @Test
     void playerIconOutlineIsEnabledByDefaultAndSurvivesConfigCopy() {
         final ConfluxConfig config = new ConfluxConfig();
 

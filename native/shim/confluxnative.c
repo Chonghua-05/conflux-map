@@ -26,6 +26,12 @@
  *   7  CFX_ERR_FEATURE_PARTIAL - requested feature coverage is unavailable
  */
 
+/* cpu_set_t/sched_setaffinity are _GNU_SOURCE extensions in glibc; the feature
+ * macro must be set before the first system header is included. */
+#if defined(__linux__) && defined(__x86_64__)
+#define _GNU_SOURCE
+#endif
+
 #include <jni.h>
 #include <stdint.h>
 #include <stdlib.h>
@@ -1642,3 +1648,201 @@ JNIEXPORT jint JNICALL Java_cn_net_rms_confluxmap_nativepredict_CubiomesNative_c
     }
     return cfxIsViableStructure(ctx, structType, blockX, blockZ) != 0 ? 1 : 0;
 }
+
+/*
+ * CPU topology queries, the two exports here that have nothing to do with
+ * cubiomes: the Java worker-pool sizing needs an explicit P/E-core labelling,
+ * and this library is the only native code the mod already ships and loads.
+ * Both exports exist on every target, but only ever report data where the OS
+ * API exists - Windows reads GetLogicalProcessorInformationEx efficiency
+ * classes, Linux x86_64 reads CPUID's hybrid core-type leaf - so any 0 return
+ * or UnsatisfiedLinkError just means "no data" and Java falls back (sysfs
+ * frequency grouping on Linux, a uniform CPU everywhere else).
+ */
+#ifdef _WIN32
+#include <windows.h>
+
+static int cfxWindowsEfficiencyClasses(JNIEnv *env, jintArray out) {
+    DWORD size = 0;
+    /* Sizing call: succeeds only when there is nothing to ask for. */
+    if (!GetLogicalProcessorInformationEx(RelationProcessorCore, NULL, &size)
+        || GetLastError() != ERROR_INSUFFICIENT_BUFFER || size == 0) {
+        return 0;
+    }
+    SYSTEM_LOGICAL_PROCESSOR_INFORMATION_EX *buffer = malloc(size);
+    if (buffer == NULL) {
+        return 0;
+    }
+    if (!GetLogicalProcessorInformationEx(RelationProcessorCore, buffer, &size)) {
+        free(buffer);
+        return 0;
+    }
+    DWORD offset = 0;
+    int total = 0;
+    while (offset < size) {
+        SYSTEM_LOGICAL_PROCESSOR_INFORMATION_EX *entry =
+            (SYSTEM_LOGICAL_PROCESSOR_INFORMATION_EX *) ((char *) buffer + offset);
+        if (entry->Relationship == RelationProcessorCore) {
+            for (WORD group = 0; group < entry->Processor.GroupCount; group++) {
+                KAFFINITY mask = entry->Processor.GroupMask[group].Mask;
+                while (mask != 0) {
+                    if (mask & 1) {
+                        total++;
+                    }
+                    mask >>= 1;
+                }
+            }
+        }
+        offset += entry->Size;
+    }
+    if (out == NULL || (*env)->GetArrayLength(env, out) < total) {
+        free(buffer);
+        return out == NULL ? total : 0;
+    }
+    jint *classes = malloc((size_t) total * sizeof(jint));
+    if (classes == NULL) {
+        free(buffer);
+        return 0;
+    }
+    offset = 0;
+    int written = 0;
+    while (offset < size) {
+        SYSTEM_LOGICAL_PROCESSOR_INFORMATION_EX *entry =
+            (SYSTEM_LOGICAL_PROCESSOR_INFORMATION_EX *) ((char *) buffer + offset);
+        if (entry->Relationship == RelationProcessorCore) {
+            for (WORD group = 0; group < entry->Processor.GroupCount; group++) {
+                KAFFINITY mask = entry->Processor.GroupMask[group].Mask;
+                while (mask != 0) {
+                    if (mask & 1) {
+                        classes[written++] = (jint) entry->Processor.EfficiencyClass;
+                    }
+                    mask >>= 1;
+                }
+            }
+        }
+        offset += entry->Size;
+    }
+    (*env)->SetIntArrayRegion(env, out, 0, total, classes);
+    free(classes);
+    free(buffer);
+    return written;
+}
+
+JNIEXPORT jint JNICALL
+Java_cn_net_rms_confluxmap_nativepredict_CubiomesNative_cfxCpuEfficiencyClasses(
+    JNIEnv *env, jclass clazz, jintArray outClasses
+) {
+    (void) clazz;
+    return cfxWindowsEfficiencyClasses(env, outClasses);
+}
+
+#else /* !_WIN32 */
+
+JNIEXPORT jint JNICALL
+Java_cn_net_rms_confluxmap_nativepredict_CubiomesNative_cfxCpuEfficiencyClasses(
+    JNIEnv *env, jclass clazz, jintArray outClasses
+) {
+    (void) env;
+    (void) clazz;
+    (void) outClasses;
+    return 0;
+}
+
+#endif /* _WIN32 */
+
+/*
+ * Linux x86_64 hybrid core types, read straight from the CPU: CPUID leaf 0x1A
+ * labels each logical processor 0x40 (Core) or 0x20 (Atom), but only once leaf
+ * 7 subleaf 0's hybrid bit (EDX bit 15) says the part is hybrid at all. The
+ * shim walks the calling thread's allowed CPUs one by one, pinning the thread
+ * to each to read its per-CPU leaf, and puts the thread's original affinity
+ * mask back before returning - success or failure. Java prefers this explicit
+ * vendor label over grouping sysfs cpuinfo_max_freq, because it needs no
+ * cpufreq driver to expose that node and merges differently-binned P cores
+ * into one tier by definition.
+ */
+#if defined(__linux__) && defined(__x86_64__)
+
+#include <sched.h>
+
+static void cfxCpuid(unsigned int leaf, unsigned int subleaf, unsigned int out[4]) {
+    __asm__ volatile ("cpuid"
+        : "=a"(out[0]), "=b"(out[1]), "=c"(out[2]), "=d"(out[3])
+        : "a"(leaf), "c"(subleaf));
+}
+
+static int cfxLinuxHybridCoreTypes(JNIEnv *env, jintArray out) {
+    unsigned int info[4];
+    cfxCpuid(0, 0, info);
+    if (info[0] < 0x1A) {
+        return 0;
+    }
+    cfxCpuid(7, 0, info);
+    if ((info[3] & (1u << 15)) == 0) {
+        return 0;
+    }
+    cpu_set_t original;
+    CPU_ZERO(&original);
+    if (sched_getaffinity(0, sizeof(original), &original) != 0) {
+        return 0;
+    }
+    const int total = CPU_COUNT(&original);
+    if (total <= 0) {
+        return 0;
+    }
+    if (out == NULL || (*env)->GetArrayLength(env, out) < total) {
+        return out == NULL ? total : 0;
+    }
+    jint *types = malloc((size_t) total * sizeof(jint));
+    if (types == NULL) {
+        return 0;
+    }
+    int written = 0;
+    int failed = 0;
+    cpu_set_t pinned;
+    for (int cpu = 0; cpu < CPU_SETSIZE && written < total; cpu++) {
+        if (!CPU_ISSET(cpu, &original)) {
+            continue;
+        }
+        CPU_ZERO(&pinned);
+        CPU_SET(cpu, &pinned);
+        if (sched_setaffinity(0, sizeof(pinned), &pinned) != 0) {
+            failed = 1;
+            break;
+        }
+        cfxCpuid(0x1A, 0, info);
+        types[written++] = (jint) ((info[0] >> 24) & 0xFFu);
+    }
+    if (sched_setaffinity(0, sizeof(original), &original) != 0) {
+        failed = 1;
+    }
+    if (failed || written != total) {
+        free(types);
+        return 0;
+    }
+    (*env)->SetIntArrayRegion(env, out, 0, total, types);
+    free(types);
+    return written;
+}
+
+JNIEXPORT jint JNICALL
+Java_cn_net_rms_confluxmap_nativepredict_CubiomesNative_cfxCpuHybridCoreTypes(
+    JNIEnv *env, jclass clazz, jintArray outTypes
+) {
+    (void) clazz;
+    return cfxLinuxHybridCoreTypes(env, outTypes);
+}
+
+#else /* !(__linux__ && __x86_64__) */
+
+JNIEXPORT jint JNICALL
+Java_cn_net_rms_confluxmap_nativepredict_CubiomesNative_cfxCpuHybridCoreTypes(
+    JNIEnv *env, jclass clazz, jintArray outTypes
+) {
+    (void) env;
+    (void) clazz;
+    (void) outTypes;
+    return 0;
+}
+
+#endif /* __linux__ && __x86_64__ */

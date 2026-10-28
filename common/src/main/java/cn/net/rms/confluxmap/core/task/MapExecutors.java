@@ -1,5 +1,6 @@
 package cn.net.rms.confluxmap.core.task;
 
+import cn.net.rms.confluxmap.core.config.ConfluxConfig;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ThreadFactory;
@@ -16,9 +17,26 @@ public final class MapExecutors {
     private final ExecutorService io;
     private final int workerCount;
 
+    /**
+     * Pool sized by the AUTO worker-thread policy; the production wiring passes the
+     * user's chosen mode explicitly, and this constructor stays for tests and tools
+     * that just want the default behavior.
+     */
     public MapExecutors() {
-        workerCount = Math.max(1, Math.min(6, Runtime.getRuntime().availableProcessors() / 2 - 1));
-        workers = Executors.newFixedThreadPool(workerCount, factory("ConfluxMap-Worker"));
+        this(WorkerThreadPolicy.resolve(
+            ConfluxConfig.WorkerThreadMode.AUTO,
+            ConfluxConfig.DEFAULT_CUSTOM_WORKER_THREADS,
+            CpuTopologyDetector.defaults().detect()
+        ));
+    }
+
+    /**
+     * @param workerCount worker-pool size; the caller decides it (see
+     *     {@link WorkerThreadPolicy}) and the constructor only enforces a minimum of 1
+     */
+    public MapExecutors(final int workerCount) {
+        this.workerCount = Math.max(1, workerCount);
+        workers = Executors.newFixedThreadPool(this.workerCount, factory("ConfluxMap-Worker"));
         io = Executors.newSingleThreadExecutor(factory("ConfluxMap-IO"));
     }
 

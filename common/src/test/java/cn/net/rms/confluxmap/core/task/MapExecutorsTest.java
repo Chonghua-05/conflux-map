@@ -1,5 +1,6 @@
 package cn.net.rms.confluxmap.core.task;
 
+import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -10,8 +11,20 @@ import org.junit.jupiter.api.Test;
 
 class MapExecutorsTest {
     @Test
+    void workerCountIsHonoredWithAMinimumOfOne() {
+        final MapExecutors four = new MapExecutors(4);
+        final MapExecutors none = new MapExecutors(0);
+
+        assertEquals(4, four.workerCount());
+        assertEquals(1, none.workerCount());
+
+        four.shutdown(100L);
+        none.shutdown(100L);
+    }
+
+    @Test
     void shutdownLetsQueuedWorkerTasksFinishSubmittingIoBeforeIoCloses() throws Exception {
-        final MapExecutors executors = new MapExecutors();
+        final MapExecutors executors = new MapExecutors(2);
         final CountDownLatch workerStarted = new CountDownLatch(1);
         final CountDownLatch releaseWorker = new CountDownLatch(1);
         final CountDownLatch ioFinished = new CountDownLatch(1);

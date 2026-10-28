@@ -88,6 +88,17 @@ final class ConfigValueLabels {
             : "confluxmap.value.radar_display_mode.portraits";
     }
 
+    static String workerThreadModeKey(final ConfluxConfig.WorkerThreadMode mode) {
+        switch (mode) {
+            case ALL_THREADS:
+                return "confluxmap.value.worker_threads.all";
+            case CUSTOM:
+                return "confluxmap.value.worker_threads.custom";
+            default:
+                return "confluxmap.value.worker_threads.auto";
+        }
+    }
+
     static String waypointListTabKey(final ConfluxConfig.WaypointListTab tab) {
         return tab == ConfluxConfig.WaypointListTab.LOCAL
             ? "confluxmap.value.waypoint_list_tab.local"
