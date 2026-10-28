@@ -1,7 +1,9 @@
 package cn.net.rms.confluxmap.server.shared;
 
 import cn.net.rms.confluxmap.core.model.DimensionId;
+import cn.net.rms.confluxmap.core.net.shared.SharedWaypointProto;
 import cn.net.rms.confluxmap.core.shared.SharedWaypoint;
+import cn.net.rms.confluxmap.core.shared.SharedWaypointGroup;
 import cn.net.rms.confluxmap.core.shared.SharedWaypointLocationKey;
 import cn.net.rms.confluxmap.core.waypoint.Waypoint;
 import java.io.IOException;
@@ -46,13 +48,17 @@ public final class SharedWaypointService {
         RATE_LIMITED,
         DUPLICATE_LOCATION,
         PERSISTENCE_FAILED,
-        ID_GENERATION_FAILED
+        ID_GENERATION_FAILED,
+        GROUP_QUOTA_EXCEEDED
     }
 
     public enum Action {
         CREATE,
         UPDATE,
-        DELETE
+        DELETE,
+        GROUP_CREATE,
+        GROUP_RENAME,
+        GROUP_DELETE
     }
 
     public enum AccessPolicy {
@@ -109,6 +115,46 @@ public final class SharedWaypointService {
 
     public record DeleteRequest(UUID operationId, long expectedRevision, UUID waypointId) {
         public DeleteRequest {
+            Objects.requireNonNull(operationId, "operationId");
+            Objects.requireNonNull(waypointId, "waypointId");
+        }
+    }
+
+    public record GroupCreateRequest(UUID operationId, long expectedRevision, String name) {
+        public GroupCreateRequest {
+            Objects.requireNonNull(operationId, "operationId");
+            Objects.requireNonNull(name, "name");
+        }
+    }
+
+    public record GroupRenameRequest(
+        UUID operationId,
+        long expectedRevision,
+        UUID groupId,
+        String name
+    ) {
+        public GroupRenameRequest {
+            Objects.requireNonNull(operationId, "operationId");
+            Objects.requireNonNull(groupId, "groupId");
+            Objects.requireNonNull(name, "name");
+        }
+    }
+
+    public record GroupDeleteRequest(UUID operationId, long expectedRevision, UUID groupId) {
+        public GroupDeleteRequest {
+            Objects.requireNonNull(operationId, "operationId");
+            Objects.requireNonNull(groupId, "groupId");
+        }
+    }
+
+    /** Moves one waypoint into a group, or out of every group when {@code groupId} is null. */
+    public record SetGroupRequest(
+        UUID operationId,
+        long expectedRevision,
+        UUID waypointId,
+        UUID groupId
+    ) {
+        public SetGroupRequest {
             Objects.requireNonNull(operationId, "operationId");
             Objects.requireNonNull(waypointId, "waypointId");
         }
@@ -289,6 +335,11 @@ public final class SharedWaypointService {
                 throw new IllegalArgumentException("loaded shared waypoint is invalid for the active world");
             }
         }
+        for (final SharedWaypointGroup group : store.snapshot().groups()) {
+            if (!SharedWaypointValidator.validName(group.name())) {
+                throw new IllegalArgumentException("loaded shared waypoint group has an invalid name");
+            }
+        }
     }
 
     public AccessPolicy accessPolicy() {
@@ -321,7 +372,7 @@ public final class SharedWaypointService {
         }
         return valid.size() == loaded.waypoints().size()
             ? loaded
-            : new SharedWaypointStore.Snapshot(loaded.revision(), valid);
+            : new SharedWaypointStore.Snapshot(loaded.revision(), valid, loaded.groups());
     }
 
     private static boolean validForActiveWorld(
@@ -336,6 +387,10 @@ public final class SharedWaypointService {
 
     public synchronized SharedWaypointStore.Snapshot snapshot() {
         return store.snapshot();
+    }
+
+    public synchronized List<SharedWaypointGroup> groups() {
+        return store.groups();
     }
 
     public synchronized MutationResult create(final Actor actor, final CreateRequest request) {
@@ -506,7 +561,213 @@ public final class SharedWaypointService {
         final SharedWaypoint updated = new SharedWaypoint(
             current.id(), current.publisherId(), current.publisherName(), value.name(),
             value.dimensionId(), value.x(), value.y(), value.z(), value.colorArgb(), value.type(),
-            value.iconItemId(), value.markerLabel(), current.createdAtEpochMs(), nextRevision
+            value.iconItemId(), value.markerLabel(), current.createdAtEpochMs(), nextRevision,
+            current.groupId()
+        );
+        final SharedWaypointStore.PreparedMutation mutation;
+        try {
+            mutation = store.prepareUpdate(updated);
+        } catch (final ArithmeticException e) {
+            return finish(player, request, actor, request.operationId(), Action.UPDATE, request.waypointId(),
+                rejected(request.operationId(), MutationError.PERSISTENCE_FAILED), now);
+        }
+        return persist(
+            player, request, actor, request.operationId(), Action.UPDATE, request.waypointId(),
+            mutation, now
+        );
+    }
+
+    public synchronized MutationResult createGroup(final Actor actor, final GroupCreateRequest request) {
+        Objects.requireNonNull(actor, "actor");
+        Objects.requireNonNull(request, "request");
+        final PlayerState player = playerState(actor);
+        final MutationResult replay = replayOrRejectReuse(
+            player, actor, request.operationId(), Action.GROUP_CREATE, null, request
+        );
+        if (replay != null) {
+            return replay;
+        }
+        final long now = clock.millis();
+        if (!canCreate(actor)) {
+            return finish(player, request, actor, request.operationId(), Action.GROUP_CREATE, null,
+                rejected(request.operationId(), MutationError.FORBIDDEN), now);
+        }
+        if (!player.bucket.tryConsume(now)) {
+            return finish(player, request, actor, request.operationId(), Action.GROUP_CREATE, null,
+                rejected(request.operationId(), MutationError.RATE_LIMITED), now);
+        }
+        if (request.expectedRevision() != store.snapshot().revision()) {
+            return finish(player, request, actor, request.operationId(), Action.GROUP_CREATE, null,
+                rejected(request.operationId(), MutationError.REVISION_CONFLICT), now);
+        }
+        final String name = request.name().strip();
+        if (!SharedWaypointValidator.validName(name)) {
+            return finish(player, request, actor, request.operationId(), Action.GROUP_CREATE, null,
+                rejected(request.operationId(), MutationError.INVALID_REQUEST), now);
+        }
+        if (store.groupCount() >= SharedWaypointProto.MAX_SNAPSHOT_GROUPS) {
+            return finish(player, request, actor, request.operationId(), Action.GROUP_CREATE, null,
+                rejected(request.operationId(), MutationError.GROUP_QUOTA_EXCEEDED), now);
+        }
+        final UUID id = uniqueGroupId();
+        if (id == null) {
+            return finish(player, request, actor, request.operationId(), Action.GROUP_CREATE, null,
+                rejected(request.operationId(), MutationError.ID_GENERATION_FAILED), now);
+        }
+        final long nextRevision;
+        try {
+            nextRevision = Math.addExact(store.snapshot().revision(), 1);
+        } catch (final ArithmeticException e) {
+            return finish(player, request, actor, request.operationId(), Action.GROUP_CREATE, null,
+                rejected(request.operationId(), MutationError.PERSISTENCE_FAILED), now);
+        }
+        final SharedWaypointGroup group = new SharedWaypointGroup(
+            id, actor.playerId(), name, now, nextRevision
+        );
+        return persist(
+            player, request, actor, request.operationId(), Action.GROUP_CREATE, id,
+            store.prepareGroupCreate(group), now
+        );
+    }
+
+    public synchronized MutationResult renameGroup(final Actor actor, final GroupRenameRequest request) {
+        Objects.requireNonNull(actor, "actor");
+        Objects.requireNonNull(request, "request");
+        final PlayerState player = playerState(actor);
+        final MutationResult replay = replayOrRejectReuse(
+            player, actor, request.operationId(), Action.GROUP_RENAME, request.groupId(), request
+        );
+        if (replay != null) {
+            return replay;
+        }
+        final long now = clock.millis();
+        if (!player.bucket.tryConsume(now)) {
+            return finish(player, request, actor, request.operationId(), Action.GROUP_RENAME, request.groupId(),
+                rejected(request.operationId(), MutationError.RATE_LIMITED), now);
+        }
+        final Optional<SharedWaypointGroup> existing = store.findGroup(request.groupId());
+        if (existing.isEmpty()) {
+            return finish(player, request, actor, request.operationId(), Action.GROUP_RENAME, request.groupId(),
+                rejected(request.operationId(), MutationError.NOT_FOUND), now);
+        }
+        final SharedWaypointGroup current = existing.get();
+        if (!canManageGroup(actor, current)) {
+            return finish(player, request, actor, request.operationId(), Action.GROUP_RENAME, request.groupId(),
+                rejected(request.operationId(), MutationError.FORBIDDEN), now);
+        }
+        if (request.expectedRevision() != current.revision()) {
+            return finish(player, request, actor, request.operationId(), Action.GROUP_RENAME, request.groupId(),
+                rejected(request.operationId(), MutationError.REVISION_CONFLICT), now);
+        }
+        final String name = request.name().strip();
+        if (!SharedWaypointValidator.validName(name)) {
+            return finish(player, request, actor, request.operationId(), Action.GROUP_RENAME, request.groupId(),
+                rejected(request.operationId(), MutationError.INVALID_REQUEST), now);
+        }
+        final long nextRevision;
+        try {
+            nextRevision = Math.addExact(store.snapshot().revision(), 1);
+        } catch (final ArithmeticException e) {
+            return finish(player, request, actor, request.operationId(), Action.GROUP_RENAME, request.groupId(),
+                rejected(request.operationId(), MutationError.PERSISTENCE_FAILED), now);
+        }
+        final SharedWaypointGroup renamed = new SharedWaypointGroup(
+            current.id(), current.creatorId(), name, current.createdAtEpochMs(), nextRevision
+        );
+        return persist(
+            player, request, actor, request.operationId(), Action.GROUP_RENAME, request.groupId(),
+            store.prepareGroupUpdate(renamed), now
+        );
+    }
+
+    public synchronized MutationResult deleteGroup(final Actor actor, final GroupDeleteRequest request) {
+        Objects.requireNonNull(actor, "actor");
+        Objects.requireNonNull(request, "request");
+        final PlayerState player = playerState(actor);
+        final MutationResult replay = replayOrRejectReuse(
+            player, actor, request.operationId(), Action.GROUP_DELETE, request.groupId(), request
+        );
+        if (replay != null) {
+            return replay;
+        }
+        final long now = clock.millis();
+        if (!player.bucket.tryConsume(now)) {
+            return finish(player, request, actor, request.operationId(), Action.GROUP_DELETE, request.groupId(),
+                rejected(request.operationId(), MutationError.RATE_LIMITED), now);
+        }
+        final Optional<SharedWaypointGroup> existing = store.findGroup(request.groupId());
+        if (existing.isEmpty()) {
+            return finish(player, request, actor, request.operationId(), Action.GROUP_DELETE, request.groupId(),
+                rejected(request.operationId(), MutationError.NOT_FOUND), now);
+        }
+        final SharedWaypointGroup current = existing.get();
+        if (!canManageGroup(actor, current)) {
+            return finish(player, request, actor, request.operationId(), Action.GROUP_DELETE, request.groupId(),
+                rejected(request.operationId(), MutationError.FORBIDDEN), now);
+        }
+        if (request.expectedRevision() != current.revision()) {
+            return finish(player, request, actor, request.operationId(), Action.GROUP_DELETE, request.groupId(),
+                rejected(request.operationId(), MutationError.REVISION_CONFLICT), now);
+        }
+        final SharedWaypointStore.PreparedMutation mutation;
+        try {
+            mutation = store.prepareGroupDelete(request.groupId());
+        } catch (final ArithmeticException e) {
+            return finish(player, request, actor, request.operationId(), Action.GROUP_DELETE, request.groupId(),
+                rejected(request.operationId(), MutationError.PERSISTENCE_FAILED), now);
+        }
+        return persist(
+            player, request, actor, request.operationId(), Action.GROUP_DELETE, request.groupId(),
+            mutation, now
+        );
+    }
+
+    /** Moves one waypoint into a group (or out of every group with a null target). */
+    public synchronized MutationResult setWaypointGroup(final Actor actor, final SetGroupRequest request) {
+        Objects.requireNonNull(actor, "actor");
+        Objects.requireNonNull(request, "request");
+        final PlayerState player = playerState(actor);
+        final MutationResult replay = replayOrRejectReuse(
+            player, actor, request.operationId(), Action.UPDATE, request.waypointId(), request
+        );
+        if (replay != null) {
+            return replay;
+        }
+        final long now = clock.millis();
+        if (!player.bucket.tryConsume(now)) {
+            return finish(player, request, actor, request.operationId(), Action.UPDATE, request.waypointId(),
+                rejected(request.operationId(), MutationError.RATE_LIMITED), now);
+        }
+        final Optional<SharedWaypoint> existing = store.find(request.waypointId());
+        if (existing.isEmpty()) {
+            return finish(player, request, actor, request.operationId(), Action.UPDATE, request.waypointId(),
+                rejected(request.operationId(), MutationError.NOT_FOUND), now);
+        }
+        final SharedWaypoint current = existing.get();
+        if (!canManage(actor, current)) {
+            return finish(player, request, actor, request.operationId(), Action.UPDATE, request.waypointId(),
+                rejected(request.operationId(), MutationError.FORBIDDEN), now);
+        }
+        if (request.expectedRevision() != current.revision()) {
+            return finish(player, request, actor, request.operationId(), Action.UPDATE, request.waypointId(),
+                rejected(request.operationId(), MutationError.REVISION_CONFLICT), now);
+        }
+        if (request.groupId() != null && store.findGroup(request.groupId()).isEmpty()) {
+            return finish(player, request, actor, request.operationId(), Action.UPDATE, request.waypointId(),
+                rejected(request.operationId(), MutationError.NOT_FOUND), now);
+        }
+        final long nextRevision;
+        try {
+            nextRevision = Math.addExact(store.snapshot().revision(), 1);
+        } catch (final ArithmeticException e) {
+            return finish(player, request, actor, request.operationId(), Action.UPDATE, request.waypointId(),
+                rejected(request.operationId(), MutationError.PERSISTENCE_FAILED), now);
+        }
+        final SharedWaypoint updated = new SharedWaypoint(
+            current.id(), current.publisherId(), current.publisherName(), current.name(),
+            current.dimensionId(), current.x(), current.y(), current.z(), current.colorArgb(),
+            current.type(), current.iconItemId(), current.markerLabel(), current.createdAtEpochMs(),
+            nextRevision, request.groupId()
         );
         final SharedWaypointStore.PreparedMutation mutation;
         try {
@@ -533,6 +794,13 @@ public final class SharedWaypointService {
         return actor.operator()
             || accessPolicy == AccessPolicy.OWNER_MANAGED
                 && waypoint.publisherId().equals(actor.playerId());
+    }
+
+    /** Operators manage every group; under owner management only the creating player may change it. */
+    private boolean canManageGroup(final Actor actor, final SharedWaypointGroup group) {
+        return actor.operator()
+            || accessPolicy == AccessPolicy.OWNER_MANAGED
+                && group.creatorId().equals(actor.playerId());
     }
 
     private MutationResult persist(
@@ -639,6 +907,16 @@ public final class SharedWaypointService {
         for (int attempt = 0; attempt < 16; attempt++) {
             final UUID candidate = idSupplier.get();
             if (candidate != null && store.find(candidate).isEmpty()) {
+                return candidate;
+            }
+        }
+        return null;
+    }
+
+    private UUID uniqueGroupId() {
+        for (int attempt = 0; attempt < 16; attempt++) {
+            final UUID candidate = idSupplier.get();
+            if (candidate != null && store.findGroup(candidate).isEmpty()) {
                 return candidate;
             }
         }

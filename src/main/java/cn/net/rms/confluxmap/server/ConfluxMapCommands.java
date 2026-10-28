@@ -13,6 +13,8 @@ import cn.net.rms.confluxmap.compat.Dimensions;
 import cn.net.rms.confluxmap.compat.MinecraftAccess;
 import cn.net.rms.confluxmap.compat.Texts;
 import cn.net.rms.confluxmap.core.util.CoordinateText;
+import cn.net.rms.confluxmap.core.shared.SharedWaypoint;
+import cn.net.rms.confluxmap.core.shared.SharedWaypointGroup;
 import cn.net.rms.confluxmap.server.shared.SharedWaypointCommandService;
 import cn.net.rms.confluxmap.server.shared.SharedWaypointService;
 import java.nio.charset.StandardCharsets;
@@ -79,6 +81,39 @@ final class ConfluxMapCommands {
                             context.getSource(),
                             getString(context, "id")
                         ))))
+                    .then(literal("group")
+                        .then(literal("list").executes(context -> listGroups(
+                            companion,
+                            context.getSource()
+                        )))
+                        .then(literal("create")
+                            .then(argument("name", greedyString()).executes(context -> createGroup(
+                                companion,
+                                context.getSource(),
+                                getString(context, "name")
+                            ))))
+                        .then(literal("rename")
+                            .then(argument("id", word())
+                                .then(argument("name", greedyString()).executes(context -> renameGroup(
+                                    companion,
+                                    context.getSource(),
+                                    getString(context, "id"),
+                                    getString(context, "name")
+                                )))))
+                        .then(literal("delete")
+                            .then(argument("id", word()).executes(context -> deleteGroup(
+                                companion,
+                                context.getSource(),
+                                getString(context, "id")
+                            ))))
+                        .then(literal("assign")
+                            .then(argument("waypoint", word())
+                                .then(argument("group", word()).executes(context -> assignGroup(
+                                    companion,
+                                    context.getSource(),
+                                    getString(context, "waypoint"),
+                                    getString(context, "group")
+                                ))))))
                     .then(literal("status").executes(context -> status(
                         companion,
                         context.getSource()
@@ -139,10 +174,28 @@ final class ConfluxMapCommands {
                     + " (" + CoordinateText.plain(entry.waypoint().x())
                     + ", " + CoordinateText.plain(entry.waypoint().y())
                     + ", " + CoordinateText.plain(entry.waypoint().z()) + ")"
+                    + groupSuffix(companion, entry.waypoint())
             ), false);
             MinecraftAccess.sendFeedback(source, Texts.literal(entry.xaeroMessage()), false);
         }
         return 1;
+    }
+
+    /** Resolves the waypoint's group name for the list output, or an empty suffix when ungrouped. */
+    private static String groupSuffix(final ConfluxMapCompanion companion, final SharedWaypoint waypoint) {
+        if (waypoint.groupId() == null) {
+            return "";
+        }
+        final SharedWaypointService service = companion.sharedWaypoints();
+        if (service == null) {
+            return "";
+        }
+        for (final SharedWaypointGroup group : service.groups()) {
+            if (group.id().equals(waypoint.groupId())) {
+                return " in [" + group.name() + "]";
+            }
+        }
+        return "";
     }
 
     private static int createHere(
@@ -199,6 +252,127 @@ final class ConfluxMapCommands {
         return commands == null
             ? error(source, "Shared waypoints are disabled on this server.")
             : result(source, commands.delete(actor(source), id), "Shared waypoint deleted.");
+    }
+
+    private static int listGroups(
+        final ConfluxMapCompanion companion,
+        final ServerCommandSource source
+    ) {
+        final SharedWaypointCommandService commands = commands(companion, source);
+        if (commands == null) {
+            return error(source, "Shared waypoints are disabled on this server.");
+        }
+        final java.util.List<SharedWaypointCommandService.GroupEntry> groups = commands.listGroups();
+        if (groups.isEmpty()) {
+            return feedback(source, "No shared waypoint groups.");
+        }
+        MinecraftAccess.sendFeedback(source, Texts.literal(
+            "Shared waypoint groups (total " + groups.size() + ")"
+        ), false);
+        for (final SharedWaypointCommandService.GroupEntry entry : groups) {
+            MinecraftAccess.sendFeedback(source, Texts.literal(
+                "[" + entry.idPrefix() + "] " + entry.group().name()
+            ), false);
+        }
+        return 1;
+    }
+
+    private static int createGroup(
+        final ConfluxMapCompanion companion,
+        final ServerCommandSource source,
+        final String name
+    ) {
+        final SharedWaypointCommandService commands = commands(companion, source);
+        if (commands == null) {
+            return error(source, "Shared waypoints are disabled on this server.");
+        }
+        final SharedWaypointCommandService.Result result =
+            commands.createGroup(actor(source), name);
+        if (result.applied()) {
+            return feedback(source, "Shared waypoint group created.");
+        }
+        return groupError(source, result);
+    }
+
+    private static int renameGroup(
+        final ConfluxMapCompanion companion,
+        final ServerCommandSource source,
+        final String id,
+        final String name
+    ) {
+        final SharedWaypointCommandService commands = commands(companion, source);
+        if (commands == null) {
+            return error(source, "Shared waypoints are disabled on this server.");
+        }
+        final SharedWaypointCommandService.Result result =
+            commands.renameGroup(actor(source), id, name);
+        if (result.applied()) {
+            return feedback(source, "Shared waypoint group renamed.");
+        }
+        return groupError(source, result);
+    }
+
+    private static int deleteGroup(
+        final ConfluxMapCompanion companion,
+        final ServerCommandSource source,
+        final String id
+    ) {
+        final SharedWaypointCommandService commands = commands(companion, source);
+        if (commands == null) {
+            return error(source, "Shared waypoints are disabled on this server.");
+        }
+        final SharedWaypointCommandService.Result result =
+            commands.deleteGroup(actor(source), id);
+        if (result.applied()) {
+            return feedback(source, "Shared waypoint group deleted; its waypoints are now ungrouped.");
+        }
+        return groupError(source, result);
+    }
+
+    private static int assignGroup(
+        final ConfluxMapCompanion companion,
+        final ServerCommandSource source,
+        final String waypointId,
+        final String groupId
+    ) {
+        final SharedWaypointCommandService commands = commands(companion, source);
+        if (commands == null) {
+            return error(source, "Shared waypoints are disabled on this server.");
+        }
+        final SharedWaypointCommandService.Result result =
+            commands.setWaypointGroup(actor(source), waypointId, groupId);
+        if (result.applied()) {
+            return feedback(source, "Shared waypoint group membership updated.");
+        }
+        return groupError(source, result);
+    }
+
+    private static int groupError(
+        final ServerCommandSource source,
+        final SharedWaypointCommandService.Result result
+    ) {
+        return error(source, switch (result.status()) {
+            case INVALID_ID -> "Invalid group or waypoint ID.";
+            case UNKNOWN_ID -> "Shared waypoint or group not found.";
+            case AMBIGUOUS_ID -> "ID prefix is ambiguous; use the longer ID shown by list.";
+            case FORBIDDEN -> "You do not have permission to manage this shared waypoint group.";
+            case REJECTED -> groupMutationError(result.mutation().error());
+            default -> "Shared waypoint group command failed.";
+        });
+    }
+
+    private static String groupMutationError(final SharedWaypointService.MutationError error) {
+        return switch (error) {
+            case INVALID_REQUEST -> "The group name is invalid.";
+            case REVISION_CONFLICT -> "The group or waypoint changed; run the list command and try again.";
+            case NOT_FOUND -> "Shared waypoint or group not found.";
+            case FORBIDDEN -> "You do not have permission to manage this shared waypoint group.";
+            case RATE_LIMITED -> "Too many waypoint changes; try again shortly.";
+            case GROUP_QUOTA_EXCEEDED -> "The server shared-waypoint group limit has been reached.";
+            case PERSISTENCE_FAILED -> "The group could not be saved.";
+            case ID_GENERATION_FAILED -> "The server could not allocate a group ID.";
+            default -> "Shared waypoint group command failed: " + error;
+        };
     }
 
     private static SharedWaypointCommandService commands(

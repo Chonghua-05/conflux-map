@@ -95,9 +95,19 @@ final class PaperSharedWaypointNetworking implements PluginMessageListener {
         if (delta == null) {
             return;
         }
+        broadcastSubscribed(delta);
+    }
+
+    /** Sends one delta to every subscriber that negotiated a wire minor able to carry it. */
+    private void broadcastSubscribed(final SharedWaypointMessage message) {
         for (final Player recipient : Bukkit.getOnlinePlayers()) {
-            if (sessions.isSubscribed(recipient.getUniqueId())) {
-                send(recipient, delta);
+            // Group deltas have no minor-3 representation; older modded clients keep their
+            // previous revision and resync on the next snapshot instead of failing to decode.
+            if (sessions.isSubscribed(recipient.getUniqueId())
+                && SharedWaypointCodec.encodableAt(
+                    message, sessions.negotiatedMinor(recipient.getUniqueId())
+                )) {
+                send(recipient, message);
             }
         }
     }
@@ -128,11 +138,7 @@ final class PaperSharedWaypointNetworking implements PluginMessageListener {
             send(player, direct);
         }
         if (dispatch.broadcast() != null) {
-            for (final Player recipient : Bukkit.getOnlinePlayers()) {
-                if (sessions.isSubscribed(recipient.getUniqueId())) {
-                    send(recipient, dispatch.broadcast());
-                }
-            }
+            broadcastSubscribed(dispatch.broadcast());
         }
     }
 

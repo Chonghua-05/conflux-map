@@ -2,6 +2,7 @@ package cn.net.rms.confluxmap.core.net.shared;
 
 import cn.net.rms.confluxmap.core.model.DimensionId;
 import cn.net.rms.confluxmap.core.shared.SharedWaypoint;
+import cn.net.rms.confluxmap.core.shared.SharedWaypointGroup;
 import cn.net.rms.confluxmap.core.waypoint.Waypoint;
 import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
@@ -111,6 +112,9 @@ public final class SharedWaypointCodec {
                 out.writeLong(m.revision());
                 writeBoolean(out, m.operator());
                 writeSnapshot(out, m.list(), negotiatedMinor);
+                if (negotiatedMinor >= 4) {
+                    writeGroups(out, m.groups());
+                }
             } else if (message instanceof final UpsertS2C m) {
                 s2c = true;
                 out.writeByte(SharedWaypointProto.MSG_UPSERT_S2C);
@@ -121,6 +125,18 @@ public final class SharedWaypointCodec {
                 out.writeByte(SharedWaypointProto.MSG_REMOVE_S2C);
                 out.writeLong(m.revision());
                 writeUuid(out, m.id());
+            } else if (message instanceof final GroupUpsertS2C m) {
+                s2c = true;
+                requireGroupSupport(negotiatedMinor);
+                out.writeByte(SharedWaypointProto.MSG_GROUP_UPSERT_S2C);
+                out.writeLong(m.revision());
+                writeGroup(out, m.group());
+            } else if (message instanceof final GroupRemoveS2C m) {
+                s2c = true;
+                requireGroupSupport(negotiatedMinor);
+                out.writeByte(SharedWaypointProto.MSG_GROUP_REMOVE_S2C);
+                out.writeLong(m.revision());
+                writeUuid(out, m.groupId());
             } else if (message instanceof final ResultS2C m) {
                 s2c = true;
                 out.writeByte(SharedWaypointProto.MSG_RESULT_S2C);
@@ -227,7 +243,8 @@ public final class SharedWaypointCodec {
                     readIconItemId(in, negotiatedMinor), readMarkerLabel(in, negotiatedMinor)
                 );
                 case SharedWaypointProto.MSG_SNAPSHOT_S2C -> new SnapshotS2C(
-                    in.readLong(), readBoolean(in, "operator"), readSnapshot(in, negotiatedMinor)
+                    in.readLong(), readBoolean(in, "operator"), readSnapshot(in, negotiatedMinor),
+                    negotiatedMinor >= 4 ? readGroups(in) : List.<SharedWaypointGroup>of()
                 );
                 case SharedWaypointProto.MSG_UPSERT_S2C -> new UpsertS2C(
                     in.readLong(), readWaypoint(in, negotiatedMinor)
@@ -235,6 +252,14 @@ public final class SharedWaypointCodec {
                 case SharedWaypointProto.MSG_REMOVE_S2C -> new RemoveS2C(
                     in.readLong(), readUuid(in)
                 );
+                case SharedWaypointProto.MSG_GROUP_UPSERT_S2C -> {
+                    requireGroupSupport(negotiatedMinor);
+                    yield new GroupUpsertS2C(in.readLong(), readGroup(in));
+                }
+                case SharedWaypointProto.MSG_GROUP_REMOVE_S2C -> {
+                    requireGroupSupport(negotiatedMinor);
+                    yield new GroupRemoveS2C(in.readLong(), readUuid(in));
+                }
                 case SharedWaypointProto.MSG_RESULT_S2C -> new ResultS2C(
                     readUuid(in), in.readInt(), in.readInt()
                 );
@@ -331,6 +356,7 @@ public final class SharedWaypointCodec {
         out.writeLong(waypoint.createdAtEpochMs());
         out.writeLong(waypoint.revision());
         writeMarkerStyle(out, negotiatedMinor, waypoint.iconItemId(), waypoint.markerLabel());
+        writeWaypointGroup(out, negotiatedMinor, waypoint.groupId());
     }
 
     private static SharedWaypoint readWaypoint(
@@ -354,8 +380,103 @@ public final class SharedWaypointCodec {
         return new SharedWaypoint(
             id, publisherId, publisherName, name, dimensionId, x, y, z,
             color, type, readIconItemId(in, negotiatedMinor), readMarkerLabel(in, negotiatedMinor),
-            createdAtEpochMs, revision
+            createdAtEpochMs, revision, readWaypointGroup(in, negotiatedMinor)
         );
+    }
+
+    private static void writeWaypointGroup(
+        final DataOutputStream out,
+        final int negotiatedMinor,
+        final UUID groupId
+    ) throws IOException, SharedWaypointProtocolException {
+        if (negotiatedMinor < 4) {
+            return;
+        }
+        writeBoolean(out, groupId != null);
+        if (groupId != null) {
+            writeUuid(out, groupId);
+        }
+    }
+
+    private static UUID readWaypointGroup(
+        final DataInputStream in,
+        final int negotiatedMinor
+    ) throws IOException, SharedWaypointProtocolException {
+        if (negotiatedMinor < 4) {
+            return null;
+        }
+        return readBoolean(in, "hasGroup") ? readUuid(in) : null;
+    }
+
+    private static void writeGroups(
+        final DataOutputStream out,
+        final List<SharedWaypointGroup> groups
+    )
+        throws IOException, SharedWaypointProtocolException {
+        if (groups.size() > SharedWaypointProto.MAX_SNAPSHOT_GROUPS) {
+            throw new SharedWaypointProtocolException(
+                "snapshot group count " + groups.size() + " above cap "
+                    + SharedWaypointProto.MAX_SNAPSHOT_GROUPS
+            );
+        }
+        out.writeShort(groups.size());
+        for (final SharedWaypointGroup group : groups) {
+            writeGroup(out, group);
+        }
+    }
+
+    private static List<SharedWaypointGroup> readGroups(final DataInputStream in)
+        throws IOException, SharedWaypointProtocolException {
+        final int count = in.readUnsignedShort();
+        if (count > SharedWaypointProto.MAX_SNAPSHOT_GROUPS) {
+            throw new SharedWaypointProtocolException(
+                "snapshot group count " + count + " above cap "
+                    + SharedWaypointProto.MAX_SNAPSHOT_GROUPS
+            );
+        }
+        final List<SharedWaypointGroup> groups = new ArrayList<>(count);
+        for (int i = 0; i < count; i++) {
+            groups.add(readGroup(in));
+        }
+        return groups;
+    }
+
+    private static void writeGroup(
+        final DataOutputStream out,
+        final SharedWaypointGroup group
+    )
+        throws IOException, SharedWaypointProtocolException {
+        if (group == null) {
+            throw new SharedWaypointProtocolException("null shared-waypoint group");
+        }
+        writeUuid(out, group.id());
+        writeUuid(out, group.creatorId());
+        writeUtf(out, group.name(), "groupName");
+        out.writeLong(group.createdAtEpochMs());
+        out.writeLong(group.revision());
+    }
+
+    private static SharedWaypointGroup readGroup(final DataInputStream in)
+        throws IOException, SharedWaypointProtocolException {
+        return new SharedWaypointGroup(
+            readUuid(in), readUuid(in), readUtf(in, "groupName"),
+            in.readLong(), in.readLong()
+        );
+    }
+
+    /** Group messages have no minor-3 representation; callers skip peers pinned below minor 4. */
+    public static boolean encodableAt(final SharedWaypointMessage message, final int negotiatedMinor) {
+        return negotiatedMinor >= 4
+            || !(message instanceof GroupUpsertS2C || message instanceof GroupRemoveS2C);
+    }
+
+    private static void requireGroupSupport(final int negotiatedMinor)
+        throws SharedWaypointProtocolException {
+        if (negotiatedMinor < 4) {
+            throw new SharedWaypointProtocolException(
+                "shared-waypoint group messages require negotiated minor >= 4, got " + negotiatedMinor
+            );
+        }
     }
 
     private static void writeMarkerStyle(
@@ -527,7 +648,7 @@ public final class SharedWaypointCodec {
 
     private static boolean isKnownType(final int typeId) {
         return typeId >= SharedWaypointProto.MSG_HELLO_C2S
-            && typeId <= SharedWaypointProto.MSG_UPDATE_C2S;
+            && typeId <= SharedWaypointProto.MSG_GROUP_REMOVE_S2C;
     }
 
     private static boolean isS2C(final int typeId) {
@@ -535,7 +656,9 @@ public final class SharedWaypointCodec {
             || typeId == SharedWaypointProto.MSG_SNAPSHOT_S2C
             || typeId == SharedWaypointProto.MSG_UPSERT_S2C
             || typeId == SharedWaypointProto.MSG_REMOVE_S2C
-            || typeId == SharedWaypointProto.MSG_RESULT_S2C;
+            || typeId == SharedWaypointProto.MSG_RESULT_S2C
+            || typeId == SharedWaypointProto.MSG_GROUP_UPSERT_S2C
+            || typeId == SharedWaypointProto.MSG_GROUP_REMOVE_S2C;
     }
 
     private static void requirePayloadCap(final int length, final boolean s2c)

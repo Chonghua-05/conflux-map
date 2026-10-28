@@ -11,6 +11,8 @@ import java.util.UUID;
  *
  * <p>Coordinates are stored in the local coordinate system of {@link #dimensionId()}.
  * {@link #revision()} is the server-assigned waypoint revision used for optimistic updates.
+ * {@link #groupId()} references the server-owned {@link SharedWaypointGroup} this waypoint
+ * belongs to, or {@code null} when it is ungrouped.
  */
 public record SharedWaypoint(
     UUID id,
@@ -26,7 +28,8 @@ public record SharedWaypoint(
     String iconItemId,
     String markerLabel,
     long createdAtEpochMs,
-    long revision
+    long revision,
+    UUID groupId
 ) {
     public SharedWaypoint {
         Objects.requireNonNull(id, "id");
@@ -50,12 +53,63 @@ public record SharedWaypoint(
         final double z,
         final int colorArgb,
         final Waypoint.Type type,
+        final String iconItemId,
+        final String markerLabel,
         final long createdAtEpochMs,
         final long revision
     ) {
         this(
             id, publisherId, publisherName, name, dimensionId, x, y, z,
-            colorArgb, type, "", "", createdAtEpochMs, revision
+            colorArgb, type, iconItemId, markerLabel, createdAtEpochMs, revision, null
+        );
+    }
+
+    public SharedWaypoint(
+        final UUID id,
+        final UUID publisherId,
+        final String publisherName,
+        final String name,
+        final DimensionId dimensionId,
+        final double x,
+        final double y,
+        final double z,
+        final int colorArgb,
+        final Waypoint.Type type,
+        final long createdAtEpochMs,
+        final long revision
+    ) {
+        this(
+            id, publisherId, publisherName, name, dimensionId, x, y, z,
+            colorArgb, type, "", "", createdAtEpochMs, revision, null
+        );
+    }
+
+    public SharedWaypoint(
+        final UUID id,
+        final UUID publisherId,
+        final String publisherName,
+        final String name,
+        final DimensionId dimensionId,
+        final double x,
+        final double y,
+        final double z,
+        final int colorArgb,
+        final Waypoint.Type type,
+        final long createdAtEpochMs,
+        final long revision,
+        final UUID groupId
+    ) {
+        this(
+            id, publisherId, publisherName, name, dimensionId, x, y, z,
+            colorArgb, type, "", "", createdAtEpochMs, revision, groupId
+        );
+    }
+
+    /** Returns a copy of this waypoint with the group membership replaced. */
+    public SharedWaypoint withGroupId(final UUID newGroupId) {
+        return new SharedWaypoint(
+            id, publisherId, publisherName, name, dimensionId, x, y, z,
+            colorArgb, type, iconItemId, markerLabel, createdAtEpochMs, revision, newGroupId
         );
     }
 }

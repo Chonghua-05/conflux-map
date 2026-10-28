@@ -98,7 +98,12 @@ public final class SharedWaypointNetworking {
 
     private void broadcast(final MinecraftServer server, final SharedWaypointMessage message) {
         for (final ServerPlayerEntity player : server.getPlayerManager().getPlayerList()) {
-            if (sessions.isSubscribed(player.getUuid())) {
+            // Group deltas have no minor-3 representation; older modded clients keep their
+            // previous revision and resync on the next snapshot instead of failing to decode.
+            if (sessions.isSubscribed(player.getUuid())
+                && SharedWaypointCodec.encodableAt(
+                    message, sessions.negotiatedMinor(player.getUuid())
+                )) {
                 send(player, message);
             }
         }

@@ -2,6 +2,8 @@ package cn.net.rms.confluxmap.server.shared;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import cn.net.rms.confluxmap.core.model.DimensionId;
@@ -96,6 +98,48 @@ class SharedWaypointCommandServiceTest {
         assertEquals(SharedWaypointCommandService.Status.AMBIGUOUS_ID, ambiguous.status());
         assertFalse(outside.valid());
         assertEquals(2, fixture.commands.list(1).entries().size());
+    }
+
+    @Test
+    void groupCommandsCreateListRenameAssignAndDeleteByIdPrefix() {
+        final Fixture fixture = fixture();
+        fixture.commands.createHere(
+            PLAYER,
+            new SharedWaypointCommandService.Position(DimensionId.OVERWORLD, 1d, 64d, 1d),
+            "Home"
+        );
+        final String waypointId = fixture.commands.list(1).entries().get(0).idPrefix();
+
+        final SharedWaypointCommandService.Result created = fixture.commands.createGroup(PLAYER, "Villages");
+        assertTrue(created.applied());
+        assertNotNull(created.group());
+        final String groupId = fixture.commands.listGroups().get(0).idPrefix();
+        assertEquals("Villages", fixture.commands.listGroups().get(0).group().name());
+
+        assertTrue(fixture.commands.setWaypointGroup(PLAYER, waypointId, groupId).applied());
+        assertEquals(
+            created.group().id(),
+            fixture.commands.list(1).entries().get(0).waypoint().groupId()
+        );
+
+        assertTrue(fixture.commands.renameGroup(PLAYER, groupId, "Towns").applied());
+        assertEquals("Towns", fixture.commands.listGroups().get(0).group().name());
+
+        assertTrue(fixture.commands.setWaypointGroup(PLAYER, waypointId, "none").applied());
+        assertNull(fixture.commands.list(1).entries().get(0).waypoint().groupId());
+
+        assertEquals(
+            SharedWaypointCommandService.Status.UNKNOWN_ID,
+            fixture.commands.setWaypointGroup(PLAYER, waypointId, "ffffffff").status()
+        );
+        assertEquals(
+            SharedWaypointCommandService.Status.UNKNOWN_ID,
+            fixture.commands.deleteGroup(PLAYER, "ffffffff").status()
+        );
+
+        assertTrue(fixture.commands.deleteGroup(PLAYER, groupId).applied());
+        assertTrue(fixture.commands.listGroups().isEmpty());
+        assertFalse(fixture.mutations.isEmpty());
     }
 
     private static Fixture fixture() {

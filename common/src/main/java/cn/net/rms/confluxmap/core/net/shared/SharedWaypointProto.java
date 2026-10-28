@@ -7,7 +7,7 @@ public final class SharedWaypointProto {
 
     public static final String CHANNEL_ID = "confluxmap:waypoints_v1";
     public static final int PROTO_MAJOR = 1;
-    public static final int PROTO_MINOR = 3;
+    public static final int PROTO_MINOR = 4;
 
     public static final int MSG_HELLO_C2S = 0x01;
     public static final int MSG_STATUS_S2C = 0x02;
@@ -20,11 +20,14 @@ public final class SharedWaypointProto {
     public static final int MSG_REMOVE_S2C = 0x09;
     public static final int MSG_RESULT_S2C = 0x0A;
     public static final int MSG_UPDATE_C2S = 0x0B;
+    public static final int MSG_GROUP_UPSERT_S2C = 0x0C;
+    public static final int MSG_GROUP_REMOVE_S2C = 0x0D;
 
     public static final int MAX_C2S_PAYLOAD = 8 * 1024;
     public static final int MAX_S2C_PAYLOAD = 1 << 20;
     public static final int MAX_UTF8_BYTES = 256;
     public static final int MAX_SNAPSHOT_WAYPOINTS = 512;
+    public static final int MAX_SNAPSHOT_GROUPS = 64;
 
     public static final int RESULT_STATUS_APPLIED = 0;
     public static final int RESULT_STATUS_REJECTED = 1;
