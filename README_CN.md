@@ -4,7 +4,7 @@
 
 [![Modrinth 下载量](https://img.shields.io/modrinth/dt/conflux-map?logo=modrinth&label=Modrinth&color=1bd96a)](https://modrinth.com/mod/conflux-map) [![CurseForge 下载量](https://img.shields.io/curseforge/dt/1663891?logo=curseforge&label=CurseForge&color=f16436)](https://www.curseforge.com/minecraft/mc-mods/conflux-map) [![MC百科 ID](https://img.shields.io/badge/MC%E7%99%BE%E7%A7%91_ID-30075-3f85c6?logo=data%3Aimage%2Fpng%3Bbase64%2CiVBORw0KGgoAAAANSUhEUgAAAA4AAAAOCAYAAAAfSC3RAAAACXBIWXMAAAAAAAAAAQCEeRdzAAACfklEQVR4nHVS7UtTURy%2BHyoCP5TQfxN9DMt0vrSXu0VfAvsQCBmGVL5MdDrLyiB6IYgWFJSUM%2B%2Fm3K7bdTqzmQudd%2FfmnLqXtmmb07vmbsR8OndEH8IOPDz8OM9zzvM7v0NVVB6m2t7WdNz20ZsmTv2zb0ojHwRlb8BnyNwYrjJVVB6iFFPbXb8BvR41iOC%2FME3RMHPVMH7sRKPFZqIGZnWJPk5bMk%2FTpf4pbVmksNlLo9%2BrI7WWsB6D0zVo527t0wxfop2xbcrEaSSjW4V2tgo9XENZrHA7ewZGdy16OTU62NO44riJ6pEgzjMr0Nt4mepxN%2B5axSEEUhN46m9B52Q1Hs81YyFlByM8wZ1pGjNRK7h4BlziB0zzUajH%2BCJldNVLQtYHZS0kHWh1nMTcBlOuV1OL8Kes%2BC4DzPo2RtcyaHKtQGMTZarb1SAtZlxI70SRlsMY8jYhKUWwuScgEF9DIFfAy%2BUkTg0vof5DCDqbCL2dGI1OcmNuBrMRBpH8Z4S3lpCQluBed%2BBLKodP2V94EVSMQWLkoRrlQSvGrgmVFM0T4epr2MPPyhHfr4iwkFvC2QLYb3nEJRmPFlN4JW7hfiAJmgmRqGz9rjf2Bu%2F4QTzwXYKYS6PZHUP%2FfBwjkSwus2H403kI23sI78gYj%2B5AN7ZcJOPQ5rs9dejjzuIqe49ECUJL%2BtAwAhrGBKgJn7PyqCURawjqyn0KMvkAmpiZq91vmXxY0trXoR8nc7ILygP8hWH8K0GZ92lbqGRwRjLKl7t23fecnLxGmhb%2BQDwQOiaEi54Y6izuLupo5TFKZfG0XnBGNshpRSIoEOz9gwKJVySaBDF1HDl%2BgvoNorIyyNSoGRkAAAAASUVORK5CYII%3D)](https://www.mcmod.cn/class/30075.html) [![QQ 群](https://img.shields.io/badge/QQ%E7%BE%A4-362669270-eb1923?logo=qq&logoColor=white)](https://qun.qq.com/universal-share/share?ac=1&authKey=X68UEgKub%2FljNQ2gt977XUcHdklPbuSUlV0sxCFnvqWdDXXtDCGYleOTjPb1xYTY&busi_data=eyJncm91cENvZGUiOiIzNjI2NjkyNzAiLCJ0b2tlbiI6IjFaYXFmWjhQaHo0S0xHakhPdWM5c2lrM2t4L2ZpN2N5TmxGMi8yaGJJUFpjSWszcG9XdGlWUWZwL2Z6bGtnMTYiLCJ1aW4iOiIyNjI4ODgzNTc2In0%3D&data=spJ33k1yvhmWCjxI6bLw3xMXstlfzRC1iQRK2vP-g0aRaPb_ueNDl2haX1Z4AWNUh6pUSLIdjlv8IxQ3VStwng&svctype=4&tempid=h5_group_info)
 
-Conflux Map 是一款 Fabric 平台的小地图与世界地图模组。客户端可独立运行：小地图、全屏世界地图、群系图层、路径点、结构查找、地图绘图与 PNG 导出均集成于同一个 JAR。若服务器安装配套的服务端组件，整个服务器还可以共享同一份实时地图、一套公共路径点，以及一个通过浏览器访问的网页地图。
+Conflux Map 是一款 Fabric 平台的小地图与世界地图模组。客户端可独立运行：小地图、全屏世界地图、群系图层、路径点、结构与群系搜索、地图绘图与 PNG 导出均集成于同一个 JAR。若服务器安装配套的服务端组件，整个服务器还可以共享同一份实时地图、一套公共路径点，以及一个通过浏览器访问的网页地图。
 
 ## 支持的版本
 
@@ -52,9 +52,9 @@ Conflux Map 是一款 Fabric 平台的小地图与世界地图模组。客户端
 
 获取世界种子后，主世界、下界基岩顶层与末地会立即显示预测地形。随着探索推进，预测结果逐步被真实地图替换；安装服务端组件后，服务端还会下发真实地形数据主动校正。按 `P` 可在「全部预测 / 仅已生成 / 仅已探索」之间切换，按 `F9` 强制刷新。客户端也可以配置本地种子，生成仅对自己可见的预测地图。
 
-### 结构查找
+### 结构与群系搜索
 
-主世界、下界与末地的原版结构均有独立图标和分类开关；村庄群系、堡垒遗迹布局、僵尸村庄、带船末地城等变种使用单独的名称与图标。可按名称搜索最近的结构，也可指定中心、半径、数量与变种筛选，列出指定区域内的候选位置并直接保存为路径点。右键结构图标，位置菜单会在该结构的精确生成点打开。
+主世界、下界与末地的原版结构均有独立图标和分类开关；村庄群系、堡垒遗迹布局、僵尸村庄、带船末地城等变种使用单独的名称与图标。全屏地图的搜索界面提供「结构」与「群系」两种模式。可按名称搜索最近的结构，也可指定中心、半径、数量与变种筛选，列出指定区域内的候选位置并直接保存为路径点；群系同样按名称选择并定位，先扫描已探索地图，获取世界种子后还会延伸到未探索区域的预测结果。候选列表默认由近到远排序，也可切换为由远到近以优先显示最远的匹配。右键结构图标，位置菜单会在该结构的精确生成点打开。
 
 ### 传送门标记
 
