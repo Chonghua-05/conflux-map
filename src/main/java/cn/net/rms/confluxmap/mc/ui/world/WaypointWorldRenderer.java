@@ -71,7 +71,13 @@ import net.minecraft.util.math.Vec3d;
  * draw afterwards with depth testing disabled so world content cannot hide player-facing
  * navigation information. On 1.21.9 and later the events moved into main-pass positions the
  * packs rewrite, and no Iris dev environment exists for those lines yet, so the beam still
- * rides a terrain-adjacent phase there. In fabric-rendering-v1 1.10.1 (bundled with the
+ * rides a terrain-adjacent phase there. The END context stack's rotation is
+ * version-dependent: 1.17.1/1.18.2 still carry the camera rotation, which the reinstalled
+ * snapshot would apply a second time (the MC<12001 gates below bake through a fresh
+ * identity stack); 1.20.1 must keep the context stack because its LAST fires after vanilla
+ * already popped the world view, leaving the snapshot ~identity; on 1.20.6+ Fabric captures
+ * the stack at vanilla's only bare {@code new MatrixStack()}, so it is identity at END
+ * anyway. In fabric-rendering-v1 1.10.1 (bundled with the
  * installed fabric-api 0.46.1+1.17), {@link WorldRenderContext#consumers()} is {@code
  * null} at this phase and its matrix stack carries no pre-existing camera translation -
  * both are handled here: the beam is drawn with plain {@code Tessellator}/{@code
@@ -295,7 +301,16 @@ public final class WaypointWorldRenderer {
         //#else
         final Camera camera = context.camera();
         final Vec3d cameraPos = camera.getPos();
-        final MatrixStack matrices = context.matrixStack();
+        //#if MC<12001
+        // 1.17.1/1.18.2 only: the END context stack still carries the camera
+        // rotation while the END pass also reinstalls the LAST-captured view,
+        // so baking through it rotates every vertex twice. Do NOT widen onto
+        // 1.20.1: its snapshot is ~identity and the context stack is its only
+        // rotation source.
+        final MatrixStack matrices = new MatrixStack();
+        //#else
+        //$$ final MatrixStack matrices = context.matrixStack();
+        //#endif
         //#endif
         //#if MC>=260300
         //$$ final FabricOrderedSubmitNodeCollector beamSubmits =
@@ -432,7 +447,14 @@ public final class WaypointWorldRenderer {
         final Vec3d cameraPos = camera.getPos();
         final float cameraYaw = camera.getYaw();
         final float cameraPitch = camera.getPitch();
-        final MatrixStack matrices = context.matrixStack();
+        // Same gate and rationale as renderBeams: the label billboard and its plate
+        // bake through this stack, so they must not inherit the 1.17.1/1.18.2 double
+        // rotation either.
+        //#if MC<12001
+        final MatrixStack matrices = new MatrixStack();
+        //#else
+        //$$ final MatrixStack matrices = context.matrixStack();
+        //#endif
         //#endif
         final double maxDistance = WaypointLabelMetrics.maxLabelDistance(config.waypointRenderDistance);
         final double labelProjectionDistance = WaypointLabelMetrics.labelProjectionDistance(
