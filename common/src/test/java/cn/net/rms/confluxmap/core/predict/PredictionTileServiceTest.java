@@ -36,6 +36,7 @@ import cn.net.rms.confluxmap.nativepredict.NativeLib;
 import cn.net.rms.confluxmap.nativepredict.PredictorVersion;
 import java.nio.file.Path;
 import java.util.Arrays;
+import java.util.Comparator;
 import java.util.List;
 import java.util.Map;
 import java.util.HashMap;
@@ -1234,6 +1235,150 @@ class PredictionTileServiceTest {
             assertTrue(
                 urgentAt < nearAt && nearAt < farAt,
                 "the urgent menu target must compose before background tiles nearer the viewpoint"
+            );
+        } finally {
+            for (final CountDownLatch release : releaseWorkers) {
+                release.countDown();
+            }
+            executors.shutdown(2000);
+        }
+    }
+
+    @Test
+    void viewportTilesComposeCenterOutFromViewportCenter(@TempDir final Path tempDir) throws InterruptedException {
+        final SessionGuard sessionGuard = new SessionGuard();
+        final MapExecutors executors = new MapExecutors();
+        final TileService uploads = new TileService(new MapWorldService(), executors, new ConfluxConfig(), new DaylightModel());
+        final PredictionState state = new PredictionState();
+        state.setPresets(WorldPreset.FLAT, WorldPreset.DEFAULT);
+        state.setFlatBaseline(new FlatBaseline(1, 63, SurfaceKind.LAND.ordinal(), 11, 0));
+        final PredictionTileService predictionTiles = newService(sessionGuard, state, executors, uploads);
+        predictionTiles.bindCorrectionStore(new CorrectionStore(tempDir));
+        sessionGuard.begin(WORLD, DIM);
+
+        // Same pinning discipline as menuTargetTilesComposeAheadOfBackgroundRequests: one latch
+        // per worker, only the first released, so uploads serialize the dispatcher's choices.
+        final int cap = executors.workerCount();
+        final CountDownLatch[] releaseWorkers = new CountDownLatch[cap];
+        for (int i = 0; i < cap; i++) {
+            releaseWorkers[i] = new CountDownLatch(1);
+            final CountDownLatch mine = releaseWorkers[i];
+            executors.workers().execute(() -> {
+                try {
+                    mine.await();
+                } catch (final InterruptedException ignored) {
+                    Thread.currentThread().interrupt();
+                }
+            });
+        }
+        Thread.sleep(50);
+
+        try {
+            for (int i = 0; i < cap; i++) {
+                predictionTiles.requestTile(new TileKey(WORLD, DIM, "surface!pred", 0, 100 + i, 100));
+            }
+            // 5x5 viewport whose center is tile (2, 2); the observed tiles sit at squared
+            // center distances 0, 1, 4, 8, 8, so row-major dispatch (corner first) fails.
+            predictionTiles.setViewport(DIM, 0, 0, 4, 0, 4);
+            final TileKey center = new TileKey(WORLD, DIM, "surface!pred", 0, 2, 2);
+            final TileKey edgeA = new TileKey(WORLD, DIM, "surface!pred", 0, 2, 1);
+            final TileKey edgeB = new TileKey(WORLD, DIM, "surface!pred", 0, 0, 2);
+            final TileKey cornerA = new TileKey(WORLD, DIM, "surface!pred", 0, 0, 0);
+            final TileKey cornerB = new TileKey(WORLD, DIM, "surface!pred", 0, 4, 4);
+            final List<TileKey> observed = List.of(cornerA, cornerB, edgeA, edgeB, center);
+            for (final TileKey key : observed) {
+                predictionTiles.requestTile(key);
+            }
+
+            releaseWorkers[0].countDown();
+            awaitIdle(predictionTiles, 10_000L);
+            final List<TileKey> order = uploads.drainUploads(64).stream()
+                .map(TileUpdate::key)
+                .toList();
+            final Map<TileKey, Long> firstUploadAt = new HashMap<>();
+            for (final TileKey key : observed) {
+                final int at = order.indexOf(key);
+                assertTrue(at >= 0, "every observed tile must compose, got " + order);
+                firstUploadAt.put(key, (long) at);
+            }
+            final List<TileKey> byUpload = observed.stream()
+                .sorted(Comparator.comparing(firstUploadAt::get))
+                .toList();
+            assertEquals(center, byUpload.get(0), "the viewport-center tile must compose first, got " + byUpload);
+            long previous = centerDistanceSq(byUpload.get(0));
+            for (int i = 1; i < byUpload.size(); i++) {
+                final long next = centerDistanceSq(byUpload.get(i));
+                assertTrue(
+                    previous <= next,
+                    "viewport tiles must compose outward from the viewport center, got " + byUpload
+                );
+                previous = next;
+            }
+        } finally {
+            for (final CountDownLatch release : releaseWorkers) {
+                release.countDown();
+            }
+            executors.shutdown(2000);
+        }
+    }
+
+    /** Squared tile distance from the 5x5 viewport rect (0..4) x (0..4) center, tile (2, 2). */
+    private static long centerDistanceSq(final TileKey key) {
+        final long dx = key.tileX() - 2;
+        final long dz = key.tileZ() - 2;
+        return dx * dx + dz * dz;
+    }
+
+    @Test
+    void menuTargetTilesComposeAheadOfViewportTiles(@TempDir final Path tempDir) throws InterruptedException {
+        final SessionGuard sessionGuard = new SessionGuard();
+        final MapExecutors executors = new MapExecutors();
+        final TileService uploads = new TileService(new MapWorldService(), executors, new ConfluxConfig(), new DaylightModel());
+        final PredictionState state = new PredictionState();
+        state.setPresets(WorldPreset.FLAT, WorldPreset.DEFAULT);
+        state.setFlatBaseline(new FlatBaseline(1, 63, SurfaceKind.LAND.ordinal(), 11, 0));
+        final PredictionTileService predictionTiles = newService(sessionGuard, state, executors, uploads);
+        predictionTiles.bindCorrectionStore(new CorrectionStore(tempDir));
+        sessionGuard.begin(WORLD, DIM);
+
+        final int cap = executors.workerCount();
+        final CountDownLatch[] releaseWorkers = new CountDownLatch[cap];
+        for (int i = 0; i < cap; i++) {
+            releaseWorkers[i] = new CountDownLatch(1);
+            final CountDownLatch mine = releaseWorkers[i];
+            executors.workers().execute(() -> {
+                try {
+                    mine.await();
+                } catch (final InterruptedException ignored) {
+                    Thread.currentThread().interrupt();
+                }
+            });
+        }
+        Thread.sleep(50);
+
+        try {
+            for (int i = 0; i < cap; i++) {
+                predictionTiles.requestTile(new TileKey(WORLD, DIM, "surface!pred", 0, 100 + i, 100));
+            }
+            // The urgent menu target sits at the viewport's far corner, so center-out ordering
+            // alone would compose it last; the queue-jump tier must still dispatch it first.
+            predictionTiles.setViewport(DIM, 0, 0, 4, 0, 4);
+            final TileKey center = new TileKey(WORLD, DIM, "surface!pred", 0, 2, 2);
+            final TileKey urgent = new TileKey(WORLD, DIM, "surface!pred", 0, 4, 4);
+            predictionTiles.requestTile(center);
+            predictionTiles.requestTileUrgently(urgent);
+
+            releaseWorkers[0].countDown();
+            awaitIdle(predictionTiles, 10_000L);
+            final List<TileKey> order = uploads.drainUploads(64).stream()
+                .map(TileUpdate::key)
+                .toList();
+            final int urgentAt = order.indexOf(urgent);
+            final int centerAt = order.indexOf(center);
+            assertTrue(urgentAt >= 0 && centerAt >= 0, "every requested tile must compose");
+            assertTrue(
+                urgentAt < centerAt,
+                "the urgent menu target must compose before viewport tiles nearer the viewport center"
             );
         } finally {
             for (final CountDownLatch release : releaseWorkers) {

@@ -40,8 +40,8 @@ import java.util.function.LongSupplier;
 /**
  * Predicted-underlay twin of {@code core.tile.TileService}: a synchronized dirty-tile queue
  * bounded by an in-flight cap (one per worker outside a visible viewport, a small bounded cap
- * inside one that still picks tiles in top-left row-major order, and user-waited menu-target
- * tiles always first), session-token guarded - same discipline,
+ * inside one that still picks tiles outward from the viewport center, and user-waited
+ * menu-target tiles always first), session-token guarded - same discipline,
  * entirely separate data. Predictions never enter {@code ColumnStore}/{@code
  * RegionDiskCache}; composition here samples cubiomes directly (via {@link NativeBaselineSampler})
  * and shares {@code TileService}'s upload queue through {@link TileService#submitUpload}. Native
@@ -69,7 +69,7 @@ public final class PredictionTileService {
     /**
      * Bounded concurrency while a fullscreen viewport is active. Strict serialization (1) left the
      * predicted underlay trailing the real tile's transparent unexplored pixels during pans, so the
-     * screen background bled through as black gaps; row-major ordering still picks the next tile.
+     * screen background bled through as black gaps; center-out ordering still picks the next tile.
      */
     private static final int VISIBLE_CONCURRENCY = 6;
     private volatile CorrectionStore correctionStore;
@@ -83,7 +83,7 @@ public final class PredictionTileService {
     private final Set<TileKey> inFlight = new HashSet<>();
     /**
      * Guarded by {@code this}: queued tiles a map action is actively waiting on (a right-click
-     * menu target). Dispatched before the viewport row-major order; the flag is consumed by
+     * menu target). Dispatched before the viewport center-out order; the flag is consumed by
      * the composition that finishes the tile.
      */
     private final Set<TileKey> urgent = new HashSet<>();
@@ -106,7 +106,7 @@ public final class PredictionTileService {
     /** Guarded by {@code this}: invalidates compositions started before a manual/session reload. */
     private long reloadGeneration;
 
-    /** Latest fullscreen viewport; visible predictions are scheduled in row-major order. */
+    /** Latest fullscreen viewport; visible predictions are scheduled outward from its center. */
     private ViewportRect viewport;
 
     private volatile int viewpointX;
@@ -987,7 +987,13 @@ public final class PredictionTileService {
         }
     }
 
-    /** Caller must hold the monitor. */
+    /**
+     * Caller must hold the monitor. Dispatch tiers stay strict - 0 = user-waited (menu
+     * target), 1 = visible viewport, 2 = background - and each tier keeps its own order:
+     * menu targets row-major, viewport tiles outward from the viewport center, background
+     * tiles viewpoint-nearest first. Row-major breaks equal-distance ties so the pick never
+     * depends on {@code dirty}'s hash iteration order.
+     */
     private TileKey nearestDirty() {
         final int vx = viewpointX;
         final int vz = viewpointZ;
@@ -1002,26 +1008,32 @@ public final class PredictionTileService {
             // 0 = user-waited (menu target), 1 = visible viewport, 2 = background.
             final int tier = urgent.contains(key) ? 0
                 : activeViewport != null && activeViewport.contains(key) ? 1 : 2;
-            if (best == null || tier < bestTier) {
+            if (tier > bestTier) {
+                continue;
+            }
+            final long dist = tierOrderDistance(key, tier, activeViewport, vx, vz);
+            if (tier < bestTier || dist < bestDist
+                || (dist == bestDist && rowMajorBefore(key, best))) {
                 best = key;
                 bestTier = tier;
-                bestDist = distanceToViewpoint(key, vx, vz);
-                continue;
-            }
-            if (tier != bestTier) {
-                continue;
-            }
-            if (tier == 2) {
-                final long dist = distanceToViewpoint(key, vx, vz);
-                if (dist < bestDist) {
-                    bestDist = dist;
-                    best = key;
-                }
-            } else if (rowMajorBefore(key, best)) {
-                best = key;
+                bestDist = dist;
             }
         }
         return best;
+    }
+
+    /** Ordering key inside one dispatch tier; menu targets keep their plain row-major order. */
+    private static long tierOrderDistance(
+        final TileKey key,
+        final int tier,
+        final ViewportRect viewport,
+        final int vx,
+        final int vz
+    ) {
+        if (tier == 1) {
+            return viewport.centerDistanceSq(key);
+        }
+        return tier == 2 ? distanceToViewpoint(key, vx, vz) : 0L;
     }
 
     private static long distanceToViewpoint(final TileKey key, final int vx, final int vz) {
@@ -1818,6 +1830,17 @@ public final class PredictionTileService {
             }
             return key.tileX() >= minTileX - 1 && key.tileX() <= maxTileX + 1
                 && key.tileZ() >= minTileZ - 1 && key.tileZ() <= maxTileZ + 1;
+        }
+
+        /**
+         * Squared distance between the rect's center and a tile's center, measured on a doubled
+         * tile grid so an odd tile count per axis keeps an exact integer center. Four times the
+         * real squared distance in tile units - ordering only.
+         */
+        long centerDistanceSq(final TileKey key) {
+            final long dx = 2L * key.tileX() - minTileX - maxTileX;
+            final long dz = 2L * key.tileZ() - minTileZ - maxTileZ;
+            return dx * dx + dz * dz;
         }
     }
 }
