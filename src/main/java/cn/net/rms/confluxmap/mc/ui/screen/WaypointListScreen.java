@@ -21,6 +21,7 @@ import cn.net.rms.confluxmap.core.waypoint.SiblingWaypoint;
 import cn.net.rms.confluxmap.core.waypoint.Waypoint;
 import cn.net.rms.confluxmap.core.waypoint.WaypointDimensionFilter;
 import cn.net.rms.confluxmap.core.waypoint.WaypointListFilter;
+import cn.net.rms.confluxmap.core.waypoint.WaypointListGrouping;
 import cn.net.rms.confluxmap.core.waypoint.WaypointRenderEntry;
 import cn.net.rms.confluxmap.core.waypoint.WaypointVerticalRelation;
 import cn.net.rms.confluxmap.core.waypoint.WaypointService;
@@ -99,6 +100,9 @@ public final class WaypointListScreen extends ConfluxScreen {
     private static final int DROPDOWN_MAX_VISIBLE_ROWS = 6;
     private static final int DROPDOWN_SCROLLBAR_WIDTH = 6;
     private static final int DROPDOWN_ACTION_HEIGHT = 22;
+    private static final int SET_MEMBER_INDENT = 10;
+    private static final String COLLAPSED_ARROW = "\u25b8";
+    private static final String EXPANDED_ARROW = "\u25be";
 
     private enum SetDropdown { FILTER, MOVE_TARGET }
 
@@ -189,6 +193,29 @@ public final class WaypointListScreen extends ConfluxScreen {
         }
     }
 
+    /** One set header row of the grouped local list. */
+    private record HeaderRow(String setName, boolean collapsed, int visibleCount, int y) {
+    }
+
+    /** One rendered list row: a set header or a (possibly indented) waypoint row. */
+    private record ListRow(HeaderRow header, RowInfo waypoint, boolean indented) {
+        static ListRow ofHeader(final HeaderRow header) {
+            return new ListRow(header, null, false);
+        }
+
+        static ListRow ofWaypoint(final RowInfo waypoint, final boolean indented) {
+            return new ListRow(null, waypoint, indented);
+        }
+
+        boolean isHeader() {
+            return header != null;
+        }
+
+        int y() {
+            return header != null ? header.y() : waypoint.y();
+        }
+    }
+
     private final GameBridge gameBridge;
     private final WaypointService waypointService;
     private final SharedWaypointClient sharedWaypoints;
@@ -223,7 +250,7 @@ public final class WaypointListScreen extends ConfluxScreen {
     private int moveDropdownX;
     private int moveDropdownY;
     private int moveDropdownWidth;
-    private List<RowInfo> rows = new ArrayList<>();
+    private List<ListRow> rows = new ArrayList<>();
     private int totalRowCount;
     private TextFieldWidget searchField;
     private WaypointRowActionLayout actionLayout;
@@ -380,12 +407,15 @@ public final class WaypointListScreen extends ConfluxScreen {
         final double py = playerView.map(PlayerView::y).orElse(0.0);
         final double pz = playerView.map(PlayerView::z).orElse(0.0);
 
-        final List<RowInfo> sorted = buildRows(currentDimension, px, py, pz);
-        sorted.removeIf(row -> !matchesSearch(row, observedSearch));
-        totalRowCount = sorted.size();
-        sorted.sort((a, b) -> Double.compare(a.distance(), b.distance()));
+        final List<RowInfo> candidates = buildRows(currentDimension, px, py, pz);
+        candidates.removeIf(row -> !matchesSearch(row, observedSearch));
+        final List<ListRow> model = buildListModel(store, candidates);
+        totalRowCount = model.size();
         filteredLocalIds = tab == Tab.LOCAL
-            ? sorted.stream().filter(row -> row.local() != null).map(RowInfo::id).toList()
+            ? model.stream()
+                .filter(row -> !row.isHeader() && row.waypoint().local() != null)
+                .map(row -> row.waypoint().id())
+                .toList()
             : List.of();
         if (tab == Tab.LOCAL) {
             selectedWaypointIds.retainAll(filteredLocalIds);
@@ -401,22 +431,78 @@ public final class WaypointListScreen extends ConfluxScreen {
 
         final int bottom = height - BOTTOM_MARGIN;
         final int visibleRowCount = Math.max(1, (bottom - listTop()) / ROW_HEIGHT);
-        scrollOffset = MathHelper.clamp(scrollOffset, 0, Math.max(0, sorted.size() - visibleRowCount));
+        scrollOffset = MathHelper.clamp(scrollOffset, 0, Math.max(0, model.size() - visibleRowCount));
 
-        final int end = Math.min(sorted.size(), scrollOffset + visibleRowCount);
+        final int end = Math.min(model.size(), scrollOffset + visibleRowCount);
         for (int i = scrollOffset; i < end; i++) {
-            final RowInfo source = sorted.get(i);
+            final ListRow source = model.get(i);
+            final int rowY = listTop() + (i - scrollOffset) * ROW_HEIGHT;
+            if (source.isHeader()) {
+                final HeaderRow header = source.header();
+                rows.add(ListRow.ofHeader(new HeaderRow(
+                    header.setName(), header.collapsed(), header.visibleCount(), rowY
+                )));
+                continue;
+            }
+            final RowInfo info = source.waypoint();
             final RowInfo row = new RowInfo(
-                source.local(), source.shared(), source.sibling(),
-                listTop() + (i - scrollOffset) * ROW_HEIGHT,
-                source.distance(), source.dimensionText(), source.crossDimensionVisible()
+                info.local(), info.shared(), info.sibling(),
+                rowY,
+                info.distance(), info.dimensionText(), info.crossDimensionVisible()
             );
-            rows.add(row);
-            addRowWidgets(row, store);
+            rows.add(ListRow.ofWaypoint(row, source.indented()));
+            addRowWidgets(row, store, source.indented());
         }
 
         addBottomButtons(store);
         snapshotObservedState(store);
+    }
+
+    /**
+     * Orders the search-filtered rows for the local tab: local waypoints grouped
+     * under collapsible set headers (core grouping, encounter order = distance
+     * order within a set), then read-only cross-world guest rows as a flat
+     * distance-sorted tail - they belong to another world's sets, not this
+     * store's. The public tab stays a flat distance-sorted list.
+     */
+    private List<ListRow> buildListModel(final WaypointStore store, final List<RowInfo> candidates) {
+        final List<ListRow> model = new ArrayList<>();
+        if (tab != Tab.LOCAL) {
+            candidates.sort((a, b) -> Double.compare(a.distance(), b.distance()));
+            for (final RowInfo row : candidates) {
+                model.add(ListRow.ofWaypoint(row, false));
+            }
+            return model;
+        }
+        final List<RowInfo> localRows = new ArrayList<>();
+        final List<RowInfo> siblingRows = new ArrayList<>();
+        for (final RowInfo row : candidates) {
+            (row.local() != null ? localRows : siblingRows).add(row);
+        }
+        localRows.sort((a, b) -> Double.compare(a.distance(), b.distance()));
+        siblingRows.sort((a, b) -> Double.compare(a.distance(), b.distance()));
+        // While a search is active the persisted fold state is suspended, so matches
+        // inside folded sets stay visible; the headers still report the persisted flag.
+        final List<WaypointSet> sets = store == null ? List.of() : store.sets();
+        for (final WaypointListGrouping.Entry<RowInfo> entry
+            : WaypointListGrouping.group(sets, localRows, row -> row.local().group, isSearchActive())) {
+            if (entry instanceof WaypointListGrouping.SetHeader<?> header) {
+                model.add(ListRow.ofHeader(new HeaderRow(
+                    header.setName(), header.collapsed(), header.visibleCount(), 0
+                )));
+            } else if (entry instanceof WaypointListGrouping.Member<?> member) {
+                @SuppressWarnings("unchecked") final RowInfo row = (RowInfo) member.row();
+                model.add(ListRow.ofWaypoint(row, true));
+            }
+        }
+        for (final RowInfo row : siblingRows) {
+            model.add(ListRow.ofWaypoint(row, false));
+        }
+        return model;
+    }
+
+    private boolean isSearchActive() {
+        return !observedSearch.trim().isEmpty();
     }
 
     private static boolean matchesSearch(final RowInfo row, final String query) {
@@ -841,15 +927,16 @@ public final class WaypointListScreen extends ConfluxScreen {
         return result;
     }
 
-    private void addRowWidgets(final RowInfo row, final WaypointStore renderedStore) {
+    private void addRowWidgets(final RowInfo row, final WaypointStore renderedStore, final boolean indented) {
         final int selectionY = row.y() + 3;
         final int actionY = selectionY;
         final WaypointRowActionLayout actions = rowActionLayout();
+        final int leftInset = indented ? SET_MEMBER_INDENT : 0;
 
         if (row.local() != null) {
             final Waypoint waypoint = row.local();
             final ButtonWidget selected = addDrawableChild(Widgets.button(
-                contentLeft() + ROW_PADDING,
+                contentLeft() + ROW_PADDING + leftInset,
                 selectionY,
                 CHECK_WIDTH,
                 20,
@@ -1096,6 +1183,15 @@ public final class WaypointListScreen extends ConfluxScreen {
             this,
             waypoint
         ));
+    }
+
+    /** Folds or unfolds one set; the store persists the state with the world's waypoint file. */
+    private void toggleSetCollapsed(final WaypointStore store, final HeaderRow header) {
+        if (store == null || store != waypointService.current()) {
+            return;
+        }
+        store.setCollapsed(header.setName(), !header.collapsed());
+        rebuild();
     }
 
     private void toggleVisible(final WaypointStore renderedStore, final Waypoint waypoint) {
@@ -1508,6 +1604,16 @@ public final class WaypointListScreen extends ConfluxScreen {
                 closeSetDropdown();
             }
         }
+        if (button == MouseButtons.LEFT) {
+            for (final ListRow row : rows) {
+                if (row.isHeader()
+                    && mouseX >= contentLeft() && mouseX <= contentRight()
+                    && mouseY >= row.y() && mouseY < row.y() + ROW_HEIGHT) {
+                    toggleSetCollapsed(store, row.header());
+                    return true;
+                }
+            }
+        }
         //#if MC>=12109
         //$$ if (super.mouseClicked(click, doubledClick)) {
         //#else
@@ -1729,43 +1835,49 @@ public final class WaypointListScreen extends ConfluxScreen {
         );
 
         final boolean compact = compactRows();
-        for (final RowInfo row : rows) {
+        final boolean searchActive = isSearchActive();
+        for (final ListRow row : rows) {
             final boolean hovered = mouseX >= contentLeft() && mouseX <= contentRight()
                 && mouseY >= row.y() && mouseY < row.y() + ROW_HEIGHT;
+            if (row.isHeader()) {
+                renderHeaderRow(draw, matrices, row.header(), hovered, searchActive);
+                continue;
+            }
+            final RowInfo info = row.waypoint();
             RenderUtil.fillRect(
                 matrices,
                 contentLeft(),
-                row.y() + 1,
+                info.y() + 1,
                 contentWidth(),
                 ROW_HEIGHT - 2,
                 hovered ? 0x55333333 : 0x33202020
             );
-            final int markerLeft = markerX();
+            final int markerLeft = markerX(row.indented());
             WaypointMarkerRenderer.draw(
                 draw,
                 this.textRenderer,
-                row.renderEntry(),
+                info.renderEntry(),
                 markerLeft + MARKER_SIZE / 2f,
-                row.y() + 13f,
+                info.y() + 13f,
                 MARKER_SIZE / 2f - 1f,
                 1f,
                 hovered,
                 WaypointVerticalRelation.NONE
             );
-            final int maxNameWidth = Math.max(24, nameRight() - nameX());
-            final String name = this.textRenderer.trimToWidth(row.name(), maxNameWidth);
-            draw.drawTextWithShadow(this.textRenderer, name, nameX(), row.y() + 4, 0xFFFFFFFF);
-            final String secondary = this.textRenderer.trimToWidth(row.secondaryText(), maxNameWidth);
-            draw.drawTextWithShadow(this.textRenderer, secondary, nameX(), row.y() + 15, 0xFFAAAAAA);
+            final int maxNameWidth = Math.max(24, nameRight() - nameX(row.indented()));
+            final String name = this.textRenderer.trimToWidth(info.name(), maxNameWidth);
+            draw.drawTextWithShadow(this.textRenderer, name, nameX(row.indented()), info.y() + 4, 0xFFFFFFFF);
+            final String secondary = this.textRenderer.trimToWidth(info.secondaryText(), maxNameWidth);
+            draw.drawTextWithShadow(this.textRenderer, secondary, nameX(row.indented()), info.y() + 15, 0xFFAAAAAA);
             if (!compact) {
-                final String distance = this.textRenderer.trimToWidth(formatDistance(row.distance()), DIST_WIDTH);
-                draw.drawTextWithShadow(this.textRenderer, distance, distanceX(), row.y() + 10, 0xFFCCCCCC);
+                final String distance = this.textRenderer.trimToWidth(formatDistance(info.distance()), DIST_WIDTH);
+                draw.drawTextWithShadow(this.textRenderer, distance, distanceX(), info.y() + 10, 0xFFCCCCCC);
                 //#if MC>=260100
-                //$$ final String dimension = this.font.plainSubstrByWidth(row.dimensionText(), DIM_WIDTH);
+                //$$ final String dimension = this.font.plainSubstrByWidth(info.dimensionText(), DIM_WIDTH);
                 //#else
-                final String dimension = this.textRenderer.trimToWidth(row.dimensionText(), DIM_WIDTH);
+                final String dimension = this.textRenderer.trimToWidth(info.dimensionText(), DIM_WIDTH);
                 //#endif
-                draw.drawTextWithShadow(this.textRenderer, dimension, dimensionX(), row.y() + 10, 0xFFCCCCCC);
+                draw.drawTextWithShadow(this.textRenderer, dimension, dimensionX(), info.y() + 10, 0xFFCCCCCC);
             }
         }
         if (rows.isEmpty()) {
@@ -1797,6 +1909,44 @@ public final class WaypointListScreen extends ConfluxScreen {
             );
         }
 
+    }
+
+    /**
+     * Header rows carry the whole row's click target (see mouseClicked): set
+     * name flush left, member count right-aligned, arrow reflecting the
+     * effective state - a search keeps folded sets expanded, so the arrow must
+     * not claim folded while their members are on screen.
+     */
+    private void renderHeaderRow(
+        final GuiDraw draw,
+        final MatrixStack matrices,
+        final HeaderRow header,
+        final boolean hovered,
+        final boolean searchActive
+    ) {
+        RenderUtil.fillRect(
+            matrices,
+            contentLeft(),
+            header.y() + 1,
+            contentWidth(),
+            ROW_HEIGHT - 2,
+            hovered ? 0x66333333 : 0x44282828
+        );
+        final boolean effectivelyCollapsed = header.collapsed() && !searchActive;
+        final String arrow = effectivelyCollapsed ? COLLAPSED_ARROW : EXPANDED_ARROW;
+        final int arrowX = contentLeft() + ROW_PADDING;
+        draw.drawTextWithShadow(this.textRenderer, arrow, arrowX, header.y() + 10, 0xFFCCCCCC);
+        final String count = Integer.toString(header.visibleCount());
+        final int countWidth = this.textRenderer.getWidth(count);
+        draw.drawTextWithShadow(
+            this.textRenderer, count, contentRight() - ROW_PADDING - countWidth, header.y() + 10, 0xFFAAAAAA
+        );
+        final int nameX = arrowX + this.textRenderer.getWidth(EXPANDED_ARROW) + GAP;
+        final String label = this.textRenderer.trimToWidth(
+            setDisplayName(header.setName()),
+            Math.max(24, contentRight() - ROW_PADDING - countWidth - GAP - nameX)
+        );
+        draw.drawTextWithShadow(this.textRenderer, label, nameX, header.y() + 10, 0xFFE0E0E0);
     }
 
     @Override
@@ -2174,13 +2324,13 @@ public final class WaypointListScreen extends ConfluxScreen {
         return dimensionX() - GAP - DIST_WIDTH;
     }
 
-    private int markerX() {
+    private int markerX(final boolean indented) {
         final int selectionWidth = tab == Tab.LOCAL ? CHECK_WIDTH + GAP : 0;
-        return contentLeft() + ROW_PADDING + selectionWidth;
+        return contentLeft() + ROW_PADDING + (indented ? SET_MEMBER_INDENT : 0) + selectionWidth;
     }
 
-    private int nameX() {
-        return markerX() + MARKER_SIZE + GAP;
+    private int nameX(final boolean indented) {
+        return markerX(indented) + MARKER_SIZE + GAP;
     }
 
     private int nameRight() {

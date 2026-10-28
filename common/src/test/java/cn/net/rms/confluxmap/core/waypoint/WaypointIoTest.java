@@ -49,6 +49,39 @@ class WaypointIoTest {
     }
 
     @Test
+    void roundTripsCollapsedStateIncludingTheDefaultSet(@TempDir final Path tempDir) throws IOException {
+        final Path file = tempDir.resolve("collapsed.json");
+        final Waypoint unassigned = Waypoint.create(
+            "Home", DimensionId.OVERWORLD, 1.0, 64.0, 2.0,
+            0xFF336699, "", Waypoint.Type.NORMAL
+        );
+        final Waypoint base = Waypoint.create(
+            "Base", DimensionId.OVERWORLD, 3.0, 64.0, 4.0,
+            0xFF336699, "Bases", Waypoint.Type.NORMAL
+        );
+        final Waypoint travel = Waypoint.create(
+            "Trip", DimensionId.OVERWORLD, 5.0, 64.0, 6.0,
+            0xFF336699, "Travel", Waypoint.Type.NORMAL
+        );
+        final WaypointStore.State state = new WaypointStore.State(
+            List.of(new WaypointSet("", true), new WaypointSet("Bases", true), new WaypointSet("Travel")),
+            List.of(unassigned, base, travel)
+        );
+
+        WaypointIo.save(file, state, LOGGER);
+        final WaypointStore.State loaded = WaypointIo.loadState(file, LOGGER);
+
+        assertEquals(
+            List.of(new WaypointSet("", true), new WaypointSet("Bases", true), new WaypointSet("Travel")),
+            loaded.sets()
+        );
+        // Only folded collections need the empty-name entry, so unfolded default sets
+        // keep the pre-collapse on-disk shape.
+        final String json = Files.readString(file);
+        assertEquals(1, json.split("\"name\": \"\"", -1).length - 1);
+    }
+
+    @Test
     void roundTripsCrossDimensionYAndOmitsItWhenUnset(@TempDir final Path tempDir) throws IOException {
         final Path file = tempDir.resolve("cross-dimension-y.json");
         final Waypoint overridden = Waypoint.create(

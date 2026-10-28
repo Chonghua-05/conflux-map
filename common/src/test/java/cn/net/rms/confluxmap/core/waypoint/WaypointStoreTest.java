@@ -151,6 +151,35 @@ class WaypointStoreTest {
     }
 
     @Test
+    void setCollapsedNotifiesOncePersistsThroughStateAndSurvivesRename() {
+        final Waypoint home = waypoint("Home", "Bases", 1.0);
+        final WaypointStore store = new WaypointStore(WORLD, List.of(home));
+        final AtomicInteger notifications = new AtomicInteger();
+        store.addListener(ignored -> notifications.incrementAndGet());
+
+        assertEquals(WaypointStore.MutationResult.SET_NOT_FOUND, store.setCollapsed("Missing", true));
+        assertEquals(WaypointStore.MutationResult.SET_NOT_FOUND, store.setCollapsed(null, true));
+        assertEquals(WaypointStore.MutationResult.NO_CHANGE, store.setCollapsed("Bases", false));
+        assertEquals(0, notifications.get());
+
+        assertEquals(WaypointStore.MutationResult.APPLIED, store.setCollapsed("Bases", true));
+        assertEquals(WaypointStore.MutationResult.APPLIED, store.setCollapsed(WaypointSet.DEFAULT_NAME, true));
+
+        assertEquals(2, notifications.get());
+        assertEquals(
+            List.of(new WaypointSet("", true), new WaypointSet("Bases", true)),
+            store.state().sets()
+        );
+
+        assertEquals(WaypointStore.MutationResult.APPLIED, store.renameSet("Bases", "Mining"));
+
+        assertEquals(
+            List.of(new WaypointSet("", true), new WaypointSet("Mining", true)),
+            store.sets()
+        );
+    }
+
+    @Test
     void readOnlyFutureSchemaStateRejectsEveryMutation() {
         final Waypoint original = waypoint("Original", "", 1.0);
         final WaypointStore store = new WaypointStore(
@@ -166,6 +195,7 @@ class WaypointStoreTest {
         assertEquals(WaypointStore.MutationResult.READ_ONLY, store.createSet("Other"));
         assertEquals(WaypointStore.MutationResult.READ_ONLY, store.renameSet("Missing", "Other"));
         assertEquals(WaypointStore.MutationResult.READ_ONLY, store.deleteSet("Missing").result());
+        assertEquals(WaypointStore.MutationResult.READ_ONLY, store.setCollapsed(WaypointSet.DEFAULT_NAME, true));
         assertEquals(
             WaypointStore.MutationResult.READ_ONLY,
             store.moveToSet(List.of(original.id), WaypointSet.DEFAULT_NAME).result()

@@ -59,7 +59,14 @@ public final class WaypointStore {
             if (sets != null) {
                 for (final WaypointSet set : sets) {
                     if (set != null) {
-                        normalizedSets.putIfAbsent(set.name(), set);
+                        // Replacing (not putIfAbsent) keeps a folded default collection's
+                        // state; LinkedHashMap.put preserves the first-insertion slot, so
+                        // the default collection still leads the iteration order.
+                        if (set.isDefault() && set.collapsed()) {
+                            normalizedSets.put(set.name(), set);
+                        } else {
+                            normalizedSets.putIfAbsent(set.name(), set);
+                        }
                     }
                 }
             }
@@ -278,7 +285,7 @@ public final class WaypointStore {
         final Map<String, WaypointSet> renamed = new LinkedHashMap<>();
         for (final WaypointSet set : setsByName.values()) {
             if (set.name().equals(currentName)) {
-                renamed.put(newName, new WaypointSet(newName));
+                renamed.put(newName, new WaypointSet(newName, set.collapsed()));
             } else {
                 renamed.put(set.name(), set);
             }
@@ -311,6 +318,27 @@ public final class WaypointStore {
         final int deletedWaypoints = oldSize - byId.size();
         notifyListeners();
         return new DeleteSetResult(MutationResult.APPLIED, deletedWaypoints);
+    }
+
+    /**
+     * Folds or unfolds one collection in the management list. Metadata-only
+     * mutation that still fires listeners, matching {@link #createSet}, so the
+     * collapse state persists with the world's waypoint file.
+     */
+    public MutationResult setCollapsed(final String setName, final boolean collapsed) {
+        if (!persistenceWritable) {
+            return MutationResult.READ_ONLY;
+        }
+        final WaypointSet set = setName == null ? null : setsByName.get(setName);
+        if (set == null) {
+            return MutationResult.SET_NOT_FOUND;
+        }
+        if (set.collapsed() == collapsed) {
+            return MutationResult.NO_CHANGE;
+        }
+        setsByName.put(setName, new WaypointSet(setName, collapsed));
+        notifyListeners();
+        return MutationResult.APPLIED;
     }
 
     public MutationResult assignToSet(final UUID waypointId, final String setName) {
