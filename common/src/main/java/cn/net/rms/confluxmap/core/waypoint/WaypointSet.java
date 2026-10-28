@@ -11,14 +11,22 @@ import java.util.Objects;
  * the existing free-text {@code group} field. {@link WaypointStore} performs
  * rename/delete operations across both the collection metadata and member
  * waypoints so those two representations cannot drift.
+ *
+ * @param collapsed whether the management list shows this collection folded
+ *                  down to its header row; UI state, but persisted with the
+ *                  set because collections are world-scoped
  */
-public record WaypointSet(String name) {
+public record WaypointSet(String name, boolean collapsed) {
     public static final int MAX_NAME_LENGTH = 32;
     public static final String DEFAULT_NAME = "";
     public static final WaypointSet DEFAULT = new WaypointSet(DEFAULT_NAME);
 
     public WaypointSet {
         Objects.requireNonNull(name, "name");
+    }
+
+    public WaypointSet(final String name) {
+        this(name, false);
     }
 
     public boolean isDefault() {
