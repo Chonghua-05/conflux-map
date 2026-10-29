@@ -42,15 +42,27 @@ class SharedWaypointCodecTest {
             ),
             new DeleteC2S(OPERATION_ID, WAYPOINT_ID, 40L),
             new LockC2S(OPERATION_ID, WAYPOINT_ID, 40L, true),
+            new CreateC2S(
+                OPERATION_ID, 41L, "Village", DimensionId.NETHER, 1.25, -64.0, 99.5,
+                0xFF12AB34, Waypoint.Type.NORMAL, "minecraft:diamond", "V", GROUP_ID
+            ),
             new UpdateC2S(
                 OPERATION_ID, WAYPOINT_ID, 40L, "Updated", DimensionId.END,
-                8d, 70d, 9d, 0xFF3498DB, Waypoint.Type.NORMAL
+                8d, 70d, 9d, 0xFF3498DB, Waypoint.Type.NORMAL, "minecraft:diamond", "V", GROUP_ID, true
+            ),
+            new UpdateC2S(
+                OPERATION_ID, WAYPOINT_ID, 40L, "Updated", DimensionId.END,
+                8d, 70d, 9d, 0xFF3498DB, Waypoint.Type.NORMAL, "minecraft:diamond", "V", null, true
             ),
             new GroupCreateC2S(OPERATION_ID, 41L, "Villages"),
             new GroupRenameC2S(OPERATION_ID, 3L, GROUP_ID, "Farms"),
             new GroupDeleteC2S(OPERATION_ID, 3L, GROUP_ID),
             new SetWaypointGroupC2S(OPERATION_ID, WAYPOINT_ID, 40L, GROUP_ID),
             new SetWaypointGroupC2S(OPERATION_ID, WAYPOINT_ID, 40L, null),
+            new MoveBatchC2S(OPERATION_ID, 41L, List.of(
+                new MoveBatchC2S.Entry(WAYPOINT_ID, 40L, GROUP_ID),
+                new MoveBatchC2S.Entry(PUBLISHER_ID, 39L, null)
+            )),
             new SnapshotS2C(42L, true, List.of(waypoint)),
             new UpsertS2C(42L, waypoint),
             new RemoveS2C(43L, WAYPOINT_ID),
@@ -126,6 +138,66 @@ class SharedWaypointCodecTest {
         assertEquals(
             upsert,
             SharedWaypointCodec.decodeS2C(SharedWaypointCodec.encode(upsert, 3), 3)
+        );
+    }
+
+    @Test
+    void batchMovesAndGroupAssignmentRequireNegotiatedMinorSix() throws Exception {
+        final MoveBatchC2S batch = new MoveBatchC2S(OPERATION_ID, 41L, List.of(
+            new MoveBatchC2S.Entry(WAYPOINT_ID, 40L, GROUP_ID)
+        ));
+        assertThrows(
+            SharedWaypointProtocolException.class,
+            () -> SharedWaypointCodec.encode(batch, SharedWaypointProto.PROTO_MINOR_BATCH_MOVE - 1)
+        );
+        assertThrows(
+            SharedWaypointProtocolException.class,
+            () -> SharedWaypointCodec.decodeC2S(
+                SharedWaypointCodec.encode(batch), SharedWaypointProto.PROTO_MINOR_BATCH_MOVE - 1
+            )
+        );
+        assertEquals(
+            batch,
+            SharedWaypointCodec.decodeC2S(SharedWaypointCodec.encode(batch))
+        );
+
+        final CreateC2S groupedCreate = new CreateC2S(
+            OPERATION_ID, 41L, "Village", DimensionId.OVERWORLD, 1, 2, 3,
+            0xFF12AB34, Waypoint.Type.NORMAL, "", "", GROUP_ID
+        );
+        assertThrows(
+            SharedWaypointProtocolException.class,
+            () -> SharedWaypointCodec.encode(groupedCreate, SharedWaypointProto.PROTO_MINOR_BATCH_MOVE - 1)
+        );
+
+        final UpdateC2S unspecifiedUpdate = new UpdateC2S(
+            OPERATION_ID, WAYPOINT_ID, 40L, "Updated", DimensionId.OVERWORLD,
+            8d, 70d, 9d, 0xFF3498DB, Waypoint.Type.NORMAL, "", ""
+        );
+        assertThrows(
+            SharedWaypointProtocolException.class,
+            () -> SharedWaypointCodec.encode(unspecifiedUpdate, SharedWaypointProto.PROTO_MINOR_BATCH_MOVE)
+        );
+        // Below minor 6 the same message keeps its legacy wire shape with no group bytes.
+        assertEquals(
+            unspecifiedUpdate,
+            SharedWaypointCodec.decodeC2S(
+                SharedWaypointCodec.encode(unspecifiedUpdate, SharedWaypointProto.PROTO_MINOR_BATCH_MOVE - 1),
+                SharedWaypointProto.PROTO_MINOR_BATCH_MOVE - 1
+            )
+        );
+    }
+
+    @Test
+    void batchEntryCountIsCappedOnTheWire() {
+        final List<MoveBatchC2S.Entry> entries = new ArrayList<>();
+        for (int i = 0; i < SharedWaypointProto.MAX_BATCH_MOVE_ENTRIES + 1; i++) {
+            entries.add(new MoveBatchC2S.Entry(UUID.randomUUID(), i, null));
+        }
+        final MoveBatchC2S oversized = new MoveBatchC2S(OPERATION_ID, 0L, entries);
+        assertThrows(
+            SharedWaypointProtocolException.class,
+            () -> SharedWaypointCodec.encode(oversized)
         );
     }
 
@@ -447,7 +519,8 @@ class SharedWaypointCodecTest {
             || message instanceof GroupCreateC2S
             || message instanceof GroupRenameC2S
             || message instanceof GroupDeleteC2S
-            || message instanceof SetWaypointGroupC2S) {
+            || message instanceof SetWaypointGroupC2S
+            || message instanceof MoveBatchC2S) {
             return SharedWaypointCodec.decodeC2S(payload);
         }
         return SharedWaypointCodec.decodeS2C(payload);
@@ -464,7 +537,7 @@ class SharedWaypointCodecTest {
             new LockC2S(OPERATION_ID, WAYPOINT_ID, 8, true),
             new UpdateC2S(
                 OPERATION_ID, WAYPOINT_ID, 8, "updated", DimensionId.END,
-                1, 2, 3, 4, Waypoint.Type.DEATH
+                1, 2, 3, 4, Waypoint.Type.DEATH, "", "", GROUP_ID, true
             ),
             new SnapshotS2C(9, true, List.of(waypoint)),
             new UpsertS2C(9, waypoint),

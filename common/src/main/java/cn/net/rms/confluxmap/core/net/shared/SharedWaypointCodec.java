@@ -81,6 +81,7 @@ public final class SharedWaypointCodec {
                 out.writeInt(m.color());
                 writeWaypointType(out, m.type());
                 writeMarkerStyle(out, negotiatedMinor, m.iconItemId(), m.markerLabel());
+                writeNewWaypointGroup(out, negotiatedMinor, m.groupId());
             } else if (message instanceof final DeleteC2S m) {
                 s2c = false;
                 out.writeByte(SharedWaypointProto.MSG_DELETE_C2S);
@@ -106,6 +107,7 @@ public final class SharedWaypointCodec {
                 out.writeInt(m.color());
                 writeWaypointType(out, m.type());
                 writeMarkerStyle(out, negotiatedMinor, m.iconItemId(), m.markerLabel());
+                writeUpdatedWaypointGroup(out, negotiatedMinor, m.groupId(), m.groupSpecified());
             } else if (message instanceof final GroupCreateC2S m) {
                 s2c = false;
                 requireGroupMutationSupport(negotiatedMinor);
@@ -138,6 +140,28 @@ public final class SharedWaypointCodec {
                 writeBoolean(out, m.groupId() != null);
                 if (m.groupId() != null) {
                     writeUuid(out, m.groupId());
+                }
+            } else if (message instanceof final MoveBatchC2S m) {
+                s2c = false;
+                requireBatchMoveSupport(negotiatedMinor);
+                out.writeByte(SharedWaypointProto.MSG_MOVE_BATCH_C2S);
+                writeUuid(out, m.operationId());
+                out.writeLong(m.expectedRevision());
+                if (m.entries().isEmpty()
+                    || m.entries().size() > SharedWaypointProto.MAX_BATCH_MOVE_ENTRIES) {
+                    throw new SharedWaypointProtocolException(
+                        "batch move entry count " + m.entries().size() + " outside 1.."
+                            + SharedWaypointProto.MAX_BATCH_MOVE_ENTRIES
+                    );
+                }
+                out.writeShort(m.entries().size());
+                for (final MoveBatchC2S.Entry entry : m.entries()) {
+                    writeUuid(out, entry.waypointId());
+                    out.writeLong(entry.expectedWaypointRevision());
+                    writeBoolean(out, entry.groupId() != null);
+                    if (entry.groupId() != null) {
+                        writeUuid(out, entry.groupId());
+                    }
                 }
             } else if (message instanceof final SnapshotS2C m) {
                 s2c = true;
@@ -261,7 +285,8 @@ public final class SharedWaypointCodec {
                     in.readInt(),
                     readWaypointType(in),
                     readIconItemId(in, negotiatedMinor),
-                    readMarkerLabel(in, negotiatedMinor)
+                    readMarkerLabel(in, negotiatedMinor),
+                    readNewWaypointGroup(in, negotiatedMinor)
                 );
                 case SharedWaypointProto.MSG_DELETE_C2S -> new DeleteC2S(
                     readUuid(in), readUuid(in), in.readLong()
@@ -273,7 +298,9 @@ public final class SharedWaypointCodec {
                     readUuid(in), readUuid(in), in.readLong(), readUtf(in, "name"),
                     readDimension(in), readFiniteDouble(in, "x"), readFiniteDouble(in, "y"),
                     readFiniteDouble(in, "z"), in.readInt(), readWaypointType(in),
-                    readIconItemId(in, negotiatedMinor), readMarkerLabel(in, negotiatedMinor)
+                    readIconItemId(in, negotiatedMinor), readMarkerLabel(in, negotiatedMinor),
+                    readUpdatedWaypointGroup(in, negotiatedMinor), negotiatedMinor
+                        >= SharedWaypointProto.PROTO_MINOR_BATCH_MOVE
                 );
                 case SharedWaypointProto.MSG_SNAPSHOT_S2C -> new SnapshotS2C(
                     in.readLong(), readBoolean(in, "operator"), readSnapshot(in, negotiatedMinor),
@@ -311,6 +338,10 @@ public final class SharedWaypointCodec {
                         readUuid(in), readUuid(in), in.readLong(),
                         readBoolean(in, "hasGroup") ? readUuid(in) : null
                     );
+                }
+                case SharedWaypointProto.MSG_MOVE_BATCH_C2S -> {
+                    requireBatchMoveSupport(negotiatedMinor);
+                    yield readMoveBatch(in);
                 }
                 case SharedWaypointProto.MSG_RESULT_S2C -> new ResultS2C(
                     readUuid(in), in.readInt(), in.readInt()
@@ -541,6 +572,93 @@ public final class SharedWaypointCodec {
         }
     }
 
+    private static void requireBatchMoveSupport(final int negotiatedMinor)
+        throws SharedWaypointProtocolException {
+        if (negotiatedMinor < SharedWaypointProto.PROTO_MINOR_BATCH_MOVE) {
+            throw new SharedWaypointProtocolException(
+                "shared-waypoint batch moves require negotiated minor >= "
+                    + SharedWaypointProto.PROTO_MINOR_BATCH_MOVE + ", got " + negotiatedMinor
+            );
+        }
+    }
+
+    /**
+     * Creation-time group field, wire minor 6+: always explicit (null = ungroup).
+     * Encoding a group at a lower minor would silently drop it, so refuse instead.
+     */
+    private static void writeNewWaypointGroup(
+        final DataOutputStream out,
+        final int negotiatedMinor,
+        final UUID groupId
+    ) throws IOException, SharedWaypointProtocolException {
+        if (negotiatedMinor < SharedWaypointProto.PROTO_MINOR_BATCH_MOVE) {
+            if (groupId != null) {
+                throw new SharedWaypointProtocolException(
+                    "create group assignment requires negotiated minor >= "
+                        + SharedWaypointProto.PROTO_MINOR_BATCH_MOVE
+                );
+            }
+            return;
+        }
+        writeBoolean(out, groupId != null);
+        if (groupId != null) {
+            writeUuid(out, groupId);
+        }
+    }
+
+    private static UUID readNewWaypointGroup(final DataInputStream in, final int negotiatedMinor)
+        throws IOException, SharedWaypointProtocolException {
+        if (negotiatedMinor < SharedWaypointProto.PROTO_MINOR_BATCH_MOVE) {
+            return null;
+        }
+        return readBoolean(in, "hasGroup") ? readUuid(in) : null;
+    }
+
+    /** Update-time group field: an explicit target on minor 6+, absent below. */
+    private static void writeUpdatedWaypointGroup(
+        final DataOutputStream out,
+        final int negotiatedMinor,
+        final UUID groupId,
+        final boolean groupSpecified
+    ) throws IOException, SharedWaypointProtocolException {
+        if (!groupSpecified) {
+            if (negotiatedMinor >= SharedWaypointProto.PROTO_MINOR_BATCH_MOVE) {
+                throw new SharedWaypointProtocolException(
+                    "minor 6+ update encodings must carry an explicit group selection"
+                );
+            }
+            return;
+        }
+        writeNewWaypointGroup(out, negotiatedMinor, groupId);
+    }
+
+    private static UUID readUpdatedWaypointGroup(final DataInputStream in, final int negotiatedMinor)
+        throws IOException, SharedWaypointProtocolException {
+        return readNewWaypointGroup(in, negotiatedMinor);
+    }
+
+    private static MoveBatchC2S readMoveBatch(final DataInputStream in)
+        throws IOException, SharedWaypointProtocolException {
+        final UUID operationId = readUuid(in);
+        final long expectedRevision = in.readLong();
+        final int count = in.readUnsignedShort();
+        if (count < 1 || count > SharedWaypointProto.MAX_BATCH_MOVE_ENTRIES) {
+            throw new SharedWaypointProtocolException(
+                "batch move entry count " + count + " outside 1.."
+                    + SharedWaypointProto.MAX_BATCH_MOVE_ENTRIES
+            );
+        }
+        final List<MoveBatchC2S.Entry> entries = new ArrayList<>(count);
+        for (int i = 0; i < count; i++) {
+            entries.add(new MoveBatchC2S.Entry(
+                readUuid(in),
+                in.readLong(),
+                readBoolean(in, "hasGroup") ? readUuid(in) : null
+            ));
+        }
+        return new MoveBatchC2S(operationId, expectedRevision, entries);
+    }
+
     private static void writeMarkerStyle(
         final DataOutputStream out,
         final int negotiatedMinor,
@@ -710,7 +828,7 @@ public final class SharedWaypointCodec {
 
     private static boolean isKnownType(final int typeId) {
         return typeId >= SharedWaypointProto.MSG_HELLO_C2S
-            && typeId <= SharedWaypointProto.MSG_SET_GROUP_C2S;
+            && typeId <= SharedWaypointProto.MSG_MOVE_BATCH_C2S;
     }
 
     private static boolean isS2C(final int typeId) {

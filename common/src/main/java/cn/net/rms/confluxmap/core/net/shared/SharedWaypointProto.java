@@ -7,9 +7,11 @@ public final class SharedWaypointProto {
 
     public static final String CHANNEL_ID = "confluxmap:waypoints_v1";
     public static final int PROTO_MAJOR = 1;
-    public static final int PROTO_MINOR = 5;
+    public static final int PROTO_MINOR = 6;
     /** First wire minor carrying client-originated group mutations. */
     public static final int PROTO_MINOR_GROUP_MUTATIONS = 5;
+    /** First wire minor carrying atomic batch group moves and create/update group assignment. */
+    public static final int PROTO_MINOR_BATCH_MOVE = 6;
 
     public static final int MSG_HELLO_C2S = 0x01;
     public static final int MSG_STATUS_S2C = 0x02;
@@ -28,12 +30,15 @@ public final class SharedWaypointProto {
     public static final int MSG_GROUP_RENAME_C2S = 0x0F;
     public static final int MSG_GROUP_DELETE_C2S = 0x10;
     public static final int MSG_SET_GROUP_C2S = 0x11;
+    public static final int MSG_MOVE_BATCH_C2S = 0x12;
 
     public static final int MAX_C2S_PAYLOAD = 8 * 1024;
     public static final int MAX_S2C_PAYLOAD = 1 << 20;
     public static final int MAX_UTF8_BYTES = 256;
     public static final int MAX_SNAPSHOT_WAYPOINTS = 512;
     public static final int MAX_SNAPSHOT_GROUPS = 64;
+    /** Batch entries: 2 uuids + revision + flag fits 128 entries inside the C2S cap. */
+    public static final int MAX_BATCH_MOVE_ENTRIES = 128;
 
     public static final int RESULT_STATUS_APPLIED = 0;
     public static final int RESULT_STATUS_REJECTED = 1;

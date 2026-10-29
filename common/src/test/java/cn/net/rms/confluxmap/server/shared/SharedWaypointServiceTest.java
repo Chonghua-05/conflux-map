@@ -42,7 +42,7 @@ class SharedWaypointServiceTest {
 
         final SharedWaypoint created = fixture.service.create(
             OPERATOR, createRequest(uuid(91), 0, "Operator point")
-        ).delta().waypoint();
+        ).deltas().get(0).waypoint();
         final SharedWaypointService.MutationResult forbiddenUpdate = fixture.service.update(
             PLAYER,
             new SharedWaypointService.UpdateRequest(
@@ -68,7 +68,7 @@ class SharedWaypointServiceTest {
         );
         final SharedWaypoint created = fixture.service.create(
             PLAYER, createRequest(uuid(94), 0, "Player point")
-        ).delta().waypoint();
+        ).deltas().get(0).waypoint();
 
         final SharedWaypointService.MutationResult forbidden = fixture.service.update(
             OTHER,
@@ -87,7 +87,7 @@ class SharedWaypointServiceTest {
         final SharedWaypointService.MutationResult deleted = fixture.service.delete(
             PLAYER,
             new SharedWaypointService.DeleteRequest(
-                uuid(97), updated.delta().waypoint().revision(), created.id()
+                uuid(97), updated.deltas().get(0).waypoint().revision(), created.id()
             )
         );
 
@@ -111,9 +111,9 @@ class SharedWaypointServiceTest {
         final SharedWaypointService.MutationResult replay = fixture.service.create(PLAYER, request);
 
         assertTrue(first.applied());
-        assertEquals(SharedWaypointStore.DeltaKind.UPSERT, first.delta().kind());
+        assertEquals(SharedWaypointStore.DeltaKind.UPSERT, first.deltas().get(0).kind());
         assertEquals(1L, first.snapshot().revision());
-        final SharedWaypoint waypoint = first.delta().waypoint();
+        final SharedWaypoint waypoint = first.deltas().get(0).waypoint();
         assertNotNull(waypoint);
         assertEquals(uuid(1_000), waypoint.id());
         assertEquals(PLAYER.playerId(), waypoint.publisherId());
@@ -127,7 +127,7 @@ class SharedWaypointServiceTest {
         assertEquals(first.status(), replay.status());
         assertEquals(first.error(), replay.error());
         assertEquals(first.snapshot(), replay.snapshot());
-        assertEquals(first.delta(), replay.delta());
+        assertEquals(first.deltas().get(0), replay.deltas().get(0));
         assertFalse(first.replayed());
         assertTrue(replay.replayed());
         assertEquals(1, fixture.persistence.saves);
@@ -177,7 +177,7 @@ class SharedWaypointServiceTest {
         final Fixture fixture = fixture(new SharedWaypointService.Limits(20, 10, 30));
         final SharedWaypoint created = fixture.service.create(
             PLAYER, createRequestAt(uuid(108), 0L, "Old", DimensionId.OVERWORLD, 3d, 70d, 4d)
-        ).delta().waypoint();
+        ).deltas().get(0).waypoint();
 
         assertTrue(fixture.service.delete(
             PLAYER, new SharedWaypointService.DeleteRequest(uuid(109), 1L, created.id())
@@ -227,8 +227,8 @@ class SharedWaypointServiceTest {
             PLAYER,
             new SharedWaypointService.DeleteRequest(
                 operationId,
-                first.delta().waypoint().revision(),
-                first.delta().waypoint().id()
+                first.deltas().get(0).waypoint().revision(),
+                first.deltas().get(0).waypoint().id()
             )
         );
         final SharedWaypointService.MutationResult originalReplay = fixture.service.create(PLAYER, original);
@@ -255,7 +255,7 @@ class SharedWaypointServiceTest {
 
         assertFalse(result.applied());
         assertEquals(SharedWaypointService.MutationError.PERSISTENCE_FAILED, result.error());
-        assertEquals(SharedWaypointStore.DeltaKind.NOOP, result.delta().kind());
+        assertEquals(SharedWaypointStore.DeltaKind.NOOP, result.deltas().get(0).kind());
         assertEquals(0L, fixture.service.snapshot().revision());
         assertTrue(fixture.service.snapshot().waypoints().isEmpty());
     }
@@ -285,7 +285,7 @@ class SharedWaypointServiceTest {
         final Fixture fixture = fixture(new SharedWaypointService.Limits(20, 10, 30));
         final SharedWaypoint created = fixture.service.create(
             PLAYER, createRequest(uuid(120), 0, "Public")
-        ).delta().waypoint();
+        ).deltas().get(0).waypoint();
 
         final SharedWaypointService.MutationResult forbidden = fixture.service.delete(
             OTHER, new SharedWaypointService.DeleteRequest(uuid(121), 1, created.id())
@@ -301,7 +301,7 @@ class SharedWaypointServiceTest {
 
         final SharedWaypoint republished = fixture.service.create(
             OTHER, createRequest(uuid(126), 2, "Public again")
-        ).delta().waypoint();
+        ).deltas().get(0).waypoint();
         final SharedWaypointService.MutationResult deletedByOperator = fixture.service.delete(
             OPERATOR, new SharedWaypointService.DeleteRequest(uuid(127), 3, republished.id())
         );
@@ -314,7 +314,7 @@ class SharedWaypointServiceTest {
         final Fixture fixture = fixture(new SharedWaypointService.Limits(20, 10, 30));
         final SharedWaypoint created = fixture.service.create(
             PLAYER, createRequest(uuid(1_300), 0, "Old name")
-        ).delta().waypoint();
+        ).deltas().get(0).waypoint();
 
         final SharedWaypointService.MutationResult result = fixture.service.update(
             OPERATOR,
@@ -326,8 +326,8 @@ class SharedWaypointServiceTest {
         );
 
         assertTrue(result.applied());
-        assertEquals(SharedWaypointStore.DeltaKind.UPSERT, result.delta().kind());
-        final SharedWaypoint updated = result.delta().waypoint();
+        assertEquals(SharedWaypointStore.DeltaKind.UPSERT, result.deltas().get(0).kind());
+        final SharedWaypoint updated = result.deltas().get(0).waypoint();
         assertEquals(created.id(), updated.id());
         assertEquals(created.publisherId(), updated.publisherId());
         assertEquals(created.publisherName(), updated.publisherName());
@@ -350,7 +350,7 @@ class SharedWaypointServiceTest {
         final Fixture fixture = fixture(new SharedWaypointService.Limits(20, 10, 30));
         final SharedWaypoint first = fixture.service.create(
             PLAYER, createRequestAt(uuid(1_310), 0, "First", DimensionId.OVERWORLD, 1d, 64d, 1d)
-        ).delta().waypoint();
+        ).deltas().get(0).waypoint();
         fixture.service.create(
             OTHER, createRequestAt(uuid(1_311), 1, "Second", DimensionId.OVERWORLD, 2d, 64d, 2d)
         );
@@ -379,7 +379,7 @@ class SharedWaypointServiceTest {
         final Fixture fixture = fixture(new SharedWaypointService.Limits(20, 10, 30));
         final SharedWaypoint first = fixture.service.create(
             PLAYER, createRequest(uuid(122), 0, "First")
-        ).delta().waypoint();
+        ).deltas().get(0).waypoint();
         assertTrue(fixture.service.create(
             OTHER, createRequest(uuid(123), 1, "Unrelated")
         ).applied());
@@ -390,7 +390,7 @@ class SharedWaypointServiceTest {
 
         assertTrue(deleted.applied());
         assertEquals(3L, deleted.snapshot().revision());
-        assertEquals(first.id(), deleted.delta().removedId());
+        assertEquals(first.id(), deleted.deltas().get(0).removedId());
     }
 
     @Test
@@ -473,7 +473,7 @@ class SharedWaypointServiceTest {
             PLAYER, request
         );
         assertEquals(first.snapshot(), replay.snapshot());
-        assertEquals(first.delta(), replay.delta());
+        assertEquals(first.deltas().get(0), replay.deltas().get(0));
         assertTrue(replay.replayed());
         assertEquals(1, fixture.persistence.saves);
 
