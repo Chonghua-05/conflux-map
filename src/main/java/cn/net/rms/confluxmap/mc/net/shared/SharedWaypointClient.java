@@ -31,6 +31,7 @@ import cn.net.rms.confluxmap.core.shared.SharedWaypoint;
 import cn.net.rms.confluxmap.core.shared.SharedWaypointGroup;
 import cn.net.rms.confluxmap.core.shared.SharedWaypointLocationKey;
 import cn.net.rms.confluxmap.core.waypoint.Waypoint;
+import cn.net.rms.confluxmap.core.waypoint.list.SharedWaypointListModel;
 import cn.net.rms.confluxmap.compat.Texts;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
@@ -249,7 +250,7 @@ public final class SharedWaypointClient {
     /** Returns the user-facing reason creation is unavailable, or {@code null} when allowed. */
     public String createDisabledReasonKey() {
         final SharedWaypointClientState.View view = stateMachine.view();
-        return createDisabledReasonKey(
+        return SharedWaypointListModel.createDisabledReasonKey(
             view.state(), view.synchronizedSnapshot(), view.operator(),
             stateMachine.ownerManagementAllowed()
         );
@@ -320,7 +321,7 @@ public final class SharedWaypointClient {
     public String groupManageDisabledReasonKey(final SharedWaypointGroup group) {
         final SharedWaypointClientState.View view = stateMachine.view();
         final UUID localPlayerId = client.player == null ? null : client.player.getUuid();
-        return groupManageDisabledReasonKey(
+        return SharedWaypointListModel.groupManageDisabledReasonKey(
             view.state(), view.synchronizedSnapshot(), view.operator(),
             stateMachine.ownerManagementAllowed(), group, localPlayerId
         );
@@ -393,103 +394,13 @@ public final class SharedWaypointClient {
         configIo.save(config);
     }
 
-    static boolean canManage(
-        final SharedWaypoint waypoint,
-        final boolean operator,
-        final boolean ownerManagementAllowed,
-        final UUID localPlayerId
-    ) {
-        if (waypoint == null) {
-            return false;
-        }
-        if (operator) {
-            return true;
-        }
-        return ownerManagementAllowed && waypoint.publisherId().equals(localPlayerId);
-    }
-
-    static boolean canManageGroup(
-        final SharedWaypointGroup group,
-        final boolean operator,
-        final boolean ownerManagementAllowed,
-        final UUID localPlayerId
-    ) {
-        if (group == null) {
-            return false;
-        }
-        if (operator) {
-            return true;
-        }
-        return ownerManagementAllowed && group.creatorId().equals(localPlayerId);
-    }
-
-    static String createDisabledReasonKey(
-        final SharedWaypointClientState.State state,
-        final boolean synchronizedSnapshot,
-        final boolean operator,
-        final boolean ownerManagementAllowed
-    ) {
-        if (state == SharedWaypointClientState.State.SUPPORTED_DISABLED) {
-            return "confluxmap.shared_waypoints.disabled_by_server";
-        }
-        if (state != SharedWaypointClientState.State.ENABLED || !synchronizedSnapshot) {
-            return "confluxmap.screen.waypoint.public_unavailable";
-        }
-        if (!operator && !ownerManagementAllowed) {
-            return "confluxmap.shared_waypoints.operator_only";
-        }
-        return null;
-    }
-
     private String managementDisabledReasonKey(final SharedWaypoint waypoint) {
         final SharedWaypointClientState.View view = stateMachine.view();
         final UUID localPlayerId = client.player == null ? null : client.player.getUuid();
-        return managementDisabledReasonKey(
+        return SharedWaypointListModel.managementDisabledReasonKey(
             view.state(), view.synchronizedSnapshot(), view.operator(),
             stateMachine.ownerManagementAllowed(), waypoint, localPlayerId
         );
-    }
-
-    static String managementDisabledReasonKey(
-        final SharedWaypointClientState.State state,
-        final boolean synchronizedSnapshot,
-        final boolean operator,
-        final boolean ownerManagementAllowed,
-        final SharedWaypoint waypoint,
-        final UUID localPlayerId
-    ) {
-        final String createReasonKey = createDisabledReasonKey(
-            state, synchronizedSnapshot, operator, ownerManagementAllowed
-        );
-        if (createReasonKey != null || waypoint == null) {
-            return createReasonKey == null
-                ? "confluxmap.screen.waypoint.public_unavailable"
-                : createReasonKey;
-        }
-        return canManage(waypoint, operator, ownerManagementAllowed, localPlayerId)
-            ? null
-            : "confluxmap.shared_waypoints.owner_only";
-    }
-
-    static String groupManageDisabledReasonKey(
-        final SharedWaypointClientState.State state,
-        final boolean synchronizedSnapshot,
-        final boolean operator,
-        final boolean ownerManagementAllowed,
-        final SharedWaypointGroup group,
-        final UUID localPlayerId
-    ) {
-        final String createReasonKey = createDisabledReasonKey(
-            state, synchronizedSnapshot, operator, ownerManagementAllowed
-        );
-        if (createReasonKey != null || group == null) {
-            return createReasonKey == null
-                ? "confluxmap.screen.waypoint.public_unavailable"
-                : createReasonKey;
-        }
-        return canManageGroup(group, operator, ownerManagementAllowed, localPlayerId)
-            ? null
-            : "confluxmap.shared_waypoints.group_owner_only";
     }
 
     static DeleteC2S deleteMessage(final UUID operationId, final SharedWaypoint waypoint) {
