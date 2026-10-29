@@ -144,6 +144,7 @@
   "confluxmap.screen.waypoints.selection_target": "Move to: %s",
   "confluxmap.screen.waypoints.selection_move": "Move (%s)",
   "confluxmap.screen.waypoints.read_only": "These waypoints were saved by a newer version and cannot be changed.",
+  "confluxmap.screen.waypoints.set_default_protected": "The default set cannot be renamed or deleted.",
   "confluxmap.screen.waypoints.import_open": "Import from Mods",
   "confluxmap.screen.waypoint_import.title": "Import Waypoints",
   "confluxmap.screen.waypoint_import.hint": "Waypoints found for this world:",

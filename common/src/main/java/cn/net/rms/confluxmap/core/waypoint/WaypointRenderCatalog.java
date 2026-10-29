@@ -76,7 +76,14 @@ public final class WaypointRenderCatalog {
 
     private List<WaypointRenderEntry> uncollapsedSnapshot() {
         final List<Waypoint> local = config.localWaypointsVisible ? localWaypoints.list() : List.of();
-        final List<SharedWaypoint> shared = config.sharedWaypointsVisible ? sharedWaypoints.get() : List.of();
+        final List<SharedWaypoint> allShared =
+            config.sharedWaypointsVisible ? sharedWaypoints.get() : List.of();
+        final List<SharedWaypoint> shared = new ArrayList<>(allShared.size());
+        for (final SharedWaypoint waypoint : allShared) {
+            if (!config.isHiddenSharedWaypoint(waypoint.id())) {
+                shared.add(waypoint);
+            }
+        }
         final List<SiblingWaypoint> siblings =
             config.localWaypointsVisible && config.crossWorldWaypointsVisible
                 ? siblingWaypoints.get()

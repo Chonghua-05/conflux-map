@@ -144,6 +144,7 @@
   "confluxmap.screen.waypoints.selection_target": "移至：%s",
   "confluxmap.screen.waypoints.selection_move": "移动（%s）",
   "confluxmap.screen.waypoints.read_only": "这些路径点由更高版本的模组保存，当前无法修改。",
+  "confluxmap.screen.waypoints.set_default_protected": "默认分组无法重命名或删除。",
   "confluxmap.screen.waypoints.import_open": "从其他 Mod 导入",
   "confluxmap.screen.waypoint_import.title": "导入路径点",
   "confluxmap.screen.waypoint_import.hint": "在当前世界找到以下路径点：",
