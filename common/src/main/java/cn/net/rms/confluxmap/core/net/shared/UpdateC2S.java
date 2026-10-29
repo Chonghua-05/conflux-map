@@ -6,7 +6,13 @@ import cn.net.rms.confluxmap.core.waypoint.WaypointMarkerStyle;
 import java.util.Objects;
 import java.util.UUID;
 
-/** Requests an update to one existing shared waypoint. */
+/**
+ * Requests an update to one existing shared waypoint.
+ *
+ * <p>{@code groupSpecified} distinguishes an explicit group assignment
+ * ({@code groupId} null = ungroup) from leaving the membership untouched,
+ * which is all a wire shape below minor 6 can express.
+ */
 public record UpdateC2S(
     UUID operationId,
     UUID id,
@@ -19,7 +25,9 @@ public record UpdateC2S(
     int color,
     Waypoint.Type type,
     String iconItemId,
-    String markerLabel
+    String markerLabel,
+    UUID groupId,
+    boolean groupSpecified
 ) implements SharedWaypointMessage {
     public UpdateC2S {
         Objects.requireNonNull(operationId, "operationId");
@@ -41,9 +49,29 @@ public record UpdateC2S(
         final double y,
         final double z,
         final int color,
+        final Waypoint.Type type,
+        final String iconItemId,
+        final String markerLabel
+    ) {
+        this(
+            operationId, id, expectedRevision, name, dimensionId, x, y, z,
+            color, type, iconItemId, markerLabel, null, false
+        );
+    }
+
+    public UpdateC2S(
+        final UUID operationId,
+        final UUID id,
+        final long expectedRevision,
+        final String name,
+        final DimensionId dimensionId,
+        final double x,
+        final double y,
+        final double z,
+        final int color,
         final Waypoint.Type type
     ) {
-        this(operationId, id, expectedRevision, name, dimensionId, x, y, z, color, type, "", "");
+        this(operationId, id, expectedRevision, name, dimensionId, x, y, z, color, type, "", "", null, false);
     }
 
     @Override

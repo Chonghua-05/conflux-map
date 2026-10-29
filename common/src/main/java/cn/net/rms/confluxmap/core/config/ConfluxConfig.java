@@ -266,6 +266,10 @@ public final class ConfluxConfig {
      * cross-dimension allowlist because the override is the same kind of viewer preference.
      */
     public Map<String, Double> sharedWaypointCrossDimensionYById = new LinkedHashMap<>();
+    /** Public waypoint ids this player hid with the list's eye toggle; purely client-side. */
+    public Set<String> hiddenSharedWaypointIds = new LinkedHashSet<>();
+    /** Public group ids (plus the empty ungrouped key) this player folded in the list. */
+    public Set<String> collapsedSharedWaypointGroupIds = new LinkedHashSet<>();
     /**
      * Show this world's seed-sibling sub-world waypoints on every rendering surface. Siblings are
      * other world namespaces under the same server address whose observed hashed seed matches; the
@@ -435,6 +439,12 @@ public final class ConfluxConfig {
             sharedWaypointCrossDimensionYById == null
                 ? new LinkedHashMap<>()
                 : new LinkedHashMap<>(sharedWaypointCrossDimensionYById);
+        c.hiddenSharedWaypointIds = hiddenSharedWaypointIds == null
+            ? new LinkedHashSet<>()
+            : new LinkedHashSet<>(hiddenSharedWaypointIds);
+        c.collapsedSharedWaypointGroupIds = collapsedSharedWaypointGroupIds == null
+            ? new LinkedHashSet<>()
+            : new LinkedHashSet<>(collapsedSharedWaypointGroupIds);
         c.crossWorldWaypointsVisible = crossWorldWaypointsVisible;
         c.crossWorldSeedObservations = crossWorldSeedObservations == null
             ? new CrossWorldSeedObservations()
@@ -507,6 +517,38 @@ public final class ConfluxConfig {
             sharedWaypointCrossDimensionYById.remove(waypointId.toString());
         } else {
             sharedWaypointCrossDimensionYById.put(waypointId.toString(), y);
+        }
+    }
+
+    /** True when this player hid the public waypoint with the list's eye toggle. */
+    public boolean isHiddenSharedWaypoint(final UUID waypointId) {
+        return waypointId != null && hiddenSharedWaypointIds.contains(waypointId.toString());
+    }
+
+    public void setHiddenSharedWaypoint(final UUID waypointId, final boolean hidden) {
+        if (waypointId == null) {
+            return;
+        }
+        if (hidden) {
+            hiddenSharedWaypointIds.add(waypointId.toString());
+        } else {
+            hiddenSharedWaypointIds.remove(waypointId.toString());
+        }
+    }
+
+    /** True when this player folded the public group; the empty key is the ungrouped bucket. */
+    public boolean isSharedWaypointGroupCollapsed(final String groupKey) {
+        return groupKey != null && collapsedSharedWaypointGroupIds.contains(groupKey);
+    }
+
+    public void setSharedWaypointGroupCollapsed(final String groupKey, final boolean collapsed) {
+        if (groupKey == null) {
+            return;
+        }
+        if (collapsed) {
+            collapsedSharedWaypointGroupIds.add(groupKey);
+        } else {
+            collapsedSharedWaypointGroupIds.remove(groupKey);
         }
     }
 

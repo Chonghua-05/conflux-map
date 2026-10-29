@@ -1,14 +1,17 @@
 package cn.net.rms.confluxmap.server.shared;
 
+import cn.net.rms.confluxmap.core.net.shared.SharedWaypointProto;
 import cn.net.rms.confluxmap.core.shared.SharedWaypoint;
 import cn.net.rms.confluxmap.core.shared.SharedWaypointGroup;
 import cn.net.rms.confluxmap.core.shared.SharedWaypointLocationKey;
 import java.util.ArrayList;
+import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Optional;
+import java.util.Set;
 import java.util.UUID;
 
 /**
@@ -89,20 +92,25 @@ public final class SharedWaypointStore {
     static final class PreparedMutation {
         private final long baseRevision;
         private final Snapshot snapshot;
-        private final Delta delta;
+        private final List<Delta> deltas;
 
         private PreparedMutation(final long baseRevision, final Snapshot snapshot, final Delta delta) {
+            this(baseRevision, snapshot, List.of(delta));
+        }
+
+        private PreparedMutation(final long baseRevision, final Snapshot snapshot, final List<Delta> deltas) {
             this.baseRevision = baseRevision;
             this.snapshot = snapshot;
-            this.delta = delta;
+            this.deltas = deltas;
         }
 
         Snapshot snapshot() {
             return snapshot;
         }
 
-        Delta delta() {
-            return delta;
+        /** Every delta of one atomic mutation, in application order; one entry for single-entity mutations. */
+        List<Delta> deltas() {
+            return deltas;
         }
     }
 
@@ -293,6 +301,43 @@ public final class SharedWaypointStore {
             revision,
             snapshotOf(nextRevision, next, nextGroups),
             Delta.groupRemove(id, nextRevision)
+        );
+    }
+
+    /**
+     * Prepares one all-or-nothing multi-waypoint group assignment. The caller
+     * supplies the already-updated waypoints carrying successive revisions
+     * {@code revision + 1 .. revision + n}; every member must exist exactly
+     * once and reference a known group (or none).
+     */
+    synchronized PreparedMutation prepareMoveBatch(final List<SharedWaypoint> updated) {
+        Objects.requireNonNull(updated, "updated");
+        if (updated.isEmpty() || updated.size() > SharedWaypointProto.MAX_BATCH_MOVE_ENTRIES) {
+            throw new IllegalArgumentException("batch move size outside supported range");
+        }
+        final Set<UUID> seen = new HashSet<>();
+        for (int i = 0; i < updated.size(); i++) {
+            final SharedWaypoint waypoint = updated.get(i);
+            if (!byId.containsKey(waypoint.id()) || !seen.add(waypoint.id())) {
+                throw new IllegalArgumentException("batch move references unknown or duplicate waypoint");
+            }
+            if (waypoint.groupId() != null && !groupsById.containsKey(waypoint.groupId())) {
+                throw new IllegalArgumentException("batch move references unknown group");
+            }
+            if (waypoint.revision() != Math.addExact(revision, i + 1L)) {
+                throw new IllegalArgumentException("batch move revisions must be consecutive");
+            }
+        }
+        final Map<UUID, SharedWaypoint> next = new LinkedHashMap<>(byId);
+        final List<Delta> deltas = new ArrayList<>(updated.size());
+        for (final SharedWaypoint waypoint : updated) {
+            next.put(waypoint.id(), waypoint);
+            deltas.add(Delta.upsert(waypoint, waypoint.revision()));
+        }
+        return new PreparedMutation(
+            revision,
+            snapshotOf(Math.addExact(revision, updated.size()), next, groupsById),
+            deltas
         );
     }
 

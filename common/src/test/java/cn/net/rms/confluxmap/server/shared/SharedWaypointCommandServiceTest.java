@@ -65,7 +65,7 @@ class SharedWaypointCommandServiceTest {
         ).applied());
         assertTrue(fixture.commands.delete(OPERATOR, id).applied());
         assertTrue(fixture.commands.list(1).entries().isEmpty());
-        assertEquals(created.id(), fixture.mutations.get(0).delta().waypoint().id());
+        assertEquals(created.id(), fixture.mutations.get(0).deltas().get(0).waypoint().id());
         assertEquals(4, fixture.mutations.size());
     }
 

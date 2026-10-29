@@ -4,6 +4,7 @@ import cn.net.rms.confluxmap.api.ConfluxMapApi;
 import cn.net.rms.confluxmap.api.ConfluxMapPlugin;
 import cn.net.rms.confluxmap.bridge.GameBridge;
 import cn.net.rms.confluxmap.compat.MinecraftAccess;
+import cn.net.rms.confluxmap.compat.Texts;
 import cn.net.rms.confluxmap.core.annotation.AnnotationService;
 import cn.net.rms.confluxmap.core.api.ConfluxMapApiImpl;
 import cn.net.rms.confluxmap.core.api.CustomMarkerService;
@@ -44,6 +45,9 @@ import cn.net.rms.confluxmap.core.update.UpdateCheckService;
 import cn.net.rms.confluxmap.core.waypoint.CrossWorldWaypointService;
 import cn.net.rms.confluxmap.core.waypoint.WaypointRenderCatalog;
 import cn.net.rms.confluxmap.core.waypoint.WaypointService;
+import cn.net.rms.confluxmap.core.waypoint.list.ConfigWaypointPersonalPreferences;
+import cn.net.rms.confluxmap.core.waypoint.list.LocalWaypointListModel;
+import cn.net.rms.confluxmap.core.waypoint.list.SharedWaypointListModel;
 import cn.net.rms.confluxmap.mc.McGameBridge;
 import cn.net.rms.confluxmap.mc.api.FabricActionApi;
 import cn.net.rms.confluxmap.mc.color.BiomeTintResolver;
@@ -139,6 +143,8 @@ public final class ConfluxMapClient implements ClientModInitializer {
     private AnnotationService annotationService;
     private CrossWorldWaypointService crossWorldWaypoints;
     private WaypointRenderCatalog waypointRenderCatalog;
+    private LocalWaypointListModel localWaypointListModel;
+    private SharedWaypointListModel sharedWaypointListModel;
     private DeathWatcher deathWatcher;
     private PortalService portalService;
     private PortalScanService portalScanService;
@@ -357,6 +363,21 @@ public final class ConfluxMapClient implements ClientModInitializer {
         );
         waypointRenderCatalog = new WaypointRenderCatalog(
             waypointService, sharedWaypoints::list, crossWorldWaypoints::siblings, config
+        );
+        localWaypointListModel = new LocalWaypointListModel(
+            waypointService::current,
+            crossWorldWaypoints::siblings,
+            () -> config.localWaypointsVisible && config.crossWorldWaypointsVisible,
+            (key, args) -> Texts.translatable(key, args).getString()
+        );
+        sharedWaypointListModel = new SharedWaypointListModel(
+            sharedWaypoints::view,
+            sharedWaypoints::negotiatedMinor,
+            sharedWaypoints::ownerManagementAllowed,
+            () -> client.player == null ? null : client.player.getUuid(),
+            new ConfigWaypointPersonalPreferences(config, configIo),
+            sharedWaypoints,
+            (key, args) -> Texts.translatable(key, args).getString()
         );
         waypointHighlightState = new WaypointHighlightState(
             () -> config.highlightCrossDimensionVisible
@@ -731,6 +752,14 @@ public final class ConfluxMapClient implements ClientModInitializer {
 
     public ChunkLoadStateClient chunkLoadStateClient() {
         return chunkLoadStateClient;
+    }
+
+    public LocalWaypointListModel localWaypointListModel() {
+        return localWaypointListModel;
+    }
+
+    public SharedWaypointListModel sharedWaypointListModel() {
+        return sharedWaypointListModel;
     }
 
     public SharedWaypointClient sharedWaypoints() {

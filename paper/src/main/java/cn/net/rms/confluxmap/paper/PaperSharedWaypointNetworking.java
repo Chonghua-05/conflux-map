@@ -91,11 +91,9 @@ final class PaperSharedWaypointNetworking implements PluginMessageListener {
     }
 
     void commandMutation(final cn.net.rms.confluxmap.server.shared.SharedWaypointService.MutationResult mutation) {
-        final SharedWaypointMessage delta = SharedWaypointSessionHandler.deltaMessage(mutation);
-        if (delta == null) {
-            return;
+        for (final SharedWaypointMessage delta : SharedWaypointSessionHandler.deltaMessages(mutation)) {
+            broadcastSubscribed(delta);
         }
-        broadcastSubscribed(delta);
     }
 
     /** Sends one delta to every subscriber that negotiated a wire minor able to carry it. */
@@ -137,8 +135,8 @@ final class PaperSharedWaypointNetworking implements PluginMessageListener {
         for (final SharedWaypointMessage direct : dispatch.direct()) {
             send(player, direct);
         }
-        if (dispatch.broadcast() != null) {
-            broadcastSubscribed(dispatch.broadcast());
+        for (final SharedWaypointMessage delta : dispatch.broadcasts()) {
+            broadcastSubscribed(delta);
         }
     }
 

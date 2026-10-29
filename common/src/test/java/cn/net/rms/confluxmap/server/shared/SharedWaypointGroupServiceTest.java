@@ -44,7 +44,7 @@ class SharedWaypointGroupServiceTest {
 
         assertTrue(created.applied());
         assertEquals(1L, created.snapshot().revision());
-        assertEquals(SharedWaypointStore.DeltaKind.GROUP_UPSERT, created.delta().kind());
+        assertEquals(SharedWaypointStore.DeltaKind.GROUP_UPSERT, created.deltas().get(0).kind());
         assertEquals(1, created.snapshot().groups().size());
         assertEquals("村庄", created.snapshot().groups().get(0).name());
         assertEquals(PLAYER.playerId(), created.snapshot().groups().get(0).creatorId());
@@ -140,7 +140,7 @@ class SharedWaypointGroupServiceTest {
         );
 
         assertTrue(deleted.applied());
-        assertEquals(SharedWaypointStore.DeltaKind.GROUP_REMOVE, deleted.delta().kind());
+        assertEquals(SharedWaypointStore.DeltaKind.GROUP_REMOVE, deleted.deltas().get(0).kind());
         assertTrue(fixture.service.snapshot().groups().isEmpty());
         assertEquals(1, fixture.service.snapshot().waypoints().size());
         assertNull(fixture.service.snapshot().waypoints().get(0).groupId());
@@ -163,7 +163,7 @@ class SharedWaypointGroupServiceTest {
             assign(fixture, PLAYER, waypoint, group.id());
         assertTrue(assigned.applied());
         assertEquals(group.id(), findWaypoint(fixture, waypoint.id()).groupId());
-        assertEquals(SharedWaypointStore.DeltaKind.UPSERT, assigned.delta().kind());
+        assertEquals(SharedWaypointStore.DeltaKind.UPSERT, assigned.deltas().get(0).kind());
 
         // The first assign bumped the waypoint revision, so the clear must expect the fresh one.
         final SharedWaypointService.MutationResult cleared =
@@ -196,7 +196,7 @@ class SharedWaypointGroupServiceTest {
         assertEquals("Renamed", findWaypoint(fixture, waypoint.id()).name());
         assertEquals(group.id(), findWaypoint(fixture, waypoint.id()).groupId());
         // UpsertS2C broadcasts delta.waypoint() verbatim, so the group must survive there too.
-        assertEquals(group.id(), renamed.delta().waypoint().groupId());
+        assertEquals(group.id(), renamed.deltas().get(0).waypoint().groupId());
         assertEquals(group.id(), fixture.persistence.saved.waypoints().get(0).groupId());
     }
 
@@ -312,7 +312,7 @@ class SharedWaypointGroupServiceTest {
             )
         );
         assertTrue(created.applied());
-        return created.delta().waypoint();
+        return created.deltas().get(0).waypoint();
     }
 
     private static Fixture fixture(final SharedWaypointService.AccessPolicy accessPolicy) {

@@ -9,6 +9,7 @@ import cn.net.rms.confluxmap.core.net.shared.GroupRenameC2S;
 import cn.net.rms.confluxmap.core.net.shared.GroupUpsertS2C;
 import cn.net.rms.confluxmap.core.net.shared.HelloC2S;
 import cn.net.rms.confluxmap.core.net.shared.LockC2S;
+import cn.net.rms.confluxmap.core.net.shared.MoveBatchC2S;
 import cn.net.rms.confluxmap.core.net.shared.RemoveS2C;
 import cn.net.rms.confluxmap.core.net.shared.ResultS2C;
 import cn.net.rms.confluxmap.core.net.shared.SetWaypointGroupC2S;
@@ -20,6 +21,7 @@ import cn.net.rms.confluxmap.core.net.shared.SubscribeC2S;
 import cn.net.rms.confluxmap.core.net.shared.UpsertS2C;
 import cn.net.rms.confluxmap.core.net.shared.UpdateC2S;
 import java.time.Clock;
+import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -72,10 +74,11 @@ public final class SharedWaypointSessionHandler {
         }
     }
 
-    /** Direct replies plus at most one applied state delta for subscribed peers. */
-    public record Dispatch(List<SharedWaypointMessage> direct, SharedWaypointMessage broadcast) {
+    /** Direct replies plus the applied state deltas broadcast to subscribed peers. */
+    public record Dispatch(List<SharedWaypointMessage> direct, List<SharedWaypointMessage> broadcasts) {
         public Dispatch {
             direct = List.copyOf(Objects.requireNonNull(direct, "direct"));
+            broadcasts = broadcasts == null ? List.of() : List.copyOf(broadcasts);
         }
 
         static Dispatch direct(final SharedWaypointMessage message) {
@@ -197,7 +200,7 @@ public final class SharedWaypointSessionHandler {
                 new SharedWaypointService.CreateRequest(
                     create.operationId(), create.expectedRevision(), create.name(), create.dimensionId(),
                     create.x(), create.y(), create.z(), create.color(), create.type(),
-                    create.iconItemId(), create.markerLabel()
+                    create.iconItemId(), create.markerLabel(), create.groupId()
                 )
             ));
         }
@@ -221,7 +224,7 @@ public final class SharedWaypointSessionHandler {
                 new SharedWaypointService.UpdateRequest(
                     update.operationId(), update.expectedRevision(), update.id(), update.name(),
                     update.dimensionId(), update.x(), update.y(), update.z(), update.color(), update.type(),
-                    update.iconItemId(), update.markerLabel()
+                    update.iconItemId(), update.markerLabel(), update.groupId(), update.groupSpecified()
                 )
             ));
         }
@@ -268,6 +271,22 @@ public final class SharedWaypointSessionHandler {
                 new SharedWaypointService.SetGroupRequest(
                     setGroup.operationId(), setGroup.expectedRevision(),
                     setGroup.waypointId(), setGroup.groupId()
+                )
+            ));
+        }
+        if (message instanceof final MoveBatchC2S moveBatch) {
+            if (!environment.enabled()) {
+                return disabled(session, moveBatch.operationId(), peer, environment);
+            }
+            return mutation(session, environment.service().moveBatch(
+                actor(peer),
+                new SharedWaypointService.MoveBatchRequest(
+                    moveBatch.operationId(), moveBatch.expectedRevision(),
+                    moveBatch.entries().stream()
+                        .map(entry -> new SharedWaypointService.MoveBatchRequest.Entry(
+                            entry.waypointId(), entry.expectedWaypointRevision(), entry.groupId()
+                        ))
+                        .toList()
                 )
             ));
         }
@@ -440,28 +459,31 @@ public final class SharedWaypointSessionHandler {
             statusCode(mutation.status()),
             errorCode(mutation.error(), session.negotiatedMinor)
         );
-        final SharedWaypointMessage delta = deltaMessage(mutation);
-        return new Dispatch(
-            List.of(result),
-            mutation.applied() && !mutation.replayed() ? delta : null
-        );
+        return new Dispatch(List.of(result), deltaMessages(mutation));
     }
 
-    /** Converts an applied service mutation into the delta sent to subscribed modded clients. */
-    public static SharedWaypointMessage deltaMessage(
+    /** Converts an applied service mutation into the deltas sent to subscribed modded clients. */
+    public static List<SharedWaypointMessage> deltaMessages(
         final SharedWaypointService.MutationResult mutation
     ) {
         Objects.requireNonNull(mutation, "mutation");
         if (!mutation.applied() || mutation.replayed()) {
-            return null;
+            return List.of();
         }
-        return switch (mutation.delta().kind()) {
-            case UPSERT -> new UpsertS2C(mutation.delta().revision(), mutation.delta().waypoint());
-            case REMOVE -> new RemoveS2C(mutation.delta().revision(), mutation.delta().removedId());
-            case GROUP_UPSERT -> new GroupUpsertS2C(mutation.delta().revision(), mutation.delta().group());
-            case GROUP_REMOVE -> new GroupRemoveS2C(mutation.delta().revision(), mutation.delta().removedGroupId());
-            case NOOP -> null;
-        };
+        final List<SharedWaypointMessage> messages = new ArrayList<>(mutation.deltas().size());
+        for (final SharedWaypointStore.Delta delta : mutation.deltas()) {
+            final SharedWaypointMessage message = switch (delta.kind()) {
+                case UPSERT -> new UpsertS2C(delta.revision(), delta.waypoint());
+                case REMOVE -> new RemoveS2C(delta.revision(), delta.removedId());
+                case GROUP_UPSERT -> new GroupUpsertS2C(delta.revision(), delta.group());
+                case GROUP_REMOVE -> new GroupRemoveS2C(delta.revision(), delta.removedGroupId());
+                case NOOP -> null;
+            };
+            if (message != null) {
+                messages.add(message);
+            }
+        }
+        return messages;
     }
 
     static int statusCode(final SharedWaypointService.MutationStatus status) {

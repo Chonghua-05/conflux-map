@@ -292,15 +292,23 @@ public final class SharedWaypointCommandService {
         ));
     }
 
+    /** Command-originated mutations always carry at most one delta. */
+    private static SharedWaypointStore.Delta firstDelta(final SharedWaypointService.MutationResult mutation) {
+        return mutation.deltas().isEmpty()
+            ? SharedWaypointStore.Delta.noop(mutation.snapshot().revision())
+            : mutation.deltas().get(0);
+    }
+
     private Result mutation(final SharedWaypointService.MutationResult mutation) {
         if (!mutation.applied()) {
             return new Result(Status.REJECTED, mutation, null);
         }
-        if (!mutation.replayed() && mutation.delta().kind() != SharedWaypointStore.DeltaKind.NOOP) {
+        final SharedWaypointStore.Delta delta = firstDelta(mutation);
+        if (!mutation.replayed() && delta.kind() != SharedWaypointStore.DeltaKind.NOOP) {
             appliedMutation.accept(mutation);
         }
-        final SharedWaypoint waypoint = mutation.delta().kind() == SharedWaypointStore.DeltaKind.UPSERT
-            ? mutation.delta().waypoint()
+        final SharedWaypoint waypoint = delta.kind() == SharedWaypointStore.DeltaKind.UPSERT
+            ? delta.waypoint()
             : null;
         return new Result(Status.APPLIED, mutation, waypoint);
     }
@@ -309,11 +317,12 @@ public final class SharedWaypointCommandService {
         if (!mutation.applied()) {
             return new Result(Status.REJECTED, mutation, null);
         }
-        if (!mutation.replayed() && mutation.delta().kind() != SharedWaypointStore.DeltaKind.NOOP) {
+        final SharedWaypointStore.Delta delta = firstDelta(mutation);
+        if (!mutation.replayed() && delta.kind() != SharedWaypointStore.DeltaKind.NOOP) {
             appliedMutation.accept(mutation);
         }
-        final SharedWaypointGroup group = mutation.delta().kind() == SharedWaypointStore.DeltaKind.GROUP_UPSERT
-            ? mutation.delta().group()
+        final SharedWaypointGroup group = delta.kind() == SharedWaypointStore.DeltaKind.GROUP_UPSERT
+            ? delta.group()
             : null;
         return new Result(Status.APPLIED, mutation, null, group);
     }

@@ -10,7 +10,7 @@ import org.junit.jupiter.api.Test;
 
 final class WaypointListInteractionSourceTest {
     @Test
-    void localWaypointsUseAnExplicitEditButtonInsteadOfANameClickTarget() throws IOException {
+    void waypointsUseAnExplicitEditButtonInsteadOfANameClickTarget() throws IOException {
         final String source = Files.readString(findProjectRoot().resolve(
             "src/main/java/cn/net/rms/confluxmap/mc/ui/screen/WaypointListScreen.java"
         ));
@@ -28,7 +28,7 @@ final class WaypointListInteractionSourceTest {
         assertTrue(rowWidgets.contains(
             "Texts.translatable(\"confluxmap.screen.waypoints.edit\")"
         ));
-        assertTrue(rowWidgets.contains("button -> openEdit(renderedStore, waypoint)"));
+        assertTrue(rowWidgets.contains("button -> openEdit(model, row)"));
         assertFalse(mouseClicked.contains("openEdit("));
     }
 
