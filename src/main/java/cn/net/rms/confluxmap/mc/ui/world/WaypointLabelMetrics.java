@@ -20,7 +20,7 @@ final class WaypointLabelMetrics {
     /** Apparent label size stays at its maximum (the legacy constant screen size) at or closer than this. */
     static final double LABEL_REFERENCE_DISTANCE = 12.0;
     /** Perspective-shrink floor: apparent size never drops below this fraction of the maximum, however far. */
-    static final float LABEL_FAR_SCREEN_FLOOR = 0.60f;
+    static final float LABEL_FAR_SCREEN_FLOOR = 0.30f;
     /** Safety ceiling on the world-space multiplier so absurd view distances cannot blow up precision. */
     static final float LABEL_MAX_SCALE_MULT = 170.0f;
     /** Leaves enough room before the world projection's far plane for the complete billboard. */

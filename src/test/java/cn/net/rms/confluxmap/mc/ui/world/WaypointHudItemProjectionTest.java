@@ -117,6 +117,10 @@ final class WaypointHudItemProjectionTest {
         ).orElseThrow().size();
 
         assertEquals(reference, targeted, 0.001f);
-        assertEquals(reference * 0.8f, halfTargeted, 0.001f);
+        // Half aim progress lerps midway between the floored perspective term and full size.
+        assertEquals(
+            reference * (1f + WaypointLabelMetrics.LABEL_FAR_SCREEN_FLOOR) / 2f,
+            halfTargeted, 0.001f
+        );
     }
 }
