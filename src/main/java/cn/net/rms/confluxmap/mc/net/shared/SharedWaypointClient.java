@@ -7,11 +7,15 @@ import cn.net.rms.confluxmap.core.config.ConfigIo;
 import cn.net.rms.confluxmap.core.config.ConfluxConfig;
 import cn.net.rms.confluxmap.core.net.shared.CreateC2S;
 import cn.net.rms.confluxmap.core.net.shared.DeleteC2S;
+import cn.net.rms.confluxmap.core.net.shared.GroupCreateC2S;
+import cn.net.rms.confluxmap.core.net.shared.GroupDeleteC2S;
 import cn.net.rms.confluxmap.core.net.shared.GroupRemoveS2C;
+import cn.net.rms.confluxmap.core.net.shared.GroupRenameC2S;
 import cn.net.rms.confluxmap.core.net.shared.GroupUpsertS2C;
 import cn.net.rms.confluxmap.core.net.shared.HelloC2S;
 import cn.net.rms.confluxmap.core.net.shared.RemoveS2C;
 import cn.net.rms.confluxmap.core.net.shared.ResultS2C;
+import cn.net.rms.confluxmap.core.net.shared.SetWaypointGroupC2S;
 import cn.net.rms.confluxmap.core.net.shared.SharedWaypointAvailability;
 import cn.net.rms.confluxmap.core.net.shared.SharedWaypointClientState;
 import cn.net.rms.confluxmap.core.net.shared.SharedWaypointCodec;
@@ -61,7 +65,11 @@ public final class SharedWaypointClient {
     public enum OperationKind {
         CREATE,
         DELETE,
-        UPDATE
+        UPDATE,
+        GROUP_CREATE,
+        GROUP_RENAME,
+        GROUP_DELETE,
+        SET_GROUP
     }
 
     public record OperationResult(
@@ -295,6 +303,77 @@ public final class SharedWaypointClient {
         );
     }
 
+    /** True when the negotiated wire shape accepts client-originated group mutations. */
+    public boolean supportsGroupMutations() {
+        return stateMachine.negotiatedMinor() >= SharedWaypointProto.PROTO_MINOR_GROUP_MUTATIONS;
+    }
+
+    public boolean canCreateGroup() {
+        return createDisabledReasonKey() == null;
+    }
+
+    /** Mirrors the server rule: operators manage every group, owners only groups they created. */
+    public boolean canManageGroup(final SharedWaypointGroup group) {
+        return groupManageDisabledReasonKey(group) == null;
+    }
+
+    public String groupManageDisabledReasonKey(final SharedWaypointGroup group) {
+        final SharedWaypointClientState.View view = stateMachine.view();
+        final UUID localPlayerId = client.player == null ? null : client.player.getUuid();
+        return groupManageDisabledReasonKey(
+            view.state(), view.synchronizedSnapshot(), view.operator(),
+            stateMachine.ownerManagementAllowed(), group, localPlayerId
+        );
+    }
+
+    public boolean createGroup(final String name) {
+        if (name == null || !supportsGroupMutations() || !canCreateGroup()) {
+            return false;
+        }
+        final UUID operationId = UUID.randomUUID();
+        return sendMutation(
+            operationId,
+            new PendingOperation(OperationKind.GROUP_CREATE, null, false, null),
+            new GroupCreateC2S(operationId, revision(), name)
+        );
+    }
+
+    public boolean renameGroup(final SharedWaypointGroup group, final String name) {
+        if (group == null || name == null || !supportsGroupMutations() || !canManageGroup(group)) {
+            return false;
+        }
+        final UUID operationId = UUID.randomUUID();
+        return sendMutation(
+            operationId,
+            new PendingOperation(OperationKind.GROUP_RENAME, null, false, null),
+            new GroupRenameC2S(operationId, group.revision(), group.id(), name)
+        );
+    }
+
+    public boolean deleteGroup(final SharedWaypointGroup group) {
+        if (group == null || !supportsGroupMutations() || !canManageGroup(group)) {
+            return false;
+        }
+        final UUID operationId = UUID.randomUUID();
+        return sendMutation(
+            operationId,
+            new PendingOperation(OperationKind.GROUP_DELETE, null, false, null),
+            new GroupDeleteC2S(operationId, group.revision(), group.id())
+        );
+    }
+
+    /** Moves one published waypoint into a group, or out of every group with a null target. */
+    public boolean setWaypointGroup(final SharedWaypoint original, final UUID groupId) {
+        if (original == null || !supportsGroupMutations() || !canUpdate(original)) {
+            return false;
+        }
+        final UUID operationId = UUID.randomUUID();
+        return sendMutation(
+            operationId,
+            new PendingOperation(OperationKind.SET_GROUP, null, false, null),
+            setWaypointGroupMessage(operationId, original, groupId)
+        );
+    }
     public void addListener(final Listener listener) {
         listeners.add(Objects.requireNonNull(listener, "listener"));
     }
@@ -327,6 +406,21 @@ public final class SharedWaypointClient {
             return true;
         }
         return ownerManagementAllowed && waypoint.publisherId().equals(localPlayerId);
+    }
+
+    static boolean canManageGroup(
+        final SharedWaypointGroup group,
+        final boolean operator,
+        final boolean ownerManagementAllowed,
+        final UUID localPlayerId
+    ) {
+        if (group == null) {
+            return false;
+        }
+        if (operator) {
+            return true;
+        }
+        return ownerManagementAllowed && group.creatorId().equals(localPlayerId);
     }
 
     static String createDisabledReasonKey(
@@ -377,6 +471,27 @@ public final class SharedWaypointClient {
             : "confluxmap.shared_waypoints.owner_only";
     }
 
+    static String groupManageDisabledReasonKey(
+        final SharedWaypointClientState.State state,
+        final boolean synchronizedSnapshot,
+        final boolean operator,
+        final boolean ownerManagementAllowed,
+        final SharedWaypointGroup group,
+        final UUID localPlayerId
+    ) {
+        final String createReasonKey = createDisabledReasonKey(
+            state, synchronizedSnapshot, operator, ownerManagementAllowed
+        );
+        if (createReasonKey != null || group == null) {
+            return createReasonKey == null
+                ? "confluxmap.screen.waypoint.public_unavailable"
+                : createReasonKey;
+        }
+        return canManageGroup(group, operator, ownerManagementAllowed, localPlayerId)
+            ? null
+            : "confluxmap.shared_waypoints.group_owner_only";
+    }
+
     static DeleteC2S deleteMessage(final UUID operationId, final SharedWaypoint waypoint) {
         return new DeleteC2S(operationId, waypoint.id(), waypoint.revision());
     }
@@ -391,6 +506,14 @@ public final class SharedWaypointClient {
             updated.x, updated.y, updated.z, updated.colorArgb, updated.type,
             updated.iconItemId, updated.markerLabel
         );
+    }
+
+    static SetWaypointGroupC2S setWaypointGroupMessage(
+        final UUID operationId,
+        final SharedWaypoint waypoint,
+        final UUID groupId
+    ) {
+        return new SetWaypointGroupC2S(operationId, waypoint.id(), waypoint.revision(), groupId);
     }
 
     private void onJoin() {

@@ -8,9 +8,11 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 import cn.net.rms.confluxmap.core.config.ConfluxConfig;
 import cn.net.rms.confluxmap.core.model.DimensionId;
 import cn.net.rms.confluxmap.core.net.shared.DeleteC2S;
+import cn.net.rms.confluxmap.core.net.shared.SetWaypointGroupC2S;
 import cn.net.rms.confluxmap.core.net.shared.SharedWaypointClientState;
 import cn.net.rms.confluxmap.core.net.shared.UpdateC2S;
 import cn.net.rms.confluxmap.core.shared.SharedWaypoint;
+import cn.net.rms.confluxmap.core.shared.SharedWaypointGroup;
 import cn.net.rms.confluxmap.core.shared.SharedWaypointLocationKey;
 import cn.net.rms.confluxmap.core.waypoint.Waypoint;
 import java.util.LinkedHashMap;
@@ -135,6 +137,58 @@ class SharedWaypointClientTest {
         ));
 
         assertNull(config.sharedWaypointCrossDimensionY(waypoint.id()));
+    }
+
+    @Test
+    void setWaypointGroupMessageCarriesTheTargetWaypointRevision() {
+        final UUID operationId = UUID.fromString("00112233-4455-6677-8899-aabbccddeeff");
+        final UUID groupId = UUID.fromString("0f0e0d0c-0b0a-4909-8877-665544332211");
+
+        final SetWaypointGroupC2S assign = SharedWaypointClient.setWaypointGroupMessage(
+            operationId, waypoint(), groupId
+        );
+        assertEquals(37L, assign.expectedRevision());
+        assertEquals(waypoint().id(), assign.waypointId());
+        assertEquals(groupId, assign.groupId());
+
+        final SetWaypointGroupC2S clear = SharedWaypointClient.setWaypointGroupMessage(
+            operationId, waypoint(), null
+        );
+        assertNull(clear.groupId());
+    }
+
+    @Test
+    void groupManagementIsAllowedForOperatorsAndEnabledCreators() {
+        final UUID creator = UUID.fromString("00112233-4455-6677-8899-aabbccddeeff");
+        final SharedWaypointGroup group = new SharedWaypointGroup(
+            UUID.fromString("0f0e0d0c-0b0a-4909-8877-665544332211"),
+            creator,
+            "Villages",
+            1_721_555_200_000L,
+            3L
+        );
+
+        assertTrue(SharedWaypointClient.canManageGroup(group, false, true, creator));
+        assertTrue(SharedWaypointClient.canManageGroup(group, true, false, STRANGER));
+        assertFalse(SharedWaypointClient.canManageGroup(group, false, true, STRANGER));
+        assertFalse(SharedWaypointClient.canManageGroup(group, false, false, creator));
+        assertFalse(SharedWaypointClient.canManageGroup(null, true, true, creator));
+
+        assertEquals(
+            "confluxmap.shared_waypoints.group_owner_only",
+            SharedWaypointClient.groupManageDisabledReasonKey(
+                SharedWaypointClientState.State.ENABLED, true, false, true, group, STRANGER
+            )
+        );
+        assertNull(SharedWaypointClient.groupManageDisabledReasonKey(
+            SharedWaypointClientState.State.ENABLED, true, false, true, group, creator
+        ));
+        assertEquals(
+            "confluxmap.screen.waypoint.public_unavailable",
+            SharedWaypointClient.groupManageDisabledReasonKey(
+                SharedWaypointClientState.State.ENABLED, true, false, true, null, creator
+            )
+        );
     }
 
     private static SharedWaypoint waypoint() {

@@ -106,6 +106,39 @@ public final class SharedWaypointCodec {
                 out.writeInt(m.color());
                 writeWaypointType(out, m.type());
                 writeMarkerStyle(out, negotiatedMinor, m.iconItemId(), m.markerLabel());
+            } else if (message instanceof final GroupCreateC2S m) {
+                s2c = false;
+                requireGroupMutationSupport(negotiatedMinor);
+                out.writeByte(SharedWaypointProto.MSG_GROUP_CREATE_C2S);
+                writeUuid(out, m.operationId());
+                out.writeLong(m.expectedRevision());
+                writeUtf(out, m.name(), "name");
+            } else if (message instanceof final GroupRenameC2S m) {
+                s2c = false;
+                requireGroupMutationSupport(negotiatedMinor);
+                out.writeByte(SharedWaypointProto.MSG_GROUP_RENAME_C2S);
+                writeUuid(out, m.operationId());
+                out.writeLong(m.expectedRevision());
+                writeUuid(out, m.groupId());
+                writeUtf(out, m.name(), "name");
+            } else if (message instanceof final GroupDeleteC2S m) {
+                s2c = false;
+                requireGroupMutationSupport(negotiatedMinor);
+                out.writeByte(SharedWaypointProto.MSG_GROUP_DELETE_C2S);
+                writeUuid(out, m.operationId());
+                out.writeLong(m.expectedRevision());
+                writeUuid(out, m.groupId());
+            } else if (message instanceof final SetWaypointGroupC2S m) {
+                s2c = false;
+                requireGroupMutationSupport(negotiatedMinor);
+                out.writeByte(SharedWaypointProto.MSG_SET_GROUP_C2S);
+                writeUuid(out, m.operationId());
+                writeUuid(out, m.waypointId());
+                out.writeLong(m.expectedRevision());
+                writeBoolean(out, m.groupId() != null);
+                if (m.groupId() != null) {
+                    writeUuid(out, m.groupId());
+                }
             } else if (message instanceof final SnapshotS2C m) {
                 s2c = true;
                 out.writeByte(SharedWaypointProto.MSG_SNAPSHOT_S2C);
@@ -259,6 +292,25 @@ public final class SharedWaypointCodec {
                 case SharedWaypointProto.MSG_GROUP_REMOVE_S2C -> {
                     requireGroupSupport(negotiatedMinor);
                     yield new GroupRemoveS2C(in.readLong(), readUuid(in));
+                }
+                case SharedWaypointProto.MSG_GROUP_CREATE_C2S -> {
+                    requireGroupMutationSupport(negotiatedMinor);
+                    yield new GroupCreateC2S(readUuid(in), in.readLong(), readUtf(in, "name"));
+                }
+                case SharedWaypointProto.MSG_GROUP_RENAME_C2S -> {
+                    requireGroupMutationSupport(negotiatedMinor);
+                    yield new GroupRenameC2S(readUuid(in), in.readLong(), readUuid(in), readUtf(in, "name"));
+                }
+                case SharedWaypointProto.MSG_GROUP_DELETE_C2S -> {
+                    requireGroupMutationSupport(negotiatedMinor);
+                    yield new GroupDeleteC2S(readUuid(in), in.readLong(), readUuid(in));
+                }
+                case SharedWaypointProto.MSG_SET_GROUP_C2S -> {
+                    requireGroupMutationSupport(negotiatedMinor);
+                    yield new SetWaypointGroupC2S(
+                        readUuid(in), readUuid(in), in.readLong(),
+                        readBoolean(in, "hasGroup") ? readUuid(in) : null
+                    );
                 }
                 case SharedWaypointProto.MSG_RESULT_S2C -> new ResultS2C(
                     readUuid(in), in.readInt(), in.readInt()
@@ -479,6 +531,16 @@ public final class SharedWaypointCodec {
         }
     }
 
+    private static void requireGroupMutationSupport(final int negotiatedMinor)
+        throws SharedWaypointProtocolException {
+        if (negotiatedMinor < SharedWaypointProto.PROTO_MINOR_GROUP_MUTATIONS) {
+            throw new SharedWaypointProtocolException(
+                "shared-waypoint group mutations require negotiated minor >= "
+                    + SharedWaypointProto.PROTO_MINOR_GROUP_MUTATIONS + ", got " + negotiatedMinor
+            );
+        }
+    }
+
     private static void writeMarkerStyle(
         final DataOutputStream out,
         final int negotiatedMinor,
@@ -648,7 +710,7 @@ public final class SharedWaypointCodec {
 
     private static boolean isKnownType(final int typeId) {
         return typeId >= SharedWaypointProto.MSG_HELLO_C2S
-            && typeId <= SharedWaypointProto.MSG_GROUP_REMOVE_S2C;
+            && typeId <= SharedWaypointProto.MSG_SET_GROUP_C2S;
     }
 
     private static boolean isS2C(final int typeId) {

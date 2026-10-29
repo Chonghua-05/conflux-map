@@ -64,7 +64,6 @@ public final class WaypointListScreen extends ConfluxScreen {
 
     private static final int ROW_HEIGHT = 28;
     private static final int SEARCH_Y = 52;
-    private static final int SHARED_LIST_TOP = 104;
     private static final int LOCAL_IDLE_LIST_TOP = 128;
     private static final int LOCAL_LIST_TOP = 152;
     private static final int BOTTOM_MARGIN = 34;
@@ -109,6 +108,11 @@ public final class WaypointListScreen extends ConfluxScreen {
     private static final String EXPANDED_ARROW = "\u25be";
 
     private enum SetDropdown { FILTER, MOVE_TARGET }
+
+    private enum GroupDropdown { FILTER, MOVE_TARGET }
+
+    /** Filter-only marker for shared waypoints outside every group; never a real group id. */
+    private static final UUID UNGROUPED_FILTER = new UUID(0L, 0L);
 
     private record DropdownGeometry(
         int x,
@@ -258,6 +262,18 @@ public final class WaypointListScreen extends ConfluxScreen {
     private int moveDropdownX;
     private int moveDropdownY;
     private int moveDropdownWidth;
+    private UUID selectedGroupFilter;
+    private UUID moveTargetGroup;
+    private GroupDropdown openGroupDropdown;
+    private int groupDropdownScrollOffset;
+    private int groupDropdownKeyboardIndex;
+    private int groupFilterX;
+    private int groupFilterY;
+    private int groupFilterWidth;
+    private int groupMoveX;
+    private int groupMoveY;
+    private int groupMoveWidth;
+    private List<UUID> filteredSharedIds = List.of();
     private List<ListRow> rows = new ArrayList<>();
     private int totalRowCount;
     private TextFieldWidget searchField;
@@ -407,6 +423,7 @@ public final class WaypointListScreen extends ConfluxScreen {
         final WaypointStore store = waypointService.current();
         normalizeSetState(store);
         normalizeDropdownState(store);
+        normalizeSharedGroupState();
         final Optional<PlayerView> playerView = gameBridge.player();
         final DimensionId currentDimension = gameBridge.session().dimension();
         final List<DimensionId> knownDimensions = knownDimensions(currentDimension);
@@ -425,16 +442,20 @@ public final class WaypointListScreen extends ConfluxScreen {
                 .map(row -> row.waypoint().id())
                 .toList()
             : List.of();
-        if (tab == Tab.LOCAL) {
-            selectedWaypointIds.retainAll(filteredLocalIds);
-        } else {
-            selectedWaypointIds.clear();
-        }
+        filteredSharedIds = tab == Tab.PUBLIC
+            ? model.stream()
+                .filter(row -> !row.isHeader() && row.waypoint().shared() != null)
+                .map(row -> row.waypoint().id())
+                .toList()
+            : List.of();
+        selectedWaypointIds.retainAll(tab == Tab.LOCAL ? filteredLocalIds : filteredSharedIds);
 
         addTabs();
         addDimensionFilter(knownDimensions, currentDimension);
         if (tab == Tab.LOCAL) {
             addLocalSetControls(store);
+        } else {
+            addPublicGroupControls();
         }
 
         final int bottom = height - BOTTOM_MARGIN;
@@ -577,6 +598,7 @@ public final class WaypointListScreen extends ConfluxScreen {
             closeDimensionDropdown();
         } else {
             closeSetDropdown();
+            closeGroupDropdown();
             dimensionDropdownOpen = true;
             dimensionDropdownKeyboardIndex = Math.max(
                 0, dimensionDropdownOptions.indexOf(dimensionFilter)
@@ -864,6 +886,393 @@ public final class WaypointListScreen extends ConfluxScreen {
         move.active = writable && store.sets().size() > 1 && !selectedWaypointIds.isEmpty();
     }
 
+    private void addPublicGroupControls() {
+        if (narrowToolbar()) {
+            addNarrowPublicGroupControls();
+            return;
+        }
+        final int selectWidth = 84;
+        final int firstRowWidth = headerControlWidth();
+        final int filterWidth = firstRowWidth - selectWidth - GAP;
+        final int x = width / 2 - firstRowWidth / 2;
+        addGroupDropdownButton(GroupDropdown.FILTER, x, TOOLBAR_Y, filterWidth, groupFilterLabel());
+        addSharedSelectAllButton(x + filterWidth + GAP, TOOLBAR_Y, selectWidth);
+
+        if (selectedWaypointIds.isEmpty()) {
+            return;
+        }
+
+        final int secondY = TOOLBAR_Y + TOOLBAR_HEIGHT + GAP;
+        final int clearWidth = 84;
+        final int moveWidth = 92;
+        final int secondRowWidth = headerControlWidth();
+        final int targetWidth = secondRowWidth - clearWidth - moveWidth - GAP * 2;
+        final int secondRowX = width / 2 - secondRowWidth / 2;
+        addDrawableChild(Widgets.button(
+            secondRowX, secondY, clearWidth, TOOLBAR_HEIGHT,
+            fitButtonLabel(selectionClearLabel(), clearWidth),
+            button -> clearSelection()
+        ));
+        addGroupDropdownButton(
+            GroupDropdown.MOVE_TARGET,
+            secondRowX + clearWidth + GAP,
+            secondY,
+            targetWidth,
+            groupMoveTargetLabel()
+        );
+        addDrawableChild(Widgets.button(
+            secondRowX + clearWidth + GAP + targetWidth + GAP,
+            secondY,
+            moveWidth,
+            TOOLBAR_HEIGHT,
+            fitButtonLabel(
+                Texts.translatable("confluxmap.screen.waypoints.selection_move", selectedWaypointIds.size()),
+                moveWidth
+            ),
+            button -> moveSharedSelection()
+        )).active = sharedMutationsReady() && !selectedWaypointIds.isEmpty();
+    }
+
+    private void addNarrowPublicGroupControls() {
+        final int selectWidth = Math.min(84, Math.max(44, contentWidth() / 3));
+        final int filterWidth = Math.max(44, contentWidth() - selectWidth - GAP);
+        addGroupDropdownButton(
+            GroupDropdown.FILTER, contentLeft(), TOOLBAR_Y, filterWidth, groupFilterLabel()
+        );
+        addSharedSelectAllButton(contentLeft() + filterWidth + GAP, TOOLBAR_Y, selectWidth);
+
+        if (selectedWaypointIds.isEmpty()) {
+            return;
+        }
+
+        final int firstColumnWidth = Math.max(1, (contentWidth() - GAP * 2) / 3);
+        final int batchActionsY = TOOLBAR_Y + TOOLBAR_HEIGHT + GAP;
+        int x = contentLeft();
+        addDrawableChild(Widgets.button(
+            x, batchActionsY, firstColumnWidth, TOOLBAR_HEIGHT,
+            fitButtonLabel(selectionClearLabel(), firstColumnWidth),
+            button -> clearSelection()
+        ));
+        x += firstColumnWidth + GAP;
+        addGroupDropdownButton(
+            GroupDropdown.MOVE_TARGET, x, batchActionsY, firstColumnWidth, groupMoveTargetLabel()
+        );
+        x += firstColumnWidth + GAP;
+        addDrawableChild(Widgets.button(
+            x, batchActionsY, Math.max(1, contentRight() - x), TOOLBAR_HEIGHT,
+            fitButtonLabel(
+                Texts.translatable("confluxmap.screen.waypoints.selection_move", selectedWaypointIds.size()),
+                Math.max(1, contentRight() - x)
+            ),
+            button -> moveSharedSelection()
+        )).active = sharedMutationsReady() && !selectedWaypointIds.isEmpty();
+    }
+
+    private void addSharedSelectAllButton(final int x, final int y, final int buttonWidth) {
+        final List<UUID> manageable = manageableSharedIds();
+        final boolean allSelected = !manageable.isEmpty() && selectedWaypointIds.containsAll(manageable);
+        final ButtonWidget selectAll = addDrawableChild(Widgets.button(
+            x,
+            y,
+            buttonWidth,
+            TOOLBAR_HEIGHT,
+            fitButtonLabel(Texts.translatable(
+                allSelected
+                    ? "confluxmap.screen.waypoints.selection_clear"
+                    : "confluxmap.screen.waypoints.selection_all"
+            ), buttonWidth),
+            button -> toggleSelectAllShared()
+        ));
+        selectAll.active = sharedMutationsReady() && !manageable.isEmpty();
+        setDisabledTooltip(selectAll, groupMutationsReasonKey());
+    }
+
+    private boolean sharedMutationsReady() {
+        return sharedWaypoints.supportsGroupMutations();
+    }
+
+    private String groupMutationsReasonKey() {
+        return sharedMutationsReady() ? null : "confluxmap.shared_waypoints.group_mutations_unsupported";
+    }
+
+    private boolean matchesGroupFilter(final UUID groupId) {
+        if (selectedGroupFilter == null) {
+            return true;
+        }
+        if (UNGROUPED_FILTER.equals(selectedGroupFilter)) {
+            return groupId == null;
+        }
+        return selectedGroupFilter.equals(groupId);
+    }
+
+    private List<UUID> manageableSharedIds() {
+        return filteredSharedIds.stream()
+            .filter(id -> sharedWaypoints.find(id).map(sharedWaypoints::canUpdate).orElse(false))
+            .toList();
+    }
+
+    private void toggleSelectedShared(final UUID waypointId) {
+        if (!selectedWaypointIds.add(waypointId)) {
+            selectedWaypointIds.remove(waypointId);
+        }
+        clearPendingActions();
+        rebuild();
+    }
+
+    private void toggleSelectAllShared() {
+        final List<UUID> manageable = manageableSharedIds();
+        if (!manageable.isEmpty() && selectedWaypointIds.containsAll(manageable)) {
+            selectedWaypointIds.removeAll(manageable);
+        } else {
+            selectedWaypointIds.addAll(manageable);
+        }
+        clearPendingActions();
+        rebuild();
+    }
+
+    /** Revisions are per waypoint, so one request per member never conflicts within a batch. */
+    private void moveSharedSelection() {
+        if (selectedWaypointIds.isEmpty() || !sharedMutationsReady()) {
+            return;
+        }
+        for (final UUID waypointId : List.copyOf(selectedWaypointIds)) {
+            sharedWaypoints.find(waypointId)
+                .ifPresent(waypoint -> sharedWaypoints.setWaypointGroup(waypoint, moveTargetGroup));
+        }
+        selectedWaypointIds.clear();
+        clearPendingActions();
+        rebuild();
+    }
+
+    private void addGroupDropdownButton(
+        final GroupDropdown dropdown,
+        final int x,
+        final int y,
+        final int buttonWidth,
+        final Text label
+    ) {
+        final ButtonWidget button = addDrawableChild(Widgets.button(
+            x,
+            y,
+            buttonWidth,
+            TOOLBAR_HEIGHT,
+            fitButtonLabel(label, buttonWidth),
+            ignored -> toggleGroupDropdown(dropdown)
+        ));
+        if (dropdown == GroupDropdown.FILTER) {
+            groupFilterX = x;
+            groupFilterY = y;
+            groupFilterWidth = buttonWidth;
+            button.active = sharedWaypoints.availability().ready();
+        } else {
+            groupMoveX = x;
+            groupMoveY = y;
+            groupMoveWidth = buttonWidth;
+            button.active = sharedMutationsReady() && !selectedWaypointIds.isEmpty();
+            setDisabledTooltip(button, groupMutationsReasonKey());
+        }
+    }
+
+    private void toggleGroupDropdown(final GroupDropdown dropdown) {
+        if (openGroupDropdown == dropdown) {
+            closeGroupDropdown();
+        } else {
+            closeDimensionDropdown();
+            closeSetDropdown();
+            openGroupDropdown = dropdown;
+            groupDropdownKeyboardIndex = Math.max(0, groupDropdownOptions().indexOf(
+                dropdown == GroupDropdown.FILTER ? selectedGroupFilter : moveTargetGroup
+            ));
+            groupDropdownScrollOffset = DropdownScroll.ensureVisible(
+                groupDropdownKeyboardIndex,
+                groupDropdownOptions().size(),
+                groupDropdownVisibleRows()
+            );
+            draggingDropdownScrollbar = false;
+        }
+        rebuild();
+    }
+
+    private void closeGroupDropdown() {
+        openGroupDropdown = null;
+        groupDropdownScrollOffset = 0;
+        groupDropdownKeyboardIndex = 0;
+        draggingDropdownScrollbar = false;
+    }
+
+    private List<UUID> groupDropdownOptions() {
+        final List<UUID> options = new ArrayList<>();
+        options.add(null);
+        for (final SharedWaypointGroup group : sharedWaypoints.groups()) {
+            options.add(group.id());
+        }
+        if (openGroupDropdown == GroupDropdown.FILTER) {
+            options.add(UNGROUPED_FILTER);
+        }
+        return options;
+    }
+
+    private int groupDropdownVisibleRows() {
+        final int popupY = groupDropdownTriggerY() + TOOLBAR_HEIGHT;
+        final int actionHeight = openGroupDropdown == GroupDropdown.FILTER ? DROPDOWN_ACTION_HEIGHT : 0;
+        final int availableHeight = height - BOTTOM_MARGIN - popupY - actionHeight;
+        final int rowsByHeight = Math.max(1, availableHeight / DROPDOWN_ROW_HEIGHT);
+        return Math.min(
+            groupDropdownOptions().size(), Math.min(DROPDOWN_MAX_VISIBLE_ROWS, rowsByHeight)
+        );
+    }
+
+    private DropdownGeometry groupDropdownGeometry() {
+        if (openGroupDropdown == null) {
+            return null;
+        }
+        final int x = openGroupDropdown == GroupDropdown.FILTER ? groupFilterX : groupMoveX;
+        final int dropdownWidth = openGroupDropdown == GroupDropdown.FILTER
+            ? groupFilterWidth
+            : groupMoveWidth;
+        if (dropdownWidth <= 0) {
+            return null;
+        }
+        final int actionHeight = openGroupDropdown == GroupDropdown.FILTER ? DROPDOWN_ACTION_HEIGHT : 0;
+        return new DropdownGeometry(
+            x, groupDropdownTriggerY(), dropdownWidth, groupDropdownTriggerY() + TOOLBAR_HEIGHT,
+            groupDropdownVisibleRows(), actionHeight
+        );
+    }
+
+    private int groupDropdownTriggerY() {
+        return openGroupDropdown == GroupDropdown.FILTER ? groupFilterY : groupMoveY;
+    }
+
+    private void selectGroupDropdownOption(final UUID option) {
+        if (openGroupDropdown == GroupDropdown.FILTER) {
+            selectedGroupFilter = option;
+            scrollOffset = 0;
+            selectedWaypointIds.clear();
+        } else {
+            moveTargetGroup = option;
+        }
+        clearPendingActions();
+        closeGroupDropdown();
+        rebuild();
+    }
+
+    private void normalizeSharedGroupState() {
+        if (tab != Tab.PUBLIC) {
+            return;
+        }
+        final List<SharedWaypointGroup> groups = sharedWaypoints.groups();
+        if (selectedGroupFilter != null && !UNGROUPED_FILTER.equals(selectedGroupFilter)
+            && groups.stream().noneMatch(group -> group.id().equals(selectedGroupFilter))) {
+            selectedGroupFilter = null;
+        }
+        if (moveTargetGroup != null
+            && groups.stream().noneMatch(group -> group.id().equals(moveTargetGroup))) {
+            moveTargetGroup = null;
+        }
+        if (openGroupDropdown == null) {
+            return;
+        }
+        final List<UUID> options = groupDropdownOptions();
+        if (options.isEmpty()) {
+            closeGroupDropdown();
+            return;
+        }
+        groupDropdownKeyboardIndex = MathHelper.clamp(
+            groupDropdownKeyboardIndex, 0, options.size() - 1
+        );
+        groupDropdownScrollOffset = DropdownScroll.keepVisible(
+            groupDropdownScrollOffset,
+            groupDropdownKeyboardIndex,
+            options.size(),
+            groupDropdownVisibleRows()
+        );
+    }
+
+    private SharedWaypointGroup selectedGroup() {
+        if (selectedGroupFilter == null || UNGROUPED_FILTER.equals(selectedGroupFilter)) {
+            return null;
+        }
+        return sharedWaypoints.groups().stream()
+            .filter(group -> group.id().equals(selectedGroupFilter))
+            .findFirst()
+            .orElse(null);
+    }
+
+    private void activateGroupDropdownAction(final int actionIndex) {
+        if (!groupDropdownActionActive(actionIndex)) {
+            return;
+        }
+        closeGroupDropdown();
+        if (actionIndex == 0) {
+            openGroupNamingScreen(null);
+        } else if (actionIndex == 1) {
+            openGroupNamingScreen(selectedGroup());
+        } else {
+            openGroupDeleteConfirm(selectedGroup());
+        }
+    }
+
+    private boolean groupDropdownActionActive(final int actionIndex) {
+        if (!sharedMutationsReady()) {
+            return false;
+        }
+        if (actionIndex == 0) {
+            return sharedWaypoints.canCreateGroup();
+        }
+        final SharedWaypointGroup selected = selectedGroup();
+        return selected != null && sharedWaypoints.canManageGroup(selected);
+    }
+
+    private Text groupDropdownActionLabel(final int actionIndex) {
+        return switch (actionIndex) {
+            case 0 -> Texts.translatable("confluxmap.screen.waypoints.group_new");
+            case 1 -> Texts.translatable("confluxmap.screen.waypoints.group_rename");
+            default -> Texts.translatable(
+                "confluxmap.screen.waypoints.group_delete",
+                selectedGroupMemberCount()
+            );
+        };
+    }
+
+    private int selectedGroupMemberCount() {
+        final SharedWaypointGroup selected = selectedGroup();
+        if (selected == null) {
+            return 0;
+        }
+        return (int) sharedWaypoints.list().stream()
+            .filter(waypoint -> selected.id().equals(waypoint.groupId()))
+            .count();
+    }
+
+    private void openGroupNamingScreen(final SharedWaypointGroup existingGroup) {
+        if (!sharedMutationsReady()) {
+            return;
+        }
+        MinecraftAccess.setScreen(MinecraftClient.getInstance(), new SharedWaypointGroupNamingScreen(
+            this,
+            existingGroup,
+            name -> clearPendingActions()
+        ));
+    }
+
+    private void openGroupDeleteConfirm(final SharedWaypointGroup group) {
+        if (group == null || !sharedMutationsReady()) {
+            return;
+        }
+        MinecraftAccess.setScreen(MinecraftClient.getInstance(), new SharedWaypointGroupDeleteConfirmScreen(
+            this,
+            group,
+            selectedGroupMemberCount(),
+            () -> {
+                selectedGroupFilter = null;
+                selectedWaypointIds.clear();
+                scrollOffset = 0;
+                clearPendingActions();
+            }
+        ));
+    }
+
     private List<RowInfo> buildRows(
         final DimensionId currentDimension,
         final double px,
@@ -928,6 +1337,9 @@ public final class WaypointListScreen extends ConfluxScreen {
         for (final SharedWaypoint waypoint : WaypointListFilter.shared(
             sharedWaypoints.list(), currentDimension, dimensionFilter
         )) {
+            if (!matchesGroupFilter(waypoint.groupId())) {
+                continue;
+            }
             final boolean crossDimension =
                 config.isSharedWaypointCrossDimensionVisible(waypoint.id());
             result.add(new RowInfo(
@@ -1005,6 +1417,18 @@ public final class WaypointListScreen extends ConfluxScreen {
             edit.active = renderedStore != null && renderedStore.persistenceWritable();
         } else if (row.sibling() == null) {
             final SharedWaypoint waypoint = row.shared();
+            final ButtonWidget selected = addDrawableChild(Widgets.button(
+                contentLeft() + ROW_PADDING,
+                selectionY,
+                CHECK_WIDTH,
+                20,
+                Text.of(selectedWaypointIds.contains(waypoint.id()) ? "\u2713" : ""),
+                button -> toggleSelectedShared(waypoint.id())
+            ));
+            selected.active = sharedMutationsReady() && sharedWaypoints.canUpdate(waypoint);
+            setDisabledTooltip(selected, sharedMutationsReady()
+                ? sharedWaypoints.updateDisabledReasonKey(waypoint)
+                : "confluxmap.shared_waypoints.group_mutations_unsupported");
             addIconAction(
                 actions,
                 0,
@@ -1138,6 +1562,7 @@ public final class WaypointListScreen extends ConfluxScreen {
         selectedWaypointIds.clear();
         closeDimensionDropdown();
         closeSetDropdown();
+        closeGroupDropdown();
         rebuild();
     }
 
@@ -1286,6 +1711,7 @@ public final class WaypointListScreen extends ConfluxScreen {
         selectedWaypointIds.clear();
         clearPendingActions();
         closeSetDropdown();
+        closeGroupDropdown();
         rebuild();
     }
 
@@ -1342,6 +1768,7 @@ public final class WaypointListScreen extends ConfluxScreen {
             closeSetDropdown();
         } else {
             closeDimensionDropdown();
+            closeGroupDropdown();
             openSetDropdown = dropdown;
             dropdownKeyboardIndex = selectedDropdownIndex(store);
             dropdownScrollOffset = DropdownScroll.ensureVisible(
@@ -1516,6 +1943,7 @@ public final class WaypointListScreen extends ConfluxScreen {
         scrollOffset = 0;
         closeDimensionDropdown();
         closeSetDropdown();
+        closeGroupDropdown();
     }
 
     @Override
@@ -1543,6 +1971,18 @@ public final class WaypointListScreen extends ConfluxScreen {
         }
         final WaypointStore store = waypointService.current();
         final DropdownGeometry dropdown = dropdownGeometry(store);
+        final DropdownGeometry groupDropdown = groupDropdownGeometry();
+        if (amount != 0 && groupDropdown != null
+            && (groupDropdown.containsPopup(mouseX, mouseY)
+                || groupDropdown.containsTrigger(mouseX, mouseY))) {
+            groupDropdownScrollOffset = DropdownScroll.afterWheel(
+                groupDropdownScrollOffset,
+                amount,
+                groupDropdownOptions().size(),
+                groupDropdown.visibleRows()
+            );
+            return true;
+        }
         if (amount != 0 && dropdown != null
             && (dropdown.containsPopup(mouseX, mouseY) || dropdown.containsTrigger(mouseX, mouseY))) {
             final int optionCount = dropdownOptions(store).size();
@@ -1599,6 +2039,37 @@ public final class WaypointListScreen extends ConfluxScreen {
             }
             if (!dimensionDropdown.containsTrigger(mouseX, mouseY)) {
                 closeDimensionDropdown();
+            }
+        }
+        final DropdownGeometry groupDropdown = groupDropdownGeometry();
+        if (button == MouseButtons.LEFT && groupDropdown != null) {
+            if (groupDropdown.containsPopup(mouseX, mouseY)) {
+                final List<UUID> options = groupDropdownOptions();
+                final int optionBottom = groupDropdown.popupY() + groupDropdown.optionHeight();
+                if (mouseY < optionBottom
+                    && options.size() > groupDropdown.visibleRows()
+                    && mouseX >= groupDropdown.x() + groupDropdown.width() - DROPDOWN_SCROLLBAR_WIDTH) {
+                    draggingDropdownScrollbar = true;
+                    groupDropdownScrollOffset = dropdownScrollFromMouse(
+                        mouseY,
+                        groupDropdown,
+                        options.size()
+                    );
+                    return true;
+                }
+                if (mouseY >= optionBottom && groupDropdown.actionHeight() > 0) {
+                    activateGroupDropdownAction(dropdownActionAt(mouseX, groupDropdown));
+                    return true;
+                }
+                final int visibleIndex = (int) ((mouseY - groupDropdown.popupY()) / DROPDOWN_ROW_HEIGHT);
+                final int optionIndex = groupDropdownScrollOffset + visibleIndex;
+                if (optionIndex >= 0 && optionIndex < options.size()) {
+                    selectGroupDropdownOption(options.get(optionIndex));
+                }
+                return true;
+            }
+            if (!groupDropdown.containsTrigger(mouseX, mouseY)) {
+                closeGroupDropdown();
             }
         }
         final WaypointStore store = waypointService.current();
@@ -1677,6 +2148,15 @@ public final class WaypointListScreen extends ConfluxScreen {
                 );
                 return true;
             }
+            final DropdownGeometry groupDropdown = groupDropdownGeometry();
+            if (groupDropdown != null) {
+                groupDropdownScrollOffset = dropdownScrollFromMouse(
+                    mouseY,
+                    groupDropdown,
+                    groupDropdownOptions().size()
+                );
+                return true;
+            }
             final WaypointStore store = waypointService.current();
             final DropdownGeometry dropdown = dropdownGeometry(store);
             if (dropdown != null) {
@@ -1747,6 +2227,34 @@ public final class WaypointListScreen extends ConfluxScreen {
                 selectDimensionFilter(
                     dimensionDropdownOptions.get(dimensionDropdownKeyboardIndex)
                 );
+                return true;
+            }
+        }
+        if (openGroupDropdown != null) {
+            final List<UUID> options = groupDropdownOptions();
+            if (keyCode == 256) {
+                closeGroupDropdown();
+                rebuild();
+                return true;
+            }
+            if (!options.isEmpty() && (keyCode == 264 || keyCode == 265 || keyCode == 268 || keyCode == 269)) {
+                groupDropdownKeyboardIndex = switch (keyCode) {
+                    case 264 -> Math.min(options.size() - 1, groupDropdownKeyboardIndex + 1);
+                    case 265 -> Math.max(0, groupDropdownKeyboardIndex - 1);
+                    case 268 -> 0;
+                    case 269 -> options.size() - 1;
+                    default -> groupDropdownKeyboardIndex;
+                };
+                groupDropdownScrollOffset = DropdownScroll.keepVisible(
+                    groupDropdownScrollOffset,
+                    groupDropdownKeyboardIndex,
+                    options.size(),
+                    groupDropdownVisibleRows()
+                );
+                return true;
+            }
+            if (!options.isEmpty() && (keyCode == 257 || keyCode == 335)) {
+                selectGroupDropdownOption(options.get(groupDropdownKeyboardIndex));
                 return true;
             }
         }
@@ -1983,6 +2491,7 @@ public final class WaypointListScreen extends ConfluxScreen {
     ) {
         renderDimensionDropdown(draw, mouseX, mouseY);
         renderSetDropdown(draw, mouseX, mouseY);
+        renderGroupDropdown(draw, mouseX, mouseY);
         renderActionTooltip(draw, mouseX, mouseY);
     }
 
@@ -2158,6 +2667,200 @@ public final class WaypointListScreen extends ConfluxScreen {
         }
     }
 
+    private void renderGroupDropdown(final GuiDraw draw, final int mouseX, final int mouseY) {
+        final DropdownGeometry dropdown = groupDropdownGeometry();
+        if (dropdown == null || dropdown.visibleRows() <= 0) {
+            return;
+        }
+        final List<UUID> options = groupDropdownOptions();
+        groupDropdownScrollOffset = DropdownScroll.clamp(
+            groupDropdownScrollOffset, options.size(), dropdown.visibleRows()
+        );
+        final boolean hasScrollbar = options.size() > dropdown.visibleRows();
+        final int textRightPadding = hasScrollbar ? DROPDOWN_SCROLLBAR_WIDTH + 5 : 5;
+
+        draw.fill(
+            dropdown.x() - 1,
+            dropdown.popupY() - 1,
+            dropdown.x() + dropdown.width() + 1,
+            dropdown.popupY() + dropdown.popupHeight() + 1,
+            0xFF000000
+        );
+        for (int visibleIndex = 0; visibleIndex < dropdown.visibleRows(); visibleIndex++) {
+            final int optionIndex = groupDropdownScrollOffset + visibleIndex;
+            if (optionIndex >= options.size()) {
+                break;
+            }
+            final int rowY = dropdown.popupY() + visibleIndex * DROPDOWN_ROW_HEIGHT;
+            final boolean hovered = mouseX >= dropdown.x()
+                && mouseX < dropdown.x() + dropdown.width() - (hasScrollbar ? DROPDOWN_SCROLLBAR_WIDTH : 0)
+                && mouseY >= rowY
+                && mouseY < rowY + DROPDOWN_ROW_HEIGHT;
+            final UUID option = options.get(optionIndex);
+            final boolean selected = java.util.Objects.equals(
+                option,
+                openGroupDropdown == GroupDropdown.FILTER ? selectedGroupFilter : moveTargetGroup
+            );
+            final boolean keyboardFocused = optionIndex == groupDropdownKeyboardIndex;
+            draw.fill(
+                dropdown.x(),
+                rowY,
+                dropdown.x() + dropdown.width(),
+                rowY + DROPDOWN_ROW_HEIGHT,
+                hovered || keyboardFocused ? 0xFF6E6E6E : selected ? 0xFF505050 : 0xFF2A2A2A
+            );
+            if (selected) {
+                draw.fill(dropdown.x(), rowY + 2, dropdown.x() + 2, rowY + DROPDOWN_ROW_HEIGHT - 2, 0xFFFFFFFF);
+            }
+            final String count = Integer.toString(groupDropdownOptionCount(option));
+            final int textRight = dropdown.x() + dropdown.width() - textRightPadding;
+            final int countWidth = this.textRenderer.getWidth(count);
+            //#if MC>=260100
+            //$$ final String label = this.font.plainSubstrByWidth(
+            //$$     groupDropdownDisplayName(option), Math.max(8, textRight - countWidth - GAP - dropdown.x() - 5)
+            //$$ );
+            //#else
+            final String label = this.textRenderer.trimToWidth(
+                groupDropdownDisplayName(option), Math.max(8, textRight - countWidth - GAP - dropdown.x() - 5)
+            );
+            //#endif
+            draw.drawTextWithShadow(
+                this.textRenderer,
+                label,
+                dropdown.x() + 5,
+                rowY + (DROPDOWN_ROW_HEIGHT - this.textRenderer.fontHeight) / 2f,
+                selected ? 0xFFFFFFFF : 0xFFE0E0E0
+            );
+            draw.drawTextWithShadow(
+                this.textRenderer,
+                count,
+                textRight - countWidth,
+                rowY + (DROPDOWN_ROW_HEIGHT - this.textRenderer.fontHeight) / 2f,
+                0xFFAAAAAA
+            );
+        }
+
+        if (hasScrollbar) {
+            renderDropdownScrollbar(draw, dropdown, options.size(), groupDropdownScrollOffset);
+        }
+
+        if (dropdown.actionHeight() > 0) {
+            renderGroupDropdownActions(draw, mouseX, mouseY, dropdown);
+        }
+    }
+
+    private void renderGroupDropdownActions(
+        final GuiDraw draw,
+        final int mouseX,
+        final int mouseY,
+        final DropdownGeometry dropdown
+    ) {
+        final int actionY = dropdown.popupY() + dropdown.optionHeight();
+        draw.fill(
+            dropdown.x(),
+            actionY,
+            dropdown.x() + dropdown.width(),
+            actionY + 1,
+            0xFF111111
+        );
+        for (int actionIndex = 0; actionIndex < 3; actionIndex++) {
+            final int actionLeft = dropdown.x() + dropdown.width() * actionIndex / 3;
+            final int actionRight = dropdown.x() + dropdown.width() * (actionIndex + 1) / 3;
+            final boolean active = groupDropdownActionActive(actionIndex);
+            final boolean hovered = active
+                && mouseX >= actionLeft
+                && mouseX < actionRight
+                && mouseY >= actionY
+                && mouseY < actionY + dropdown.actionHeight();
+            draw.fill(
+                actionLeft,
+                actionY,
+                actionRight,
+                actionY + dropdown.actionHeight(),
+                actionIndex == 2 && active
+                    ? hovered ? 0xFF8A3A3A : 0xFF5A2A2A
+                    : hovered ? 0xFF6E6E6E : active ? 0xFF383838 : 0xFF202020
+            );
+            if (actionIndex > 0) {
+                draw.fill(actionLeft, actionY + 3, actionLeft + 1, actionY + dropdown.actionHeight() - 3, 0xFF101010);
+            }
+            final String label = this.textRenderer.trimToWidth(
+                groupDropdownActionLabel(actionIndex).getString(), Math.max(8, actionRight - actionLeft - 6)
+            );
+            draw.drawTextWithShadow(
+                this.textRenderer,
+                label,
+                (actionLeft + actionRight - this.textRenderer.getWidth(label)) / 2f,
+                actionY + (dropdown.actionHeight() - this.textRenderer.fontHeight) / 2f,
+                active ? 0xFFFFFFFF : 0xFF777777
+            );
+        }
+    }
+
+    private int groupDropdownOptionCount(final UUID option) {
+        if (option == null) {
+            return openGroupDropdown == GroupDropdown.FILTER
+                ? sharedWaypoints.list().size()
+                : ungroupedSharedCount();
+        }
+        if (UNGROUPED_FILTER.equals(option)) {
+            return ungroupedSharedCount();
+        }
+        return (int) sharedWaypoints.list().stream()
+            .filter(waypoint -> option.equals(waypoint.groupId()))
+            .count();
+    }
+
+    private int ungroupedSharedCount() {
+        return (int) sharedWaypoints.list().stream()
+            .filter(waypoint -> waypoint.groupId() == null)
+            .count();
+    }
+
+    private Text groupFilterLabel() {
+        return Texts.translatable(
+            "confluxmap.screen.waypoints.group_filter",
+            groupFilterDisplayName(selectedGroupFilter),
+            filteredSharedIds.size()
+        );
+    }
+
+    private Text groupMoveTargetLabel() {
+        return Texts.translatable(
+            "confluxmap.screen.waypoints.selection_target",
+            moveTargetGroup == null
+                ? Texts.translatable("confluxmap.screen.waypoints.group_ungrouped").getString()
+                : groupDisplayName(moveTargetGroup)
+        );
+    }
+
+    private String groupFilterDisplayName(final UUID groupId) {
+        if (groupId == null) {
+            return Texts.translatable("confluxmap.screen.waypoints.group_all").getString();
+        }
+        return groupDisplayName(groupId);
+    }
+
+    private String groupDropdownDisplayName(final UUID option) {
+        if (option == null) {
+            return openGroupDropdown == GroupDropdown.FILTER
+                ? Texts.translatable("confluxmap.screen.waypoints.group_all").getString()
+                : Texts.translatable("confluxmap.screen.waypoints.group_ungrouped").getString();
+        }
+        return groupDisplayName(option);
+    }
+
+    private String groupDisplayName(final UUID groupId) {
+        if (UNGROUPED_FILTER.equals(groupId)) {
+            return Texts.translatable("confluxmap.screen.waypoints.group_ungrouped").getString();
+        }
+        return sharedWaypoints.groups().stream()
+            .filter(group -> group.id().equals(groupId))
+            .findFirst()
+            .map(SharedWaypointGroup::name)
+            .orElse(Texts.translatable("confluxmap.screen.waypoints.group_ungrouped").getString());
+    }
+
     private void renderDropdownScrollbar(
         final GuiDraw draw,
         final DropdownGeometry dropdown,
@@ -2303,9 +3006,6 @@ public final class WaypointListScreen extends ConfluxScreen {
     }
 
     private int listTop() {
-        if (tab != Tab.LOCAL) {
-            return SHARED_LIST_TOP;
-        }
         return selectedWaypointIds.isEmpty() ? LOCAL_IDLE_LIST_TOP : LOCAL_LIST_TOP;
     }
 
@@ -2350,8 +3050,7 @@ public final class WaypointListScreen extends ConfluxScreen {
     }
 
     private int markerX(final boolean indented) {
-        final int selectionWidth = tab == Tab.LOCAL ? CHECK_WIDTH + GAP : 0;
-        return contentLeft() + ROW_PADDING + (indented ? SET_MEMBER_INDENT : 0) + selectionWidth;
+        return contentLeft() + ROW_PADDING + (indented ? SET_MEMBER_INDENT : 0) + CHECK_WIDTH + GAP;
     }
 
     private int nameX(final boolean indented) {

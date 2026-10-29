@@ -7,7 +7,9 @@ public final class SharedWaypointProto {
 
     public static final String CHANNEL_ID = "confluxmap:waypoints_v1";
     public static final int PROTO_MAJOR = 1;
-    public static final int PROTO_MINOR = 4;
+    public static final int PROTO_MINOR = 5;
+    /** First wire minor carrying client-originated group mutations. */
+    public static final int PROTO_MINOR_GROUP_MUTATIONS = 5;
 
     public static final int MSG_HELLO_C2S = 0x01;
     public static final int MSG_STATUS_S2C = 0x02;
@@ -22,6 +24,10 @@ public final class SharedWaypointProto {
     public static final int MSG_UPDATE_C2S = 0x0B;
     public static final int MSG_GROUP_UPSERT_S2C = 0x0C;
     public static final int MSG_GROUP_REMOVE_S2C = 0x0D;
+    public static final int MSG_GROUP_CREATE_C2S = 0x0E;
+    public static final int MSG_GROUP_RENAME_C2S = 0x0F;
+    public static final int MSG_GROUP_DELETE_C2S = 0x10;
+    public static final int MSG_SET_GROUP_C2S = 0x11;
 
     public static final int MAX_C2S_PAYLOAD = 8 * 1024;
     public static final int MAX_S2C_PAYLOAD = 1 << 20;

@@ -9,12 +9,15 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 import cn.net.rms.confluxmap.core.model.DimensionId;
 import cn.net.rms.confluxmap.core.net.shared.CreateC2S;
 import cn.net.rms.confluxmap.core.net.shared.DeleteC2S;
+import cn.net.rms.confluxmap.core.net.shared.GroupCreateC2S;
 import cn.net.rms.confluxmap.core.net.shared.GroupRemoveS2C;
+import cn.net.rms.confluxmap.core.net.shared.GroupRenameC2S;
 import cn.net.rms.confluxmap.core.net.shared.GroupUpsertS2C;
 import cn.net.rms.confluxmap.core.net.shared.HelloC2S;
 import cn.net.rms.confluxmap.core.net.shared.LockC2S;
 import cn.net.rms.confluxmap.core.net.shared.ResultS2C;
 import cn.net.rms.confluxmap.core.net.shared.RemoveS2C;
+import cn.net.rms.confluxmap.core.net.shared.SetWaypointGroupC2S;
 import cn.net.rms.confluxmap.core.net.shared.SharedWaypointProto;
 import cn.net.rms.confluxmap.core.net.shared.SnapshotS2C;
 import cn.net.rms.confluxmap.core.net.shared.StatusS2C;
@@ -444,6 +447,73 @@ class SharedWaypointSessionHandlerTest {
         );
         assertEquals(2L, remove.revision());
         assertEquals(snapshot.groups().get(0).id(), remove.groupId());
+    }
+
+    @Test
+    void clientOriginatedGroupMutationsRouteThroughTheProtocolChannel() {
+        final Fixture fixture = fixture(true);
+        compatibleHello(fixture, PLAYER);
+        compatibleHello(fixture, OPERATOR);
+        final SharedWaypointSessionHandler.Peer other = peer(3, "Other", false);
+        compatibleHello(fixture, other);
+
+        final SharedWaypointSessionHandler.Dispatch groupCreated = fixture.handler.handle(
+            PLAYER,
+            new GroupCreateC2S(uuid(500), 0L, "Villages"),
+            fixture.environment
+        );
+        final ResultS2C groupResult = assertInstanceOf(ResultS2C.class, groupCreated.direct().get(0));
+        assertEquals(SharedWaypointProto.RESULT_STATUS_APPLIED, groupResult.statusCode());
+        final GroupUpsertS2C groupUpsert = assertInstanceOf(GroupUpsertS2C.class, groupCreated.broadcast());
+        final UUID groupId = groupUpsert.group().id();
+        assertEquals("Villages", groupUpsert.group().name());
+
+        final UpsertS2C waypoint = assertInstanceOf(
+            UpsertS2C.class,
+            fixture.handler.handle(PLAYER, create(uuid(501), 1L, "Spawn"), fixture.environment).broadcast()
+        );
+
+        final SharedWaypointSessionHandler.Dispatch assigned = fixture.handler.handle(
+            PLAYER,
+            new SetWaypointGroupC2S(
+                uuid(502), waypoint.waypoint().id(), waypoint.waypoint().revision(), groupId
+            ),
+            fixture.environment
+        );
+        assertEquals(
+            SharedWaypointProto.RESULT_STATUS_APPLIED,
+            assertInstanceOf(ResultS2C.class, assigned.direct().get(0)).statusCode()
+        );
+        final UpsertS2C assignedDelta = assertInstanceOf(UpsertS2C.class, assigned.broadcast());
+        assertEquals(groupId, assignedDelta.waypoint().groupId());
+
+        final ResultS2C forbidden = assertInstanceOf(
+            ResultS2C.class,
+            fixture.handler.handle(
+                other,
+                new GroupRenameC2S(uuid(503), groupUpsert.group().revision(), groupId, "Farms"),
+                fixture.environment
+            ).direct().get(0)
+        );
+        assertEquals(SharedWaypointProto.RESULT_ERROR_FORBIDDEN, forbidden.errorCode());
+
+        final SharedWaypointSessionHandler.Dispatch renamed = fixture.handler.handle(
+            OPERATOR,
+            new GroupRenameC2S(uuid(504), groupUpsert.group().revision(), groupId, "Farms"),
+            fixture.environment
+        );
+        final GroupUpsertS2C renamedDelta = assertInstanceOf(GroupUpsertS2C.class, renamed.broadcast());
+        assertEquals("Farms", renamedDelta.group().name());
+
+        final Fixture disabled = fixture(false);
+        compatibleHello(disabled, PLAYER);
+        final ResultS2C disabledResult = assertInstanceOf(
+            ResultS2C.class,
+            disabled.handler.handle(
+                PLAYER, new GroupCreateC2S(uuid(505), 0L, "Nope"), disabled.environment
+            ).direct().get(0)
+        );
+        assertEquals(SharedWaypointProto.RESULT_ERROR_DISABLED, disabledResult.errorCode());
     }
 
     private static SharedWaypointSessionHandler.Dispatch compatibleHello(

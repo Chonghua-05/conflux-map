@@ -46,6 +46,11 @@ class SharedWaypointCodecTest {
                 OPERATION_ID, WAYPOINT_ID, 40L, "Updated", DimensionId.END,
                 8d, 70d, 9d, 0xFF3498DB, Waypoint.Type.NORMAL
             ),
+            new GroupCreateC2S(OPERATION_ID, 41L, "Villages"),
+            new GroupRenameC2S(OPERATION_ID, 3L, GROUP_ID, "Farms"),
+            new GroupDeleteC2S(OPERATION_ID, 3L, GROUP_ID),
+            new SetWaypointGroupC2S(OPERATION_ID, WAYPOINT_ID, 40L, GROUP_ID),
+            new SetWaypointGroupC2S(OPERATION_ID, WAYPOINT_ID, 40L, null),
             new SnapshotS2C(42L, true, List.of(waypoint)),
             new UpsertS2C(42L, waypoint),
             new RemoveS2C(43L, WAYPOINT_ID),
@@ -122,6 +127,39 @@ class SharedWaypointCodecTest {
             upsert,
             SharedWaypointCodec.decodeS2C(SharedWaypointCodec.encode(upsert, 3), 3)
         );
+    }
+
+    @Test
+    void groupMutationsRequireNegotiatedMinorFive() throws SharedWaypointProtocolException {
+        final GroupCreateC2S groupCreate = new GroupCreateC2S(OPERATION_ID, 41L, "Villages");
+        final GroupRenameC2S groupRename = new GroupRenameC2S(OPERATION_ID, 3L, GROUP_ID, "Farms");
+        final GroupDeleteC2S groupDelete = new GroupDeleteC2S(OPERATION_ID, 3L, GROUP_ID);
+        final SetWaypointGroupC2S setGroup = new SetWaypointGroupC2S(
+            OPERATION_ID, WAYPOINT_ID, 40L, GROUP_ID
+        );
+        final List<SharedWaypointMessage> mutations = List.of(groupCreate, groupRename, groupDelete, setGroup);
+
+        for (final SharedWaypointMessage mutation : mutations) {
+            assertThrows(
+                SharedWaypointProtocolException.class,
+                () -> SharedWaypointCodec.encode(mutation, SharedWaypointProto.PROTO_MINOR_GROUP_MUTATIONS - 1),
+                mutation.getClass().getSimpleName()
+            );
+            assertThrows(
+                SharedWaypointProtocolException.class,
+                () -> SharedWaypointCodec.decodeC2S(
+                    SharedWaypointCodec.encode(mutation),
+                    SharedWaypointProto.PROTO_MINOR_GROUP_MUTATIONS - 1
+                ),
+                mutation.getClass().getSimpleName()
+            );
+            final byte[] payload = SharedWaypointCodec.encode(mutation);
+            assertEquals(
+                mutation.typeId(),
+                payload[0] & 0xFF,
+                mutation.getClass().getSimpleName()
+            );
+        }
     }
 
     @Test
@@ -405,7 +443,11 @@ class SharedWaypointCodecTest {
             || message instanceof CreateC2S
             || message instanceof DeleteC2S
             || message instanceof LockC2S
-            || message instanceof UpdateC2S) {
+            || message instanceof UpdateC2S
+            || message instanceof GroupCreateC2S
+            || message instanceof GroupRenameC2S
+            || message instanceof GroupDeleteC2S
+            || message instanceof SetWaypointGroupC2S) {
             return SharedWaypointCodec.decodeC2S(payload);
         }
         return SharedWaypointCodec.decodeS2C(payload);

@@ -2,12 +2,16 @@ package cn.net.rms.confluxmap.server.shared;
 
 import cn.net.rms.confluxmap.core.net.shared.CreateC2S;
 import cn.net.rms.confluxmap.core.net.shared.DeleteC2S;
+import cn.net.rms.confluxmap.core.net.shared.GroupCreateC2S;
+import cn.net.rms.confluxmap.core.net.shared.GroupDeleteC2S;
 import cn.net.rms.confluxmap.core.net.shared.GroupRemoveS2C;
+import cn.net.rms.confluxmap.core.net.shared.GroupRenameC2S;
 import cn.net.rms.confluxmap.core.net.shared.GroupUpsertS2C;
 import cn.net.rms.confluxmap.core.net.shared.HelloC2S;
 import cn.net.rms.confluxmap.core.net.shared.LockC2S;
 import cn.net.rms.confluxmap.core.net.shared.RemoveS2C;
 import cn.net.rms.confluxmap.core.net.shared.ResultS2C;
+import cn.net.rms.confluxmap.core.net.shared.SetWaypointGroupC2S;
 import cn.net.rms.confluxmap.core.net.shared.SharedWaypointMessage;
 import cn.net.rms.confluxmap.core.net.shared.SharedWaypointProto;
 import cn.net.rms.confluxmap.core.net.shared.SnapshotS2C;
@@ -218,6 +222,52 @@ public final class SharedWaypointSessionHandler {
                     update.operationId(), update.expectedRevision(), update.id(), update.name(),
                     update.dimensionId(), update.x(), update.y(), update.z(), update.color(), update.type(),
                     update.iconItemId(), update.markerLabel()
+                )
+            ));
+        }
+        if (message instanceof final GroupCreateC2S groupCreate) {
+            if (!environment.enabled()) {
+                return disabled(session, groupCreate.operationId(), peer, environment);
+            }
+            return mutation(session, environment.service().createGroup(
+                actor(peer),
+                new SharedWaypointService.GroupCreateRequest(
+                    groupCreate.operationId(), groupCreate.expectedRevision(), groupCreate.name()
+                )
+            ));
+        }
+        if (message instanceof final GroupRenameC2S groupRename) {
+            if (!environment.enabled()) {
+                return disabled(session, groupRename.operationId(), peer, environment);
+            }
+            return mutation(session, environment.service().renameGroup(
+                actor(peer),
+                new SharedWaypointService.GroupRenameRequest(
+                    groupRename.operationId(), groupRename.expectedRevision(),
+                    groupRename.groupId(), groupRename.name()
+                )
+            ));
+        }
+        if (message instanceof final GroupDeleteC2S groupDelete) {
+            if (!environment.enabled()) {
+                return disabled(session, groupDelete.operationId(), peer, environment);
+            }
+            return mutation(session, environment.service().deleteGroup(
+                actor(peer),
+                new SharedWaypointService.GroupDeleteRequest(
+                    groupDelete.operationId(), groupDelete.expectedRevision(), groupDelete.groupId()
+                )
+            ));
+        }
+        if (message instanceof final SetWaypointGroupC2S setGroup) {
+            if (!environment.enabled()) {
+                return disabled(session, setGroup.operationId(), peer, environment);
+            }
+            return mutation(session, environment.service().setWaypointGroup(
+                actor(peer),
+                new SharedWaypointService.SetGroupRequest(
+                    setGroup.operationId(), setGroup.expectedRevision(),
+                    setGroup.waypointId(), setGroup.groupId()
                 )
             ));
         }
@@ -436,8 +486,7 @@ public final class SharedWaypointSessionHandler {
                 : SharedWaypointProto.RESULT_ERROR_INVALID_REQUEST;
             case PERSISTENCE_FAILED -> SharedWaypointProto.RESULT_ERROR_PERSISTENCE_FAILED;
             case ID_GENERATION_FAILED -> SharedWaypointProto.RESULT_ERROR_ID_GENERATION_FAILED;
-            // Group quota is command-originated only, so the wire never carries it in this
-            // protocol revision; the closest stable wire error is the world quota.
+            // No dedicated wire code for the group quota; the world quota is the closest stable error.
             case GROUP_QUOTA_EXCEEDED -> SharedWaypointProto.RESULT_ERROR_WORLD_QUOTA_EXCEEDED;
         };
     }
