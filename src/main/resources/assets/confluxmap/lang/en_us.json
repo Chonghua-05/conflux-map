@@ -208,6 +208,7 @@
   "confluxmap.screen.waypoint.name": "Name",
   "confluxmap.screen.waypoint.coords": "X / Y / Z",
   "confluxmap.screen.waypoint.set": "Waypoint Set",
+  "confluxmap.screen.waypoint.group": "Group",
   "confluxmap.screen.waypoint.set_default": "Unassigned",
   "confluxmap.screen.waypoint.color": "Color",
   "confluxmap.screen.waypoint.color_custom": "Custom…",

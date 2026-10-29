@@ -9,6 +9,12 @@ import cn.net.rms.confluxmap.core.waypoint.Waypoint;
 import cn.net.rms.confluxmap.core.waypoint.WaypointMarkerStyle;
 import cn.net.rms.confluxmap.core.waypoint.WaypointSet;
 import cn.net.rms.confluxmap.core.waypoint.WaypointStore;
+import cn.net.rms.confluxmap.core.waypoint.list.EditDraft;
+import cn.net.rms.confluxmap.core.waypoint.list.GroupRef;
+import cn.net.rms.confluxmap.core.waypoint.list.LocalWaypointListModel;
+import cn.net.rms.confluxmap.core.waypoint.list.SharedWaypointListModel;
+import cn.net.rms.confluxmap.core.waypoint.list.WaypointListModel;
+import cn.net.rms.confluxmap.core.waypoint.list.WaypointRow;
 import cn.net.rms.confluxmap.mc.net.shared.SharedWaypointClient;
 import cn.net.rms.confluxmap.mc.render.RenderUtil;
 import cn.net.rms.confluxmap.mc.ui.GuiDraw;
@@ -36,9 +42,11 @@ import net.minecraft.text.Text;
 /**
  * Create/edit form for one waypoint: name, X/Y/Z (raw local coordinates in
  * {@link #dimensionId}), cross-dimension visibility with an optional Y override
- * for the linked-dimension view, a color palette, and a local waypoint-set
- * selector. The dimension itself and the normal/death type are fixed at creation
- * and not editable here, per the implementation brief.
+ * for the linked-dimension view, a color palette, and a group selector - the
+ * local store's waypoint sets or the shared server's groups. The dimension
+ * itself and the normal/death type are fixed at creation and not editable
+ * here, per the implementation brief. Saves go through the unified list
+ * models; only the archived-world store form writes the store directly.
  */
 public final class WaypointEditScreen extends ConfluxScreen {
     private enum CreateTarget { LOCAL, PUBLIC, CHAT }
@@ -67,10 +75,15 @@ public final class WaypointEditScreen extends ConfluxScreen {
     private final boolean initialVisible;
     private final CreateTarget createTarget;
     private final SharedWaypointClient sharedWaypoints;
+    private final LocalWaypointListModel localModel;
+    private final SharedWaypointListModel sharedModel;
     private final WaypointStore boundLocalStore;
     private final Supplier<WaypointStore> localStoreSupplier;
+    /** True when an archived/view world's store was explicitly bound instead of the live session. */
+    private final boolean explicitLocalStore;
     private final boolean openedFromHotkey;
-    private final SharedWaypoint editingShared;
+    /** Unified-template row of the waypoint being edited; the model routes updates by id. */
+    private final WaypointRow editingRow;
 
     private TextFieldWidget nameField;
     private TextFieldWidget markerLabelField;
@@ -79,13 +92,16 @@ public final class WaypointEditScreen extends ConfluxScreen {
     private TextFieldWidget zField;
     private TextFieldWidget crossDimensionYField;
     private ButtonWidget setButton;
+    private ButtonWidget groupButton;
     private ButtonWidget markerModeButton;
     private ButtonWidget iconButton;
     private ButtonWidget clearIconButton;
     private ButtonWidget deleteButton;
     private ButtonWidget doneButton;
     private List<String> setNames = List.of(WaypointSet.DEFAULT_NAME);
+    private List<GroupRef> sharedGroups = List.of();
     private int selectedSetIndex;
+    private int selectedGroupIndex;
     private final WaypointColorSelection colorSelection;
     private boolean crossDimensionVisible;
     private String selectedIconItemId = "";
@@ -117,7 +133,7 @@ public final class WaypointEditScreen extends ConfluxScreen {
         final CreateTarget createTarget,
         final Supplier<WaypointStore> localStoreSupplier,
         final boolean openedFromHotkey,
-        final SharedWaypoint editingShared
+        final WaypointRow editingRow
     ) {
         super(Texts.translatable(titleKey(editingId, createTarget)));
         this.parent = parent;
@@ -135,11 +151,15 @@ public final class WaypointEditScreen extends ConfluxScreen {
         this.crossDimensionVisible = crossDimensionVisible;
         this.createTarget = createTarget;
         this.openedFromHotkey = openedFromHotkey;
-        this.editingShared = editingShared;
-        this.sharedWaypoints = ConfluxMapClient.get().sharedWaypoints();
+        this.editingRow = editingRow;
+        final ConfluxMapClient app = ConfluxMapClient.get();
+        this.sharedWaypoints = app.sharedWaypoints();
+        this.localModel = app.localWaypointListModel();
+        this.sharedModel = app.sharedWaypointListModel();
+        this.explicitLocalStore = createTarget == CreateTarget.LOCAL && localStoreSupplier != null;
         this.localStoreSupplier = createTarget == CreateTarget.LOCAL
             ? localStoreSupplier == null
-                ? () -> ConfluxMapClient.get().waypointService().current()
+                ? () -> app.waypointService().current()
                 : localStoreSupplier
             : () -> null;
         this.boundLocalStore = this.localStoreSupplier.get();
@@ -250,7 +270,8 @@ public final class WaypointEditScreen extends ConfluxScreen {
         final WaypointEditScreen screen = new WaypointEditScreen(
             parent, waypoint.id, waypoint.dimensionId, waypoint.type, waypoint.createdAtEpochMs,
             waypoint.name, waypoint.x, waypoint.y, waypoint.z, waypoint.colorArgb, waypoint.group,
-            waypoint.visible, waypoint.crossDimensionVisible, CreateTarget.LOCAL, null, false, null
+            waypoint.visible, waypoint.crossDimensionVisible,
+            CreateTarget.LOCAL, null, false, wrapLocal(waypoint)
         );
         return withCrossDimensionY(withMarkerStyle(screen, waypoint.iconItemId, waypoint.markerLabel),
             waypoint.crossDimensionY
@@ -266,25 +287,45 @@ public final class WaypointEditScreen extends ConfluxScreen {
             parent, waypoint.id, waypoint.dimensionId, waypoint.type, waypoint.createdAtEpochMs,
             waypoint.name, waypoint.x, waypoint.y, waypoint.z, waypoint.colorArgb, waypoint.group,
             waypoint.visible, waypoint.crossDimensionVisible,
-            CreateTarget.LOCAL, localStoreSupplier, false, null
+            CreateTarget.LOCAL, localStoreSupplier, false, wrapLocal(waypoint)
         );
         return withCrossDimensionY(withMarkerStyle(screen, waypoint.iconItemId, waypoint.markerLabel),
             waypoint.crossDimensionY
         );
     }
 
-    public static WaypointEditScreen forPublicEdit(
-        final Screen parent,
-        final SharedWaypoint waypoint
-    ) {
+    public static WaypointEditScreen forPublicEdit(final Screen parent, final WaypointRow row) {
         final WaypointEditScreen screen = new WaypointEditScreen(
-            parent, waypoint.id(), waypoint.dimensionId(), waypoint.type(), waypoint.createdAtEpochMs(),
-            waypoint.name(), waypoint.x(), waypoint.y(), waypoint.z(), waypoint.colorArgb(), "",
-            true, ConfluxMapClient.get().config().isSharedWaypointCrossDimensionVisible(waypoint.id()),
-            CreateTarget.PUBLIC, null, false, waypoint
+            parent, row.id(), row.dimensionId(), row.type(), System.currentTimeMillis(),
+            row.name(), row.x(), row.y(), row.z(), row.colorArgb(), row.groupKey(),
+            true, row.crossDimensionVisible(),
+            CreateTarget.PUBLIC, null, false, row
         );
-        return withCrossDimensionY(withMarkerStyle(screen, waypoint.iconItemId(), waypoint.markerLabel()),
-            ConfluxMapClient.get().config().sharedWaypointCrossDimensionY(waypoint.id())
+        return withCrossDimensionY(withMarkerStyle(screen, row.iconItemId(), row.markerLabel()),
+            ConfluxMapClient.get().config().sharedWaypointCrossDimensionY(row.id())
+        );
+    }
+
+    public static WaypointEditScreen forPublicEdit(final Screen parent, final SharedWaypoint waypoint) {
+        final ConfluxMapClient app = ConfluxMapClient.get();
+        return forPublicEdit(parent, new WaypointRow(
+            waypoint.id(), waypoint.name(), "", waypoint.dimensionId(),
+            waypoint.x(), waypoint.y(), waypoint.z(), waypoint.colorArgb(), waypoint.type(),
+            waypoint.iconItemId(), waypoint.markerLabel(),
+            waypoint.groupId() == null ? GroupRef.UNGROUPED_KEY : waypoint.groupId().toString(),
+            false, false,
+            app.config().isSharedWaypointCrossDimensionVisible(waypoint.id()),
+            ""
+        ));
+    }
+
+    /** The model routes updates by id; the wrapper only carries identity and ownership. */
+    private static WaypointRow wrapLocal(final Waypoint waypoint) {
+        return new WaypointRow(
+            waypoint.id, waypoint.name, "", waypoint.dimensionId,
+            waypoint.x, waypoint.y, waypoint.z, waypoint.colorArgb, waypoint.type,
+            waypoint.iconItemId, waypoint.markerLabel, waypoint.group,
+            !waypoint.visible, false, waypoint.crossDimensionVisible, ""
         );
     }
 
@@ -352,6 +393,7 @@ public final class WaypointEditScreen extends ConfluxScreen {
         addDrawableChild(zField);
 
         setButton = null;
+        groupButton = null;
         if (createTarget == CreateTarget.LOCAL) {
             setNames = localSetNames();
             selectedSetIndex = Math.max(0, setNames.indexOf(draftGroup));
@@ -363,6 +405,22 @@ public final class WaypointEditScreen extends ConfluxScreen {
                 selectedSetLabel(),
                 button -> selectNextSet()
             ));
+        } else if (createTarget == CreateTarget.PUBLIC) {
+            sharedGroups = sharedModel.groupsForDisplay();
+            selectedGroupIndex = Math.max(0, indexOfGroupKey(draftGroup));
+            groupButton = addDrawableChild(Widgets.button(
+                centerX - fieldWidth / 2,
+                102,
+                fieldWidth,
+                FIELD_HEIGHT,
+                selectedGroupLabel(),
+                button -> selectNextSharedGroup()
+            ));
+            final boolean supported = sharedModel.supportsInFormGroupSelection();
+            groupButton.active = supported;
+            if (!supported) {
+                setDisabledTooltip(groupButton, "confluxmap.shared_waypoints.group_mutations_unsupported");
+            }
         }
 
         final int totalSwatchWidth = PRESET_COLORS.length * SWATCH_SIZE
@@ -506,7 +564,9 @@ public final class WaypointEditScreen extends ConfluxScreen {
             Texts.translatable("confluxmap.screen.waypoint.done"), b -> onDone()
         ));
         if (createTarget == CreateTarget.LOCAL) {
-            doneButton.active = boundLocalStore != null && boundLocalStore.persistenceWritable();
+            final WaypointListModel.Permission localWrite = localWritePermission();
+            doneButton.active = localWrite.granted();
+            setDisabledTooltip(doneButton, localWrite.reasonKey());
         } else if (createTarget == CreateTarget.PUBLIC) {
             updatePublicDoneButton();
         }
@@ -713,6 +773,29 @@ public final class WaypointEditScreen extends ConfluxScreen {
             : Text.of(name);
     }
 
+    private void selectNextSharedGroup() {
+        selectedGroupIndex = (selectedGroupIndex + 1) % sharedGroups.size();
+        if (groupButton != null) {
+            groupButton.setMessage(selectedGroupLabel());
+        }
+    }
+
+    private Text selectedGroupLabel() {
+        final GroupRef group = sharedGroups.get(selectedGroupIndex);
+        return group.isUngrouped()
+            ? Texts.translatable("confluxmap.screen.waypoints.group_ungrouped")
+            : Text.of(group.displayName());
+    }
+
+    private int indexOfGroupKey(final String key) {
+        for (int index = 0; index < sharedGroups.size(); index++) {
+            if (sharedGroups.get(index).key().equals(key)) {
+                return index;
+            }
+        }
+        return -1;
+    }
+
     private Text markerModeLabel() {
         return Texts.translatable(markerMode.translationKey());
     }
@@ -759,7 +842,7 @@ public final class WaypointEditScreen extends ConfluxScreen {
         draftX = xField.getText();
         draftY = yField.getText();
         draftZ = zField.getText();
-        draftGroup = selectedSetName();
+        draftGroup = selectedDraftGroup();
         draftMarkerLabel = markerLabelField.getText();
         if (crossDimensionYField != null) {
             draftCrossDimensionY = crossDimensionYField.getText();
@@ -789,6 +872,17 @@ public final class WaypointEditScreen extends ConfluxScreen {
         return setNames.get(selectedSetIndex);
     }
 
+    private String selectedGroupKey() {
+        if (createTarget != CreateTarget.PUBLIC || sharedGroups.isEmpty()) {
+            return GroupRef.UNGROUPED_KEY;
+        }
+        return sharedGroups.get(selectedGroupIndex).key();
+    }
+
+    private String selectedDraftGroup() {
+        return createTarget == CreateTarget.PUBLIC ? selectedGroupKey() : selectedSetName();
+    }
+
     private static String formatCoord(final double value) {
         if (!Double.isFinite(value)) {
             return "";
@@ -800,15 +894,48 @@ public final class WaypointEditScreen extends ConfluxScreen {
         return plain.length() <= 24 ? plain : Double.toString(value);
     }
 
-    private void onDone() {
-        if (createTarget == CreateTarget.LOCAL
-            && (boundLocalStore == null
-                || boundLocalStore != localStoreSupplier.get()
-                || !boundLocalStore.persistenceWritable())) {
-            return;
+    private WaypointListModel.Permission localWritePermission() {
+        if (explicitLocalStore) {
+            return boundLocalStore != null && boundLocalStore.persistenceWritable()
+                ? WaypointListModel.Permission.allow()
+                : WaypointListModel.Permission.denied("confluxmap.screen.waypoints.read_only");
         }
-        if (createTarget == CreateTarget.PUBLIC
-            && (editingShared == null ? !sharedWaypoints.canCreate() : !sharedWaypoints.canUpdate(editingShared))) {
+        return editingRow == null
+            ? localModel.canCreateWaypoint()
+            : localModel.canEditWaypoint(editingRow);
+    }
+
+    private WaypointListModel.Permission publicWritePermission() {
+        return editingRow == null
+            ? sharedModel.canCreateWaypoint()
+            : sharedModel.canEditWaypoint(editingRow);
+    }
+
+    private Waypoint buildWaypoint(
+        final WaypointFormValidation.Values values,
+        final String iconItemId,
+        final String markerLabel,
+        final String groupKey,
+        final Double crossDimensionY
+    ) {
+        final Waypoint waypoint = new Waypoint(
+            editingId == null ? UUID.randomUUID() : editingId,
+            values.name(), dimensionId, values.x(), values.y(), values.z(),
+            colorSelection.selected(), groupKey,
+            initialVisible, crossDimensionVisible, type, createdAtEpochMs
+        );
+        waypoint.crossDimensionY = crossDimensionY;
+        waypoint.iconItemId = iconItemId;
+        waypoint.markerLabel = markerLabel;
+        return waypoint;
+    }
+
+    private void onDone() {
+        if (createTarget == CreateTarget.LOCAL) {
+            if (!localWritePermission().granted()) {
+                return;
+            }
+        } else if (createTarget == CreateTarget.PUBLIC && !publicWritePermission().granted()) {
             return;
         }
         final var validationError = WaypointFormValidation.error(
@@ -832,54 +959,75 @@ public final class WaypointEditScreen extends ConfluxScreen {
         final Double crossDimensionY = crossDimensionVisible && crossDimensionYField != null
             ? WaypointFormValidation.optionalCoordinate(crossDimensionYField.getText())
             : null;
-        final Waypoint waypoint = new Waypoint(
-            editingId == null ? UUID.randomUUID() : editingId,
-            values.name(), dimensionId, values.x(), values.y(), values.z(),
-            colorSelection.selected(), selectedSetName(),
-            initialVisible, crossDimensionVisible, type, createdAtEpochMs
-        );
-        waypoint.crossDimensionY = crossDimensionY;
+        final String iconItemId;
+        final String markerLabel;
         try {
-            waypoint.iconItemId = WaypointMarkerStyle.iconItemId(
-                markerMode.iconItemId(selectedIconItemId)
-            );
-            waypoint.markerLabel = WaypointMarkerStyle.markerLabel(
-                markerMode.markerLabel(markerLabelField.getText())
-            );
+            iconItemId = WaypointMarkerStyle.iconItemId(markerMode.iconItemId(selectedIconItemId));
+            markerLabel = WaypointMarkerStyle.markerLabel(markerMode.markerLabel(markerLabelField.getText()));
         } catch (final IllegalArgumentException e) {
             errorKey = "confluxmap.screen.waypoint.error.invalid_marker_label";
             return;
         }
+        final String groupKey = selectedDraftGroup();
         if (editingId == null && createTarget != CreateTarget.LOCAL) {
+            // Creates for an outward audience still cross the share/publish confirm boundary;
+            // the public draft carries the selected group into the publish action.
             final WaypointShareConfirmScreen.Target target = createTarget == CreateTarget.PUBLIC
                 ? WaypointShareConfirmScreen.Target.PUBLIC
                 : WaypointShareConfirmScreen.Target.CHAT;
-            MinecraftAccess.setScreen(MinecraftClient.getInstance(), new WaypointShareConfirmScreen(parent, waypoint, target));
+            final Waypoint preview = buildWaypoint(values, iconItemId, markerLabel, groupKey, crossDimensionY);
+            final EditDraft publicDraft = createTarget == CreateTarget.PUBLIC
+                ? new EditDraft(
+                    values.name(), dimensionId, values.x(), values.y(), values.z(),
+                    colorSelection.selected(), type, iconItemId, markerLabel,
+                    crossDimensionVisible, crossDimensionY, groupKey)
+                : null;
+            MinecraftAccess.setScreen(
+                MinecraftClient.getInstance(),
+                new WaypointShareConfirmScreen(parent, preview, target, publicDraft)
+            );
             return;
         }
-        if (editingShared != null) {
-            if (!sharedWaypoints.update(editingShared, waypoint)) {
-                final String reasonKey = sharedWaypoints.updateDisabledReasonKey(editingShared);
-                errorKey = reasonKey == null
+        final EditDraft draft = new EditDraft(
+            values.name(), dimensionId, values.x(), values.y(), values.z(),
+            colorSelection.selected(), type, iconItemId, markerLabel,
+            crossDimensionVisible, crossDimensionY, groupKey
+        );
+        if (createTarget == CreateTarget.PUBLIC) {
+            if (!sharedModel.updateWaypoint(editingRow, draft)) {
+                final WaypointListModel.Permission permission = publicWritePermission();
+                errorKey = permission.granted()
                     ? "confluxmap.screen.waypoint.public_unavailable"
-                    : reasonKey;
+                    : permission.reasonKey();
                 return;
             }
-            sharedWaypoints.setCrossDimensionVisible(
-                editingShared.id(), waypoint.crossDimensionVisible
-            );
-            sharedWaypoints.setCrossDimensionY(editingShared.id(), crossDimensionY);
             MinecraftAccess.setScreen(MinecraftClient.getInstance(), parent);
             return;
         }
-        final WaypointStore store = boundLocalStore;
-        if (store != null) {
-            if (editingId == null) {
-                store.add(waypoint);
-            } else {
-                store.update(waypoint);
+        if (explicitLocalStore) {
+            // The bound store is an archived world's, outside the local model's session store.
+            final WaypointStore store = boundLocalStore;
+            if (store != null) {
+                final Waypoint waypoint =
+                    buildWaypoint(values, iconItemId, markerLabel, groupKey, crossDimensionY);
+                if (editingId == null) {
+                    store.add(waypoint);
+                } else {
+                    store.update(waypoint);
+                }
             }
+            MinecraftAccess.setScreen(MinecraftClient.getInstance(), parent);
+            return;
         }
+        final boolean applied = editingId == null
+            ? localModel.createWaypoint(draft)
+            : localModel.updateWaypoint(editingRow, draft);
+        if (!applied && !localWritePermission().granted()) {
+            errorKey = localWritePermission().reasonKey();
+            return;
+        }
+        // An applied=false with permission granted means the target vanished mid-edit;
+        // closing mirrors the store's historical silent no-op update.
         MinecraftAccess.setScreen(MinecraftClient.getInstance(), parent);
     }
 
@@ -901,24 +1049,26 @@ public final class WaypointEditScreen extends ConfluxScreen {
             deleteButton.setMessage(deleteButtonMessage());
             return;
         }
-        if (editingShared != null) {
-            if (!sharedWaypoints.delete(editingShared)) {
-                final String reasonKey = sharedWaypoints.deleteDisabledReasonKey(editingShared);
-                errorKey = reasonKey == null
+        if (createTarget == CreateTarget.PUBLIC) {
+            if (!sharedModel.deleteWaypoint(editingRow)) {
+                final WaypointListModel.Permission permission = sharedModel.canDeleteWaypoint(editingRow);
+                errorKey = permission.granted()
                     ? "confluxmap.screen.waypoint.public_unavailable"
-                    : reasonKey;
+                    : permission.reasonKey();
                 deleteConfirmationPending = false;
                 deleteButton.setMessage(deleteButtonMessage());
                 refreshDeleteButton();
                 return;
             }
-        } else {
+        } else if (explicitLocalStore) {
             final WaypointStore store = boundLocalStore;
             if (store == null || store != localStoreSupplier.get() || !store.persistenceWritable()) {
                 refreshDeleteButton();
                 return;
             }
             store.remove(editingId);
+        } else {
+            localModel.deleteWaypoint(editingRow);
         }
         MinecraftAccess.setScreen(MinecraftClient.getInstance(), parent);
     }
@@ -947,18 +1097,13 @@ public final class WaypointEditScreen extends ConfluxScreen {
         if (deleteButton == null) {
             return;
         }
-        if (editingShared != null) {
-            deleteButton.active = sharedWaypoints.availability().ready()
-                && sharedWaypoints.canDelete(editingShared);
-            setDisabledTooltip(
-                deleteButton,
-                sharedWaypoints.deleteDisabledReasonKey(editingShared)
-            );
+        if (createTarget == CreateTarget.PUBLIC) {
+            final WaypointListModel.Permission permission = sharedModel.canDeleteWaypoint(editingRow);
+            deleteButton.active = permission.granted();
+            setDisabledTooltip(deleteButton, permission.reasonKey());
             return;
         }
-        deleteButton.active = boundLocalStore != null
-            && boundLocalStore == localStoreSupplier.get()
-            && boundLocalStore.persistenceWritable();
+        deleteButton.active = localWritePermission().granted();
     }
 
     private void refreshDoneButton() {
@@ -966,12 +1111,9 @@ public final class WaypointEditScreen extends ConfluxScreen {
             || zField == null || markerLabelField == null) {
             return;
         }
-        final boolean localAvailable = createTarget != CreateTarget.LOCAL
-            || boundLocalStore != null && boundLocalStore.persistenceWritable();
+        final boolean localAvailable = createTarget != CreateTarget.LOCAL || localWritePermission().granted();
         final boolean publicAvailable = createTarget != CreateTarget.PUBLIC
-            || (editingShared == null
-                ? sharedWaypoints.canCreate()
-                : sharedWaypoints.canUpdate(editingShared));
+            || publicWritePermission().granted();
         doneButton.active = localAvailable && publicAvailable
             && WaypointFormValidation.error(
                 nameField.getText(), xField.getText(), yField.getText(), zField.getText()
@@ -991,15 +1133,9 @@ public final class WaypointEditScreen extends ConfluxScreen {
     }
 
     private void updatePublicDoneButton() {
-        doneButton.active = editingShared == null
-            ? sharedWaypoints.canCreate()
-            : sharedWaypoints.canUpdate(editingShared);
-        setDisabledTooltip(
-            doneButton,
-            editingShared == null
-                ? sharedWaypoints.createDisabledReasonKey()
-                : sharedWaypoints.updateDisabledReasonKey(editingShared)
-        );
+        final WaypointListModel.Permission permission = publicWritePermission();
+        doneButton.active = permission.granted();
+        setDisabledTooltip(doneButton, permission.reasonKey());
     }
 
     @Override
@@ -1010,6 +1146,8 @@ public final class WaypointEditScreen extends ConfluxScreen {
         drawCenteredLabel(draw, Texts.translatable("confluxmap.screen.waypoint.coords").getString(), 58);
         if (createTarget == CreateTarget.LOCAL) {
             drawCenteredLabel(draw, Texts.translatable("confluxmap.screen.waypoint.set").getString(), 92);
+        } else if (createTarget == CreateTarget.PUBLIC) {
+            drawCenteredLabel(draw, Texts.translatable("confluxmap.screen.waypoint.group").getString(), 92);
         }
         drawCenteredLabel(draw, Texts.translatable("confluxmap.screen.waypoint.color").getString(), 118);
         if (createTarget != CreateTarget.CHAT) {

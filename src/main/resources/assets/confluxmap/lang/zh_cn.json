@@ -208,6 +208,7 @@
   "confluxmap.screen.waypoint.name": "名称",
   "confluxmap.screen.waypoint.coords": "X / Y / Z",
   "confluxmap.screen.waypoint.set": "路径点集",
+  "confluxmap.screen.waypoint.group": "分组",
   "confluxmap.screen.waypoint.set_default": "未分类",
   "confluxmap.screen.waypoint.color": "颜色",
   "confluxmap.screen.waypoint.color_custom": "自定义…",
