@@ -167,6 +167,37 @@ public interface BaselineSampler {
     }
 
     /**
+     * Whether {@link LodSampling} may reconstruct this sampler's fields from sparse lattices
+     * instead of querying every position: overview heights bilinearly between every-second-pixel
+     * anchors (waterline zones still solve exactly), and the LOD3-4 sub-biome sweep copied from
+     * anchor-uniform cells where the water/land classification provably ignores the biome. This
+     * is a quality statement about the sampler's models, not a capability: the 1.18+ native
+     * predictor is smooth at those spacings, while pre-1.18 output is pinned bit-exact as the
+     * reference and non-native samplers keep their per-position contract, so both opt out (the
+     * default).
+     */
+    default boolean interpolatableOverviewHeights() {
+        return false;
+    }
+
+    /**
+     * Coarse-lattice overview for the LOD2-4 anchor sweeps: same geometry as {@link
+     * #overviewHeights}, but implementations may skip terrain detail finer than the sampling
+     * stride. The default keeps full detail; waterline-band and exact-residual queries always
+     * use {@link #overviewHeights}.
+     */
+    default boolean overviewHeightsCoarse(
+        final int blockX,
+        final int blockZ,
+        final int w,
+        final int h,
+        final int stride,
+        final int[] outTerrainY
+    ) {
+        return overviewHeights(blockX, blockZ, w, h, stride, outTerrainY);
+    }
+
+    /**
      * Resolves final Overworld surface biomes at the supplied terrain heights without generating
      * those heights a second time. Implementations that cannot reuse the height grid return false,
      * and {@link LodSampling} falls back to {@link #biomesStrided}.
