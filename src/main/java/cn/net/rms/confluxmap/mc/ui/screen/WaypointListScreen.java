@@ -28,6 +28,7 @@ import cn.net.rms.confluxmap.core.waypoint.WaypointVerticalRelation;
 import cn.net.rms.confluxmap.core.waypoint.WaypointService;
 import cn.net.rms.confluxmap.core.waypoint.WaypointSet;
 import cn.net.rms.confluxmap.core.waypoint.WaypointStore;
+import cn.net.rms.confluxmap.core.waypoint.list.GroupRef;
 import cn.net.rms.confluxmap.mc.net.shared.SharedWaypointClient;
 import cn.net.rms.confluxmap.mc.render.RenderUtil;
 import cn.net.rms.confluxmap.mc.teleport.ClientGroundTeleportService;
@@ -514,11 +515,17 @@ public final class WaypointListScreen extends ConfluxScreen {
         // While a search is active the persisted fold state is suspended, so matches
         // inside folded sets stay visible; the headers still report the persisted flag.
         final List<WaypointSet> sets = store == null ? List.of() : store.sets();
+        final List<GroupRef> groups = new ArrayList<>();
+        for (final WaypointSet set : sets) {
+            groups.add(new GroupRef(set.name(), set.name(), set.collapsed()));
+        }
         for (final WaypointListGrouping.Entry<RowInfo> entry
-            : WaypointListGrouping.group(sets, localRows, row -> row.local().group, isSearchActive())) {
-            if (entry instanceof WaypointListGrouping.SetHeader<?> header) {
+            : WaypointListGrouping.group(groups, localRows, row -> row.local().group, isSearchActive())) {
+            if (entry instanceof WaypointListGrouping.GroupHeader<?> header) {
+                @SuppressWarnings("unchecked")
+                final GroupRef group = ((WaypointListGrouping.GroupHeader<RowInfo>) header).group();
                 model.add(ListRow.ofHeader(new HeaderRow(
-                    header.setName(), header.collapsed(), header.visibleCount(), 0
+                    group.key(), group.collapsed(), header.visibleCount(), 0
                 )));
             } else if (entry instanceof WaypointListGrouping.Member<?> member) {
                 @SuppressWarnings("unchecked") final RowInfo row = (RowInfo) member.row();

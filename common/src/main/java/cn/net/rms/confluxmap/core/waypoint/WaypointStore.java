@@ -49,7 +49,8 @@ public final class WaypointStore {
             this(sets, waypoints, true);
         }
 
-        State(
+        /** Read-only states come from future-schema files this build cannot safely write back. */
+        public State(
             final List<WaypointSet> sets,
             final List<Waypoint> waypoints,
             final boolean persistenceWritable

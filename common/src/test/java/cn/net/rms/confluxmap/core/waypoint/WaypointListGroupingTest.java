@@ -2,61 +2,61 @@ package cn.net.rms.confluxmap.core.waypoint;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 
+import cn.net.rms.confluxmap.core.waypoint.list.GroupRef;
 import java.util.List;
 import org.junit.jupiter.api.Test;
 
 class WaypointListGroupingTest {
-    private static final List<WaypointSet> SETS = List.of(
-        WaypointSet.DEFAULT,
-        new WaypointSet("Bases"),
-        new WaypointSet("Travel")
+    private static final List<GroupRef> GROUPS = List.of(
+        new GroupRef("Bases", "Bases", false),
+        new GroupRef("Travel", "Travel", false)
     );
 
     @Test
-    void groupsRowsUnderHeadersInSetOrderPreservingEncounterOrder() {
+    void groupsRowsUnderHeadersInGroupOrderPreservingEncounterOrder() {
         final List<String> rows = List.of("Travel spot", "Base camp", "Unassigned", "Second base");
 
         final List<WaypointListGrouping.Entry<String>> grouped = WaypointListGrouping.group(
-            SETS, rows, row -> groupOf(row), false
+            GROUPS, rows, row -> groupOf(row), false
         );
 
         assertEquals(List.of(
-            "header: \"\" (1)",
-            "member Unassigned -> \"\"",
             "header: \"Bases\" (2)",
             "member Base camp -> \"Bases\"",
             "member Second base -> \"Bases\"",
             "header: \"Travel\" (1)",
-            "member Travel spot -> \"Travel\""
+            "member Travel spot -> \"Travel\"",
+            "header: \"\" (1)",
+            "member Unassigned -> \"\""
         ), render(grouped));
     }
 
     @Test
-    void collapsedSetContributesOnlyItsHeader() {
-        final List<WaypointSet> sets = List.of(
-            WaypointSet.DEFAULT,
-            new WaypointSet("Bases", true)
+    void collapsedGroupContributesOnlyItsHeader() {
+        final List<GroupRef> groups = List.of(
+            new GroupRef("Bases", "Bases", true),
+            GroupRef.ungrouped(false)
         );
         final List<String> rows = List.of("Base camp", "Unassigned");
 
         final List<WaypointListGrouping.Entry<String>> grouped = WaypointListGrouping.group(
-            sets, rows, row -> groupOf(row), false
+            groups, rows, row -> groupOf(row), false
         );
 
         assertEquals(List.of(
+            "header: \"Bases\" [collapsed] (1)",
             "header: \"\" (1)",
-            "member Unassigned -> \"\"",
-            "header: \"Bases\" [collapsed] (1)"
+            "member Unassigned -> \"\""
         ), render(grouped));
     }
 
     @Test
     void expandAllSuspendsCollapseButHeadersStillReportThePersistedState() {
-        final List<WaypointSet> sets = List.of(new WaypointSet("Bases", true));
+        final List<GroupRef> groups = List.of(new GroupRef("Bases", "Bases", true));
         final List<String> rows = List.of("Base camp");
 
         final List<WaypointListGrouping.Entry<String>> grouped = WaypointListGrouping.group(
-            sets, rows, row -> groupOf(row), true
+            groups, rows, row -> groupOf(row), true
         );
 
         assertEquals(List.of(
@@ -66,25 +66,27 @@ class WaypointListGroupingTest {
     }
 
     @Test
-    void setsWithoutRowsAndEmptyInputProduceNothing() {
+    void groupsWithoutRowsAndEmptyInputProduceNothing() {
         assertEquals(
             List.of(),
-            WaypointListGrouping.group(SETS, List.<String>of(), WaypointListGroupingTest::groupOf, false)
+            WaypointListGrouping.group(GROUPS, List.<String>of(), WaypointListGroupingTest::groupOf, false)
         );
         assertEquals(
             List.of(),
             WaypointListGrouping.group(
-                List.of(new WaypointSet("Empty")), List.<String>of(), WaypointListGroupingTest::groupOf, false
+                List.of(new GroupRef("Empty", "Empty", false)), List.<String>of(),
+                WaypointListGroupingTest::groupOf, false
             )
         );
     }
 
     @Test
-    void rowsOutsideSetMetadataAppendAsExpandedGroupsInEncounterOrder() {
+    void rowsOutsideGroupMetadataAppendAsExpandedGroupsInEncounterOrder() {
         final List<String> rows = List.of("Ghost two", "Base camp", "Ghost one");
 
         final List<WaypointListGrouping.Entry<String>> grouped = WaypointListGrouping.group(
-            List.of(WaypointSet.DEFAULT, new WaypointSet("Bases")), rows, row -> groupOf(row), false
+            List.of(new GroupRef("Bases", "Bases", false), GroupRef.ungrouped(false)),
+            rows, row -> groupOf(row), false
         );
 
         assertEquals(List.of(
@@ -111,13 +113,13 @@ class WaypointListGroupingTest {
 
     private static List<String> render(final List<WaypointListGrouping.Entry<String>> entries) {
         return entries.stream().map(entry -> {
-            if (entry instanceof WaypointListGrouping.SetHeader<?> header) {
-                return "header: \"" + header.setName() + "\""
-                    + (header.collapsed() ? " [collapsed]" : "")
+            if (entry instanceof WaypointListGrouping.GroupHeader<?> header) {
+                return "header: \"" + header.group().key() + "\""
+                    + (header.group().collapsed() ? " [collapsed]" : "")
                     + " (" + header.visibleCount() + ")";
             }
             final WaypointListGrouping.Member<?> member = (WaypointListGrouping.Member<?>) entry;
-            return "member " + member.row() + " -> \"" + member.setName() + "\"";
+            return "member " + member.row() + " -> \"" + member.groupKey() + "\"";
         }).toList();
     }
 }
