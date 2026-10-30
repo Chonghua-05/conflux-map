@@ -1600,6 +1600,129 @@ class PredictionTileServiceTest {
         }
     }
 
+    /**
+     * A tile with no server differential must not allocate the 512 KiB revision plane, and a
+     * parent aggregated purely from such children must still compose and upload. This is the
+     * end-to-end guard for the null-revision form: an over-strict tile invariant would drop the
+     * parent tile silently inside the worker.
+     */
+    @Test
+    void purePredictionLodOneParentUploadsFromUncorrectedChildren(
+        @TempDir final Path tempDir
+    ) throws InterruptedException {
+        final SessionGuard sessionGuard = new SessionGuard();
+        final MapExecutors executors = new MapExecutors();
+        final TileService uploads = new TileService(
+            new MapWorldService(), executors, new ConfluxConfig(), new DaylightModel()
+        );
+        final PredictionState state = new PredictionState();
+        state.setPresets(WorldPreset.FLAT, WorldPreset.DEFAULT);
+        state.setFlatBaseline(new FlatBaseline(1, 63, SurfaceKind.LAND.ordinal(), 11, 0));
+        final PredictionTileService predictionTiles = newService(sessionGuard, state, executors, uploads);
+        predictionTiles.bindCorrectionStore(new CorrectionStore(tempDir));
+        sessionGuard.begin(WORLD, DIM);
+
+        try {
+            for (int childZ = 0; childZ < 2; childZ++) {
+                for (int childX = 0; childX < 2; childX++) {
+                    predictionTiles.requestTile(
+                        new TileKey(WORLD, DIM, "surface!pred", 0, childX, childZ)
+                    );
+                }
+            }
+            awaitIdle(predictionTiles, 10_000L);
+            uploads.drainUploads(16);
+
+            final TileKey parent = new TileKey(WORLD, DIM, "surface!pred", 1, 0, 0);
+            predictionTiles.requestTile(parent);
+            awaitIdle(predictionTiles, 10_000L);
+
+            assertTrue(
+                uploads.drainUploads(16).stream().anyMatch(update -> update.key().equals(parent)),
+                "a parent built from uncorrected children must still upload"
+            );
+            assertEquals(63, predictionTiles.predictedSurfaceYAt(DIM, 1, 0, 0).orElseThrow());
+        } finally {
+            executors.shutdown(2000);
+        }
+    }
+
+    /**
+     * The same void sentinel contract as {@link #synchronizedVoidSurfacesAsKnownNoSurface}, but
+     * reached through the mip aggregate: four void children must aggregate to "known, no
+     * surface", not to a fabricated height (a narrowing cast of the int sentinel lands on Y=0,
+     * which is a plausible sea-level target).
+     */
+    @Test
+    void voidSurfacesSurviveMipAggregationAsKnownNoSurface(
+        @TempDir final Path tempDir
+    ) throws InterruptedException {
+        final SessionGuard sessionGuard = new SessionGuard();
+        final MapExecutors executors = new MapExecutors();
+        final TileService uploads = new TileService(
+            new MapWorldService(), executors, new ConfluxConfig(), new DaylightModel()
+        );
+        final PredictionState state = new PredictionState();
+        state.setPresets(WorldPreset.FLAT, WorldPreset.DEFAULT);
+        state.setFlatBaseline(new FlatBaseline(1, 63, SurfaceKind.LAND.ordinal(), 11, 0));
+        final PredictionTileService predictionTiles = newService(sessionGuard, state, executors, uploads);
+        final CorrectionStore corrections = new CorrectionStore(tempDir);
+        final long validatedAt = System.currentTimeMillis();
+        for (int childZ = 0; childZ < 2; childZ++) {
+            for (int childX = 0; childX < 2; childX++) {
+                final byte[] evaluated = new byte[PatchCodec.MASK_BYTES];
+                final List<PatchCodec.Sample> samples = new java.util.ArrayList<>();
+                for (final int pixel : new int[] {0, 1, 256, 257}) {
+                    evaluated[pixel >>> 3] |= (byte) (1 << (pixel & 7));
+                    samples.add(new PatchCodec.Sample(
+                        pixel, 1, ChunkSnapshot.NO_SURFACE,
+                        SurfaceKind.VOID.ordinal(), Proto.MAP_COLOR_NONE, 0
+                    ));
+                }
+                corrections.apply(
+                    new CorrectionStore.Key(DIM.toString(), 0, childX, childZ),
+                    1L,
+                    new byte[Proto.PATCH_PRESENCE_BYTES],
+                    new PatchCodec.Patch(evaluated, samples),
+                    Proto.PATCH_MODE_RESIDUAL,
+                    PredictorVersion.full(),
+                    validatedAt
+                );
+            }
+        }
+        predictionTiles.bindCorrectionStore(corrections);
+        sessionGuard.begin(WORLD, DIM);
+
+        try {
+            for (int childZ = 0; childZ < 2; childZ++) {
+                for (int childX = 0; childX < 2; childX++) {
+                    predictionTiles.requestTile(
+                        new TileKey(WORLD, DIM, "surface!pred", 0, childX, childZ)
+                    );
+                }
+            }
+            awaitIdle(predictionTiles, 10_000L);
+            uploads.drainUploads(16);
+
+            final TileKey parent = new TileKey(WORLD, DIM, "surface!pred", 1, 0, 0);
+            predictionTiles.requestTile(parent);
+            awaitIdle(predictionTiles, 10_000L);
+
+            final ColumnStore.SurfaceLookup voidColumn = predictionTiles.predictedSurfaceAt(DIM, 1, 0, 0);
+            assertTrue(voidColumn.known(), "the aggregated void column is known terrain state");
+            assertFalse(
+                voidColumn.surfaceY().isPresent(),
+                "aggregation must not turn a void sentinel into a fabricated teleport Y"
+            );
+
+            final ColumnStore.SurfaceLookup landColumn = predictionTiles.predictedSurfaceAt(DIM, 1, 2, 0);
+            assertEquals(63, landColumn.surfaceY().orElseThrow(),
+                "unsynchronized neighbours keep the baseline height");
+        } finally {
+            executors.shutdown(2000);
+        }
+    }
+
     private static TileUpdate latestUpdate(final TileService uploads, final TileKey key) {
         return uploads.drainUploads(64).stream()
             .filter(update -> update.key().equals(key))

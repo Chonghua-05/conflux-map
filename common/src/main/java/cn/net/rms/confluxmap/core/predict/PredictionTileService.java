@@ -327,12 +327,6 @@ public final class PredictionTileService {
             );
     }
 
-    private static long[] unknownPixelRevisions() {
-        final long[] revisions = new long[PatchCodec.PIXELS];
-        java.util.Arrays.fill(revisions, Long.MIN_VALUE);
-        return revisions;
-    }
-
     /**
      * Composes one immutable CPU tile under an explicit view mode without mutating the visible
      * viewport, GPU upload queue, metadata cache, or the globally selected prediction mode.
@@ -935,7 +929,7 @@ public final class PredictionTileService {
             }
             return ColumnStore.SurfaceLookup.UNKNOWN;
         }
-        final int surfaceY = metadata.surfaces()[lookup.pixel()];
+        final int surfaceY = metadata.surfaceYAt(lookup.pixel());
         return surfaceY == BaselineGrid.NO_SURFACE
             ? new ColumnStore.SurfaceLookup(true, OptionalInt.empty())
             : new ColumnStore.SurfaceLookup(true, OptionalInt.of(surfaceY));
@@ -1351,8 +1345,10 @@ public final class PredictionTileService {
             );
         final byte[] syncEvaluated = directCorrections == null
             ? new byte[PatchCodec.MASK_BYTES] : directCorrections.copyEvaluated();
+        // No server differential means no column can be an evaluated sync pixel, so the 512 KiB
+        // revision plane is left unallocated instead of being filled with Long.MIN_VALUE.
         final long[] syncSourceRevisions = directCorrections == null
-            ? unknownPixelRevisions() : directCorrections.copyPixelSourceRevisions();
+            ? null : directCorrections.copyPixelSourceRevisions();
         final byte[] blockLight = directCorrections == null
             ? new byte[PatchCodec.PIXELS] : directCorrections.copyBlockLight();
         uploads.maskPredictedPixels(
@@ -1705,15 +1701,16 @@ public final class PredictionTileService {
         return biomes;
     }
 
-    private static int[] surfaceYs(
+    private static short[] surfaceYs(
         final DerivedGrid derived,
         final CorrectionTile corrections,
         final DerivedGrid correctionDerived
     ) {
-        final int[] surfaces = new int[BaselineGrid.PIXELS * BaselineGrid.PIXELS];
+        final short[] surfaces = new short[BaselineGrid.PIXELS * BaselineGrid.PIXELS];
         for (int z = 0; z < BaselineGrid.PIXELS; z++) {
             for (int x = 0; x < BaselineGrid.PIXELS; x++) {
-                surfaces[z * BaselineGrid.PIXELS + x] = derived.surfaceY[BaselineGrid.index(x, z)];
+                surfaces[z * BaselineGrid.PIXELS + x] =
+                    packedSurfaceY(derived.surfaceY[BaselineGrid.index(x, z)]);
             }
         }
         if (corrections != null) {
@@ -1722,9 +1719,9 @@ public final class PredictionTileService {
                 final byte[] evaluated = correctionPatch.evaluated();
                 for (int pixel = 0; pixel < surfaces.length; pixel++) {
                     if ((evaluated[pixel >>> 3] & (1 << (pixel & 7))) != 0) {
-                        surfaces[pixel] = correctionDerived.surfaceY[
+                        surfaces[pixel] = packedSurfaceY(correctionDerived.surfaceY[
                             BaselineGrid.index(pixel & 255, pixel >>> 8)
-                        ];
+                        ]);
                     }
                 }
             }
@@ -1732,20 +1729,36 @@ public final class PredictionTileService {
                 final SurfaceKind sampleKind = SurfaceKind.byOrdinal(sample.kind());
                 final int pixel = sample.pixelIndex();
                 if (sampleKind == SurfaceKind.UNKNOWN) {
-                    surfaces[pixel] = derived.surfaceY[
+                    surfaces[pixel] = packedSurfaceY(derived.surfaceY[
                         BaselineGrid.index(pixel & 255, pixel >>> 8)
-                    ];
+                    ]);
                 } else if (sampleKind == SurfaceKind.VOID) {
                     // The wire carries a short-domain sentinel here; the lookup reads back
                     // against BaselineGrid.NO_SURFACE, and a synchronized void column must
                     // surface as "known, no surface" to teleport staging.
-                    surfaces[pixel] = BaselineGrid.NO_SURFACE;
+                    surfaces[pixel] = BaselineGrid.NO_SURFACE_SHORT;
                 } else {
-                    surfaces[pixel] = sample.surfaceY();
+                    surfaces[pixel] = packedSurfaceY(sample.surfaceY());
                 }
             }
         }
         return surfaces;
+    }
+
+    /**
+     * Maps the int-domain surface height onto the packed short plane. {@code (short) NO_SURFACE}
+     * is {@code 0} - a perfectly valid Y - so the sentinel is translated, never narrowed.
+     */
+    private static short packedSurfaceY(final int surfaceY) {
+        if (surfaceY == BaselineGrid.NO_SURFACE) {
+            return BaselineGrid.NO_SURFACE_SHORT;
+        }
+        if (surfaceY < Short.MIN_VALUE + 1 || surfaceY > Short.MAX_VALUE) {
+            // Only a corrupt/unknown-domain sample can land here; keep it "no surface" rather
+            // than wrap it into a plausible-looking height.
+            return BaselineGrid.NO_SURFACE_SHORT;
+        }
+        return (short) surfaceY;
     }
 
     public synchronized Set<TileKey> queuedOrInFlightKeysForTest() {
@@ -1828,7 +1841,15 @@ public final class PredictionTileService {
     ) {
     }
 
-    private record TileMetadata(byte[] biomes, int[] surfaces) {
+    private record TileMetadata(byte[] biomes, short[] surfaces) {
+        /**
+         * Int-domain surface height, or {@link BaselineGrid#NO_SURFACE}. Keeping this as the only
+         * read seam means callers never compare against the packed short sentinel.
+         */
+        int surfaceYAt(final int pixel) {
+            final short packed = surfaces[pixel];
+            return packed == BaselineGrid.NO_SURFACE_SHORT ? BaselineGrid.NO_SURFACE : packed;
+        }
     }
 
     private record AppliedLighting(float daylight, float gamma) {
