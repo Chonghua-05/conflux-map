@@ -18,7 +18,8 @@ final class WaypointHudProjectionTest {
     //$$ @Test
     //$$ void lastRenderHudKeepsWorldRendererCameraView() throws Exception {
     //$$     final String source = Files.readString(preprocessedSource());
-    //$$     final String renderHud = methodBody(source, "private void renderHud(final WorldRenderContext context)");
+    //$$     final String renderHud = methodBody(source, "void renderHud(final OverlayFrame frame)");
+    //$$     final String labelPass = Files.readString(preprocessedLabelPassSource());
     //$$     final String renderUtil = Files.readString(preprocessedRenderUtilSource());
     //$$     final String pushModelView = methodBody(
     //$$         renderUtil, "public static void pushWorldHudModelView()"
@@ -29,8 +30,8 @@ final class WaypointHudProjectionTest {
     //$$         "LAST already stores the camera view rotation in ModelView; clearing it moves forward waypoints out of clip space"
     //$$     );
     //$$     assertTrue(
-    //$$         renderHud.contains("pushWorldViewSnapshot") || renderHud.contains("pushWorldHudModelView"),
-    //$$         "renderHud must enter the version-aware world HUD ModelView scope: the END pass reinstalls the captured world view, the in-pass phases save it"
+    //$$         labelPass.contains("pushWorldViewSnapshot") || labelPass.contains("pushWorldHudModelView"),
+    //$$         "the label pass must enter the version-aware world HUD ModelView scope: the END pass reinstalls the captured world view, the in-pass phases save it"
     //$$     );
     //$$     assertTrue(
     //$$         pushModelView.contains("getModelViewStack().pushMatrix()"),
@@ -209,14 +210,15 @@ final class WaypointHudProjectionTest {
     //#if MC>=260100
     //$$ @Test
     //$$ void waypointBeamRendersAfterTranslucentTerrain() throws Exception {
-    //$$     final String source = Files.readString(preprocessedSource());
+    //$$     final String source = Files.readString(preprocessedEventsSource());
     //$$
     //$$     assertTrue(
-    //$$         source.contains("LevelRenderEvents.AFTER_TRANSLUCENT_TERRAIN.register(this::renderBeams);"),
+    //$$         source.contains("LevelRenderEvents.AFTER_TRANSLUCENT_TERRAIN.register(context ->")
+    //$$             && source.contains("renderer.renderBeams(beamFrame(context)));"),
     //$$         "waypoint beams must not write depth before translucent terrain such as water"
     //$$     );
     //$$     assertFalse(
-    //$$         source.contains("LevelRenderEvents.BEFORE_TRANSLUCENT_TERRAIN.register(this::renderBeams);"),
+    //$$         source.contains("LevelRenderEvents.BEFORE_TRANSLUCENT_TERRAIN.register(context ->"),
     //$$         "drawing the depth-writing beam before water reproduces the missing water surface"
     //$$     );
     //$$ }
@@ -260,6 +262,14 @@ final class WaypointHudProjectionTest {
     //$$
     //$$ private static Path preprocessedLabelPainterSource() throws URISyntaxException {
     //$$     return preprocessedSource().getParent().resolve("WaypointLabelPainter.java");
+    //$$ }
+    //$$
+    //$$ private static Path preprocessedLabelPassSource() throws URISyntaxException {
+    //$$     return preprocessedSource().getParent().resolve("LabelPass.java");
+    //$$ }
+    //$$
+    //$$ private static Path preprocessedEventsSource() throws URISyntaxException {
+    //$$     return preprocessedSource().getParent().resolve("WorldOverlayEvents.java");
     //$$ }
     //$$
     //$$ private static Path preprocessedRenderUtilSource() throws URISyntaxException {
