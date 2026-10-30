@@ -20,9 +20,9 @@ final class WaypointHudProjectionTest {
     //$$     final String source = Files.readString(preprocessedSource());
     //$$     final String renderHud = methodBody(source, "void renderHud(final OverlayFrame frame)");
     //$$     final String labelPass = Files.readString(preprocessedLabelPassSource());
-    //$$     final String renderUtil = Files.readString(preprocessedRenderUtilSource());
+    //$$     final String worldMatrices = Files.readString(preprocessedWorldMatricesSource());
     //$$     final String pushModelView = methodBody(
-    //$$         renderUtil, "public static void pushWorldHudModelView()"
+    //$$         worldMatrices, "public static void pushWorldHudModelView()"
     //$$     );
     //$$
     //$$     assertFalse(
@@ -267,8 +267,8 @@ final class WaypointHudProjectionTest {
     //$$     return preprocessedSource().getParent().resolve("WorldOverlayEvents.java");
     //$$ }
     //$$
-    //$$ private static Path preprocessedRenderUtilSource() throws URISyntaxException {
-    //$$     return preprocessedSource().getParent().getParent().getParent().resolve("render/RenderUtil.java");
+    //$$ private static Path preprocessedWorldMatricesSource() throws URISyntaxException {
+    //$$     return preprocessedSource().getParent().getParent().getParent().resolve("render/WorldMatrices.java");
     //$$ }
     //$$
     //$$ private static String methodBody(final String source, final String signature) {

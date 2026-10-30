@@ -1,8 +1,10 @@
 package cn.net.rms.confluxmap.mc.ui.world;
 
+import cn.net.rms.confluxmap.mc.render.GuiShapes;
+import cn.net.rms.confluxmap.mc.render.WorldMatrices;
+
 import cn.net.rms.confluxmap.core.config.ConfluxConfig;
 import cn.net.rms.confluxmap.core.waypoint.WaypointRenderEntry;
-import cn.net.rms.confluxmap.mc.render.RenderUtil;
 import com.mojang.blaze3d.systems.RenderSystem;
 //#if MC>=260200
 //$$ import net.fabricmc.fabric.api.client.rendering.v1.FabricOrderedSubmitNodeCollector;
@@ -20,6 +22,10 @@ import com.mojang.blaze3d.systems.RenderSystem;
 //$$ import net.minecraft.client.renderer.OrderedSubmitNodeCollector;
 //#endif
 import net.minecraft.client.MinecraftClient;
+//#if MC<260200
+import net.minecraft.client.font.TextRenderer;
+import net.minecraft.client.render.VertexConsumerProvider;
+//#endif
 import net.minecraft.client.util.math.MatrixStack;
 
 /**
@@ -27,7 +33,7 @@ import net.minecraft.client.util.math.MatrixStack;
  * {@link #beginPass} and {@link #endPass} bracket one label render: before 1.21.9 they
  * reinstall the world projection and the view matrix captured at LAST (the same END state
  * repair the beam pass makes), while the in-pass phases from 1.21.9 to 26.1 only save the
- * global ModelView through {@link RenderUtil#pushWorldHudModelView} so the billboard keeps
+ * global ModelView through {@link WorldMatrices#pushWorldHudModelView} so the billboard keeps
  * the world view rotation vanilla installed. Inside that bracket, {@link #beginLabels}/
  * {@link #endLabels} wrap the label loop: before 1.21.5 the labels disable depth testing
  * (world content must never hide player-facing navigation information) and the shared
@@ -60,10 +66,10 @@ final class LabelPass implements AutoCloseable, WaypointLabelPainter.Sink {
     void beginPass(final OverlayFrame frame) {
         this.frame = frame;
         //#if MC<12109
-        RenderUtil.applyWorldProjection(frame.projectionMatrix);
-        RenderUtil.pushWorldViewSnapshot();
+        WorldMatrices.applyWorldProjection(frame.projectionMatrix);
+        WorldMatrices.pushWorldViewSnapshot();
         //#elseif MC<260200
-        //$$ RenderUtil.pushWorldHudModelView();
+        //$$ WorldMatrices.pushWorldHudModelView();
         //#endif
     }
 
@@ -130,7 +136,7 @@ final class LabelPass implements AutoCloseable, WaypointLabelPainter.Sink {
         //#if MC>=260200
         //$$ submitRect(matrices, x, y, width, height, color);
         //#else
-        RenderUtil.fillRect3D(matrices, x, y, width, height, color);
+        GuiShapes.fillRect3D(matrices, x, y, width, height, color);
         //#endif
     }
 
@@ -139,7 +145,7 @@ final class LabelPass implements AutoCloseable, WaypointLabelPainter.Sink {
         //#if MC>=260200
         //$$ submitText(matrices, text, x, y, color);
         //#else
-        RenderUtil.drawSeeThroughText(
+        drawSeeThroughText(
             client.textRenderer, text, x, y, color, matrices, frame.immediate,
             WaypointLabelStyle.LABEL_LIGHT
         );
@@ -158,10 +164,10 @@ final class LabelPass implements AutoCloseable, WaypointLabelPainter.Sink {
         RenderSystem.enableDepthTest();
         //#endif
         //#if MC<12109
-        RenderUtil.popModelView();
-        RenderUtil.restoreProjection();
+        WorldMatrices.popModelView();
+        WorldMatrices.restoreProjection();
         //#elseif MC<260200
-        //$$ RenderUtil.popModelView();
+        //$$ WorldMatrices.popModelView();
         //#endif
         frame = null;
     }
@@ -232,6 +238,30 @@ final class LabelPass implements AutoCloseable, WaypointLabelPainter.Sink {
     //$$ }
     //#endif
 
+    //#if MC<260200
+    /** Draws fully-lit marker text through the versioned text-layer argument. */
+    private static void drawSeeThroughText(
+        final TextRenderer textRenderer,
+        final String text,
+        final float x,
+        final float y,
+        final int color,
+        final MatrixStack matrices,
+        final VertexConsumerProvider.Immediate immediate,
+        final int light
+    ) {
+        //#if MC>=12000
+        //$$ textRenderer.draw(
+        //$$     text, x, y, color, false, matrices.peek().getPositionMatrix(), immediate,
+        //$$     TextRenderer.TextLayerType.SEE_THROUGH, 0, light
+        //$$ );
+        //#else
+        textRenderer.draw(
+            text, x, y, color, false, matrices.peek().getModel(), immediate, true, 0, light
+        );
+        //#endif
+    }
+    //#endif
     /**
      * The pass brackets restore every state they touch inline, so nothing here outlives
      * {@link #endPass}; close keeps the seam closeable as per-version native state moves

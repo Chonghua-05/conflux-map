@@ -1,7 +1,7 @@
 package cn.net.rms.confluxmap.mc.ui.world;
 
 import cn.net.rms.confluxmap.ConfluxMapMod;
-import cn.net.rms.confluxmap.mc.render.RenderUtil;
+import cn.net.rms.confluxmap.mc.render.WorldMatrices;
 import java.util.HashMap;
 import java.util.Locale;
 import java.util.Map;
@@ -133,9 +133,9 @@ public final class WorldOverlayEvents {
     }
 
     //#if MC<12109
-    /** Read-only LAST listener: records the world view matrix for the END passes (see RenderUtil). */
+    /** Read-only LAST listener: records the world view matrix for the END passes (see WorldMatrices). */
     private static void captureWorldView() {
-        RenderUtil.snapshotWorldViewModelView();
+        WorldMatrices.snapshotWorldViewModelView();
         renderState("last-capture", null, null);
     }
     //#endif
@@ -336,12 +336,12 @@ public final class WorldOverlayEvents {
                 frame.cameraYaw, frame.cameraPitch));
         }
         //#if MC>=11904 && MC<12109
-        //$$ final org.joml.Matrix4f view = RenderUtil.capturedWorldViewMatrix();
+        //$$ final org.joml.Matrix4f view = WorldMatrices.capturedWorldViewMatrix();
         //$$ if (view != null) {
-        //$$     line.append(" view=").append(RenderUtil.debugMatrix(view));
+        //$$     line.append(" view=").append(WorldMatrices.debugMatrix(view));
         //$$ }
         //$$ if (frame != null && anchorRel != null && view != null) {
-        //$$     line.append(RenderUtil.debugProjectAnchor(
+        //$$     line.append(WorldMatrices.debugProjectAnchor(
         //$$         (org.joml.Matrix4f) frame.projectionMatrix, view,
         //$$         anchorRel[0], anchorRel[1], anchorRel[2], MinecraftClient.getInstance()));
         //$$ }

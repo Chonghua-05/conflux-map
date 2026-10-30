@@ -1,6 +1,7 @@
 package cn.net.rms.confluxmap.mc.ui;
 
-import cn.net.rms.confluxmap.mc.render.RenderUtil;
+import cn.net.rms.confluxmap.mc.render.GuiShapes;
+import cn.net.rms.confluxmap.mc.render.RenderTargetState;
 import com.mojang.blaze3d.systems.RenderSystem;
 import java.util.List;
 //#if MC>=12108
@@ -30,7 +31,7 @@ public final class GuiDraw {
     //$$ private GuiDraw(final DrawContext context) {
     //$$     this.context = context;
     //#if MC>=12108
-    //$$     RenderUtil.setGuiState(context.state);
+    //$$     RenderTargetState.setGuiState(context.state);
     //$$     this.matrices = new MatrixStack();
     //$$     final var source = context.getMatrices();
     //$$     this.matrices.peek().getPositionMatrix()
@@ -127,7 +128,7 @@ public final class GuiDraw {
         //#if MC<12104
         // GUI item models use their own depth through 1.21.3. Release it so every GuiDraw caller
         // keeps ordinary painter's order without component-specific depth state.
-        RenderUtil.clearGuiDepth();
+        GuiShapes.clearGuiDepth();
         //#endif
     }
 
@@ -170,7 +171,7 @@ public final class GuiDraw {
         //#if MC>=12000
         //$$ context.fill(x1, y1, x2, y2, color);
         //#else
-        RenderUtil.fillRect(matrices(), x1, y1, x2 - x1, y2 - y1, color);
+        GuiShapes.fillRect(matrices(), x1, y1, x2 - x1, y2 - y1, color);
         //#endif
     }
 
