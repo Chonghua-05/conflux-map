@@ -28,6 +28,13 @@ import net.minecraft.client.render.GameRenderer;
 //$$ import net.minecraft.client.gui.ScreenRect;
 //$$ import net.minecraft.client.gui.render.state.GuiRenderState;
 //$$ import net.minecraft.client.texture.TextureSetup;
+//#if MC>=12108 && MC<12109
+//$$ import com.mojang.blaze3d.buffers.GpuBuffer;
+//$$ import com.mojang.blaze3d.buffers.GpuBufferSlice;
+//$$ import com.mojang.blaze3d.buffers.Std140Builder;
+//$$ import net.minecraft.client.render.fog.FogRenderer;
+//$$ import org.lwjgl.system.MemoryStack;
+//#endif
 //#if MC>=12111
 //$$ import com.mojang.blaze3d.textures.AddressMode;
 //$$ import com.mojang.blaze3d.textures.FilterMode;
@@ -94,6 +101,9 @@ public final class RenderUtil {
     //#endif
     //#if MC>=12108 && MC<12109
     //$$ private static RawProjectionMatrix beamProjection;
+    //$$ /** Fog whose ranges sit past any real distance, so the lightning shader's fog factor stays 0. */
+    //$$ private static GpuBuffer beamNoFadeFog;
+    //$$ private static GpuBufferSlice beamPreviousFog;
     //#endif
     //#if MC<12109
     // Private copy: the live matrix RenderSystem.getModelViewMatrix() returns is a stack
@@ -1097,6 +1107,12 @@ public final class RenderUtil {
      * and {@link #fillRect}, this does not reset itself on every draw call - callers issue
      * this once, draw as many {@link #fillTriangle3D} calls as needed, then restore normal
      * blending with {@link #restoreDefaultBlend()} when done.
+     *
+     * <p>On 1.21.6-1.21.8 the bracket also installs a fog slice that cannot fade the
+     * geometry: the fog rework tightened the fog ranges and the lightning shader the beams
+     * borrow multiplies the fog factor - it never blends toward the fog color - so a
+     * distant full-height beam faded to zero everywhere. 1.21.5's single fog started far
+     * enough to leave the beams bright; the no-fade slice restores that.
      */
     public static void beginAdditiveTriangles() {
         //#if MC<12105
@@ -1109,12 +1125,42 @@ public final class RenderUtil {
             com.mojang.blaze3d.platform.GlStateManager.DstFactor.ZERO
         );
         //#endif
+        //#if MC>=12108 && MC<12109
+        //$$ if (beamNoFadeFog == null) {
+        //$$     beamNoFadeFog = RenderSystem.getDevice().createBuffer(
+        //$$         () -> "Conflux Map waypoint no-fade fog",
+        //$$         com.mojang.blaze3d.buffers.GpuBuffer.USAGE_UNIFORM
+        //$$             | com.mojang.blaze3d.buffers.GpuBuffer.USAGE_COPY_DST,
+        //$$         FogRenderer.FOG_UBO_SIZE
+        //$$     );
+        //$$     try (MemoryStack stack = MemoryStack.stackPush()) {
+        //$$         final java.nio.ByteBuffer data = Std140Builder
+        //$$             .onStack(stack, FogRenderer.FOG_UBO_SIZE)
+        //$$             .putVec4(0f, 0f, 0f, 0f)
+        //$$             .putFloat(Float.MAX_VALUE)
+        //$$             .putFloat(Float.MAX_VALUE)
+        //$$             .putFloat(Float.MAX_VALUE)
+        //$$             .putFloat(Float.MAX_VALUE)
+        //$$             .putFloat(Float.MAX_VALUE)
+        //$$             .putFloat(Float.MAX_VALUE)
+        //$$             .get();
+        //$$         RenderSystem.getDevice().createCommandEncoder()
+        //$$             .writeToBuffer(beamNoFadeFog.slice(), data);
+        //$$     }
+        //$$ }
+        //$$ beamPreviousFog = RenderSystem.getShaderFog();
+        //$$ RenderSystem.setShaderFog(beamNoFadeFog.slice(0, FogRenderer.FOG_UBO_SIZE));
+        //#endif
     }
 
     /** Restores standard alpha blending after {@link #beginAdditiveTriangles()}. */
     public static void restoreDefaultBlend() {
         //#if MC<12105
         RenderSystem.defaultBlendFunc();
+        //#endif
+        //#if MC>=12108 && MC<12109
+        //$$ RenderSystem.setShaderFog(beamPreviousFog);
+        //$$ beamPreviousFog = null;
         //#endif
     }
 
