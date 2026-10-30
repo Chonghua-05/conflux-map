@@ -22,7 +22,7 @@ import net.minecraft.client.render.VertexConsumerProvider;
 //#if MC>=260200
 //$$ import org.joml.Quaternionf;
 //#endif
-//#if MC>=260300
+//#if MC>=260200
 //$$ import net.fabricmc.fabric.api.client.rendering.v1.FabricOrderedSubmitNodeCollector;
 //#endif
 import net.minecraft.client.util.math.MatrixStack;
@@ -65,7 +65,7 @@ final class OverlayFrame {
     //#if MC>=260200
     //$$ final Quaternionf cameraRotation;
     //#endif
-    //#if MC>=260300
+    //#if MC>=260200
     //$$ final FabricOrderedSubmitNodeCollector beamSubmits;
     //#endif
     final float cameraYaw;
@@ -95,7 +95,7 @@ final class OverlayFrame {
         //#if MC>=260200
         //$$ final Quaternionf cameraRotation,
         //#endif
-        //#if MC>=260300
+        //#if MC>=260200
         //$$ final FabricOrderedSubmitNodeCollector beamSubmits,
         //#endif
         final float cameraYaw,
@@ -120,7 +120,7 @@ final class OverlayFrame {
         //#if MC>=260200
         //$$ this.cameraRotation = cameraRotation;
         //#endif
-        //#if MC>=260300
+        //#if MC>=260200
         //$$ this.beamSubmits = beamSubmits;
         //#endif
         this.cameraYaw = cameraYaw;

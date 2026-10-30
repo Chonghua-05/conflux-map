@@ -246,6 +246,10 @@ public final class WorldOverlayEvents {
     //#endif
     //#if MC>=260300
     //$$         (FabricOrderedSubmitNodeCollector) context.submitNodeCollector(),
+    //#elseif MC>=260200
+    //$$         // The 26.2 order view carries the fabric submitCustom methods the way the label
+    //$$         // submits already ride them; the storage-level submit delegates to order(0) too.
+    //$$         (FabricOrderedSubmitNodeCollector) context.submitNodeCollector().order(0),
     //#endif
     //$$         camera.yRot(),
     //$$         camera.xRot(),
@@ -263,6 +267,8 @@ public final class WorldOverlayEvents {
     //$$         cameraState.orientation,
     //#if MC>=260300
     //$$         (FabricOrderedSubmitNodeCollector) context.submitNodeCollector(),
+    //#elseif MC>=260200
+    //$$         null,
     //#endif
     //$$         cameraState.yRot,
     //$$         cameraState.xRot,

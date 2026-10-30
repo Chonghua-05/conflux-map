@@ -7,7 +7,7 @@ import cn.net.rms.confluxmap.mc.render.WorldMatrices;
 import net.minecraft.client.render.VertexFormats;
 
 import com.mojang.blaze3d.systems.RenderSystem;
-//#if MC>=260300
+//#if MC>=260200
 //$$ import com.mojang.blaze3d.vertex.VertexConsumer;
 //$$ import net.fabricmc.fabric.api.client.rendering.v1.FabricOrderedSubmitNodeCollector;
 //$$ import net.fabricmc.fabric.api.client.rendering.v1.SubmitRenderPhases;
@@ -34,8 +34,8 @@ import net.minecraft.client.util.math.MatrixStack;
  * global projection pointing at composite passes and after vanilla popped the world view);
  * every version draws additively through {@link #beginAdditiveTriangles()}, whose
  * 1.21.8 fog-slice bracket lives here. The beam geometry itself arrives from
- * {@link WaypointBeamPainter}; this class only emits it - immediate triangles before 26.3,
- * submitted custom nodes in the AFTER_TERRAIN phase on 26.3, where the open translucent
+ * {@link WaypointBeamPainter}; this class only emits it - immediate triangles before 26.2,
+ * submitted custom nodes in the AFTER_TERRAIN phase from 26.2 on, where the open translucent
  * pass forbids issuing draws on the spot.
  */
 final class BeamPass implements AutoCloseable, WaypointBeamPainter.Sink {
@@ -86,7 +86,7 @@ final class BeamPass implements AutoCloseable, WaypointBeamPainter.Sink {
 
     /**
      * One tube face as two triangles with opposite winding, the double-sided emission the
-     * immediate path uses; on 26.3 the two triangles ride one submitted node and vanilla
+     * immediate path uses; from 26.2 on the two triangles ride one submitted node and vanilla
      * batches consecutive nodes into a single staged draw through the dragon-rays
      * RenderType, the same pipeline the immediate path draws with on older versions.
      */
@@ -98,7 +98,7 @@ final class BeamPass implements AutoCloseable, WaypointBeamPainter.Sink {
         final float bottom, final float top,
         final int color
     ) {
-        //#if MC>=260300
+        //#if MC>=260200
         //$$ submitBeamSide(frame.beamSubmits, matrices.last().copy(), x0, z0, x1, z1, bottom, top, color);
         //#else
         fillTriangle3D(matrices, x0, bottom, z0, x1, bottom, z1, x1, top, z1, color);
@@ -119,7 +119,7 @@ final class BeamPass implements AutoCloseable, WaypointBeamPainter.Sink {
         frame = null;
     }
 
-    //#if MC>=260300
+    //#if MC>=260200
     //$$ private static void submitBeamSide(
     //$$     final FabricOrderedSubmitNodeCollector beamSubmits,
     //$$     final PoseStack.Pose pose,
