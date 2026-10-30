@@ -53,7 +53,6 @@ import cn.net.rms.confluxmap.core.predict.BiomeCandidateSearch;
 import cn.net.rms.confluxmap.core.predict.NativeBaselineSampler;
 import cn.net.rms.confluxmap.core.predict.PredictedTileKeys;
 import cn.net.rms.confluxmap.core.predict.PredictionDimensions;
-import cn.net.rms.confluxmap.core.predict.PredictionLodFallback;
 import cn.net.rms.confluxmap.core.predict.PredictionState;
 import cn.net.rms.confluxmap.core.predict.PredictionTileService;
 import cn.net.rms.confluxmap.core.predict.StructureIndex;
@@ -2022,61 +2021,18 @@ public final class FullscreenMapScreen extends ConfluxScreen {
                 );
                 final TileKey key = biomeMode ? BiomeTileKeys.toBiome(terrainKey) : terrainKey;
                 final TileKey predictedKey = PredictedTileKeys.toPredicted(key);
-                final float screenX = (float) (
-                    width / 2.0 + (key.originBlockX() - centerX) * pxPerBlock
-                );
-                final float screenY = (float) (
-                    height / 2.0 + (key.originBlockZ() - centerZ) * pxPerBlock
-                );
-                final float quadSize = (float) (blocksPerTile * pxPerBlock);
                 if (textures.bind(predictedKey)) {
-                    RenderUtil.drawTintedQuad(
-                        matrices, screenX, screenY, quadSize, quadSize,
-                        0f, 0f, 1f, 1f, 0xFFFFFFFF
+                    final float screenX = (float) (
+                        width / 2.0 + (key.originBlockX() - centerX) * pxPerBlock
                     );
-                } else {
-                    // Still composing (bind() above queued it); show the parent LOD underneath
-                    // rather than a black square.
-                    drawParentPredictionTile(matrices, predictedKey, screenX, screenY, quadSize);
+                    final float screenY = (float) (
+                        height / 2.0 + (key.originBlockZ() - centerZ) * pxPerBlock
+                    );
+                    final float quadSize = (float) (blocksPerTile * pxPerBlock);
+                    RenderUtil.drawQuad(matrices, screenX, screenY, quadSize, quadSize, 0f, 0f, 1f, 1f);
                 }
             }
         }
-    }
-
-    /**
-     * Draws the nearest already-uploaded ancestor of a still-composing predicted tile in its place,
-     * so a pan shows the previously loaded parent LOD instead of a black square until the child
-     * lands. The ancestor is clipped to the quadrant this tile occupies inside it. Only resident
-     * textures are considered - requesting a parent here would queue coarser work the viewer never
-     * asked for.
-     *
-     * @return whether anything was drawn
-     */
-    private boolean drawParentPredictionTile(
-        final MatrixStack matrices,
-        final TileKey predictedKey,
-        final float screenX,
-        final float screenY,
-        final float quadSize
-    ) {
-        for (int levels = 1; levels <= TileMath.MAX_LOD; levels++) {
-            final Optional<TileKey> ancestor = PredictionLodFallback.ancestor(predictedKey, levels);
-            if (ancestor.isEmpty()) {
-                return false;
-            }
-            if (!textures.bindIfResident(ancestor.get())) {
-                continue;
-            }
-            final PredictionLodFallback.Window window = PredictionLodFallback
-                .window(predictedKey, levels)
-                .orElseThrow();
-            RenderUtil.drawTintedQuad(
-                matrices, screenX, screenY, quadSize, quadSize,
-                window.u0(), window.v0(), window.u1(), window.v1(), 0xFFFFFFFF
-            );
-            return true;
-        }
-        return false;
     }
 
     /** Seed prediction can additionally fill lower Nether biome planes; synchronization stays top-only. */
