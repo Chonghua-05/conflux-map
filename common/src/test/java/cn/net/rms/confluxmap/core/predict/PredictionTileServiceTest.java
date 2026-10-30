@@ -1164,7 +1164,10 @@ class PredictionTileServiceTest {
         final SessionGuard sessionGuard = new SessionGuard();
         final MapExecutors executors = new MapExecutors();
         final TileService uploads = new TileService(new MapWorldService(), executors, new ConfluxConfig(), new DaylightModel());
-        final PredictionTileService predictionTiles = newService(sessionGuard, executors, uploads);
+        final PredictionState state = new PredictionState();
+        state.setPresets(WorldPreset.FLAT, WorldPreset.DEFAULT);
+        state.setFlatBaseline(new FlatBaseline(1, 63, SurfaceKind.LAND.ordinal(), 11, 0));
+        final PredictionTileService predictionTiles = newService(sessionGuard, state, executors, uploads);
         sessionGuard.begin(WORLD, DIM);
 
         final int cap = executors.workerCount();
@@ -1182,6 +1185,7 @@ class PredictionTileServiceTest {
 
         try {
             predictionTiles.setViewport(DIM, 0, 5, 5, 5, 5);
+            predictionTiles.preloadViewportPaddedRing();
             final Set<TileKey> pending = predictionTiles.queuedOrInFlightKeysForTest();
             // A 1x1 viewport (5, 5) has a 1-padded 3x3 ring with 8 outer ring tiles:
             // (4..6, 4..6) excluding (5, 5)
@@ -1233,6 +1237,7 @@ class PredictionTileServiceTest {
             }
             // 1x1 viewport at (5, 5). Ring tile is at (6, 5).
             predictionTiles.setViewport(DIM, 0, 5, 5, 5, 5);
+            predictionTiles.preloadViewportPaddedRing();
             final TileKey visible = new TileKey(WORLD, DIM, "surface!pred", 0, 5, 5);
             final TileKey ring = new TileKey(WORLD, DIM, "surface!pred", 0, 6, 5);
             predictionTiles.requestTile(visible);

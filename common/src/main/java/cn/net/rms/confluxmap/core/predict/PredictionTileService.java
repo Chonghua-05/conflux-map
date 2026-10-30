@@ -785,22 +785,40 @@ public final class PredictionTileService {
                         dirty.put(key, session.token());
                     }
                 }
-                final MapLayer predictedLayer = PredictionDimensions.layer(dimension);
-                if (predictedLayer != null) {
-                    final String layer = predictedLayer.cacheId();
-                    for (int tileZ = minTileZ - 1; tileZ <= maxTileZ + 1; tileZ++) {
-                        for (int tileX = minTileX - 1; tileX <= maxTileX + 1; tileX++) {
-                            if (rect.contains(tileX, tileZ)) {
-                                continue;
-                            }
-                            final TileKey key = new TileKey(
-                                session.world(), dimension, layer + PredictedTileKeys.SUFFIX,
-                                lod, tileX, tileZ
-                            );
-                            if (!dirty.containsKey(key) && !inFlight.contains(key)) {
-                                dirty.put(key, session.token());
-                            }
-                        }
+            }
+        }
+        pump();
+    }
+
+    /**
+     * Schedules low-priority preloading for the 1-tile outer ring around the current visible viewport.
+     * Safe to call after visible tiles are bound/requested.
+     */
+    public void preloadViewportPaddedRing() {
+        final SessionGuard.Session session = sessionGuard.current();
+        final ViewportRect rect;
+        synchronized (this) {
+            rect = viewport;
+            if (rect == null || !session.active() || !rect.dimension().equals(session.dimension())
+                || !state.predictable(rect.dimension())) {
+                return;
+            }
+            final MapLayer predictedLayer = PredictionDimensions.layer(rect.dimension());
+            if (predictedLayer == null) {
+                return;
+            }
+            final String layer = predictedLayer.cacheId();
+            for (int tileZ = rect.minTileZ() - 1; tileZ <= rect.maxTileZ() + 1; tileZ++) {
+                for (int tileX = rect.minTileX() - 1; tileX <= rect.maxTileX() + 1; tileX++) {
+                    if (rect.contains(tileX, tileZ)) {
+                        continue;
+                    }
+                    final TileKey key = new TileKey(
+                        session.world(), rect.dimension(), layer + PredictedTileKeys.SUFFIX,
+                        rect.lod(), tileX, tileZ
+                    );
+                    if (!dirty.containsKey(key) && !inFlight.contains(key)) {
+                        dirty.put(key, session.token());
                     }
                 }
             }

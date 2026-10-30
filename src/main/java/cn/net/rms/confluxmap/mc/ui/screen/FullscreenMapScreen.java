@@ -1937,6 +1937,7 @@ public final class FullscreenMapScreen extends ConfluxScreen {
                 predictionTiles.setViewport(
                     session.dimension(), lod, firstTileX, lastTileX, firstTileZ, lastTileZ
                 );
+                predictionTiles.preloadViewportPaddedRing();
                 if (syncActive) {
                     final ChunkViewport mapChunks = ChunkViewport.covering(
                         centerX, centerZ, width, height, scale
