@@ -8,6 +8,10 @@ import java.util.Map;
 //#if MC>=260200
 //$$ import net.fabricmc.fabric.api.client.rendering.v1.FabricOrderedSubmitNodeCollector;
 //#endif
+//#if MC>=260100 && MC<260200
+//$$ import com.mojang.blaze3d.buffers.GpuBufferSlice;
+//$$ import com.mojang.blaze3d.systems.RenderSystem;
+//#endif
 //#if MC>=260100
 //$$ import net.fabricmc.fabric.api.client.rendering.v1.level.LevelRenderContext;
 //$$ import net.fabricmc.fabric.api.client.rendering.v1.level.LevelRenderEvents;
@@ -36,9 +40,15 @@ import net.minecraft.client.util.math.MatrixStack;
  * orchestrator and the passes never see a native context.
  *
  * <p>Hook phases by line. 1.21.11 registers {@code WorldRenderEvents.BEFORE_TRANSLUCENT}
- * for the beam and {@code END_MAIN} for the labels. 26.1 registers {@code
- * LevelRenderEvents.AFTER_TRANSLUCENT_TERRAIN} for the beam and {@code END_MAIN} for the
- * labels; 26.2 moves the labels to {@code COLLECT_SUBMITS}; 26.3 registers both passes on
+ * for the beam and {@code END_MAIN} for the labels. 26.1 records the world view at
+ * {@code LevelRenderEvents.AFTER_TRANSLUCENT_TERRAIN} for the beam and keeps the labels on
+ * {@code END_MAIN}: vanilla consumes no submit nodes after the terrain events on that line
+ * (custom geometry renders before translucent terrain and the submit storage is cleared right
+ * after the hook), so {@code WorldRendererMixin} draws the beam at {@code renderLevel}'s
+ * RETURN instead - after a deferred pack's finalize, the same slot the pre-1.21.9 END passes
+ * use. 26.2 submits the beam through the level's submit collector at
+ * {@code AFTER_TRANSLUCENT_TERRAIN} and moves the labels to {@code COLLECT_SUBMITS}; 26.3
+ * registers both passes on
  * {@code COLLECT_SUBMITS}, because it renders classic-translucent terrain inside one render
  * pass that stays open for the whole translucent hook, so the beam can no longer issue its
  * own passes there - submitting the beam geometry instead rides executeTranslucentAfterTerrain,
@@ -75,7 +85,7 @@ public final class WorldOverlayEvents {
     private WorldOverlayEvents() {
     }
 
-    //#if MC>=12109 && MC<12111
+    //#if MC>=12109 && MC<12111 || MC>=260100 && MC<260200
     //$$ private static WaypointWorldRenderer active;
     //#endif
 
@@ -103,8 +113,13 @@ public final class WorldOverlayEvents {
         //$$ LevelRenderEvents.COLLECT_SUBMITS.register(context ->
         //$$     renderer.renderHud(labelFrame(context)));
         //#elseif MC>=260100
-        //$$ LevelRenderEvents.AFTER_TRANSLUCENT_TERRAIN.register(context ->
-        //$$     renderer.renderBeams(beamFrame(context)));
+        //$$ // 26.1 consumes no submit nodes after the terrain events (custom geometry renders
+        //$$ // before translucent terrain and the storage is cleared right after this hook), so
+        //$$ // the 26.2 submit path cannot render here. This listener only records the view and
+        //$$ // fog; WorldRendererMixin draws the beams at renderLevel's RETURN, after a pack's
+        //$$ // finalize.
+        //$$ active = renderer;
+        //$$ LevelRenderEvents.AFTER_TRANSLUCENT_TERRAIN.register(context -> captureWorldView());
         //$$ LevelRenderEvents.END_MAIN.register(context ->
         //$$     renderer.renderHud(labelFrame(context)));
         //#elseif MC>=12111
@@ -132,12 +147,52 @@ public final class WorldOverlayEvents {
         //#endif
     }
 
-    //#if MC<12109
-    /** Read-only LAST listener: records the world view matrix for the END passes (see WorldMatrices). */
+    //#if MC<12109 || MC>=260100 && MC<260200
+    /** Read-only listener: records the world view matrix for the post-pass draws (see WorldMatrices). */
     private static void captureWorldView() {
         WorldMatrices.snapshotWorldViewModelView();
+        //#if MC>=260100 && MC<260200
+        //$$ // The RETURN draw replays the fog the in-pass beam draw saw; by then later frame
+        //$$ // graph passes (weather, clouds) may have installed their own slice.
+        //$$ levelReturnFog = RenderSystem.getShaderFog();
+        //#else
         renderState("last-capture", null, null);
+        //#endif
     }
+    //#endif
+
+    //#if MC>=260100 && MC<260200
+    //$$ private static GpuBufferSlice levelReturnFog;
+    //$$
+    //$$ /** Entry point {@code WorldRendererMixin} drives at {@code renderLevel}'s RETURN. */
+    //$$ public static void onLevelReturn() {
+    //$$     if (active == null) {
+    //$$         return;
+    //$$     }
+    //$$     final GpuBufferSlice previousFog = RenderSystem.getShaderFog();
+    //$$     if (levelReturnFog != null) {
+    //$$         RenderSystem.setShaderFog(levelReturnFog);
+    //$$     }
+    //$$     try {
+    //$$         active.renderBeams(levelReturnFrame());
+    //$$     } finally {
+    //$$         RenderSystem.setShaderFog(previousFog);
+    //$$     }
+    //$$ }
+    //$$
+    //$$ private static OverlayFrame levelReturnFrame() {
+    //$$     final Camera camera = client().gameRenderer.getMainCamera();
+    //$$     return new OverlayFrame(
+    //$$         new PoseStack(),
+    //$$         camera.position(),
+    //$$         immediate(),
+    //$$         camera,
+    //$$         null,
+    //$$         camera.yRot(),
+    //$$         camera.xRot(),
+    //$$         tickDelta()
+    //$$     );
+    //$$ }
     //#endif
 
     //#if MC>=12109 && MC<12111

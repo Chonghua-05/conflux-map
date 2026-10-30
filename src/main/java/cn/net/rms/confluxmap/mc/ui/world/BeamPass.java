@@ -64,6 +64,10 @@ final class BeamPass implements AutoCloseable, WaypointBeamPainter.Sink {
         //#if MC<12109
         WorldMatrices.applyWorldProjection(frame.projectionMatrix);
         WorldMatrices.pushWorldViewSnapshot();
+        //#elseif MC>=260100 && MC<260200
+        //$$ // The 26.1 RETURN draw runs after vanilla popped the world view but before anything
+        //$$ // swapped the world projection away, so only the view snapshot gets reinstalled.
+        //$$ WorldMatrices.pushWorldViewSnapshot();
         //#endif
         beginAdditiveTriangles();
     }
@@ -111,6 +115,8 @@ final class BeamPass implements AutoCloseable, WaypointBeamPainter.Sink {
         //#if MC<12109
         WorldMatrices.popModelView();
         WorldMatrices.restoreProjection();
+        //#elseif MC>=260100 && MC<260200
+        //$$ WorldMatrices.popModelView();
         //#endif
         //#if MC<12105
         RenderSystem.enableCull();

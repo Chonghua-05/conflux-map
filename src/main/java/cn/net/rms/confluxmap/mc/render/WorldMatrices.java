@@ -17,15 +17,15 @@ import net.minecraft.client.util.math.MatrixStack;
 
 /**
  * World-pass matrix snapshots and reinstall brackets shared by the waypoint beam and label
- * passes: the view matrix captured at {@code WorldRenderEvents.LAST} and reinstalled at
- * END, the perspective projection swap that survives deferred shader packs, and the
- * HUD-scope ModelView bracket for the in-pass phases.
+ * passes: the view matrix captured inside the world pass and reinstalled at END (pre-1.21.9)
+ * or at 26.1's renderLevel RETURN, the perspective projection swap that survives deferred
+ * shader packs, and the HUD-scope ModelView bracket for the in-pass phases.
  */
 public final class WorldMatrices {
     //#if MC>=12108 && MC<12109
     //$$ private static RawProjectionMatrix beamProjection;
     //#endif
-    //#if MC<12109
+    //#if MC<12109 || MC>=260100 && MC<260200
     // Private copy: the live matrix RenderSystem.getModelViewMatrix() returns is a stack
     // slot the next frame's world pass mutates in place, so the snapshot must not alias it.
     //#if MC>=11904
@@ -39,13 +39,13 @@ public final class WorldMatrices {
     private WorldMatrices() {
     }
 
-    //#if MC<12109
+    //#if MC<12109 || MC>=260100 && MC<260200
     /**
      * Captures the world pass's global ModelView: vanilla installs the view matrix (camera
      * rotation, plus view bobbing/hurt tilt) on the global stack at the start of world
      * rendering and pops it again right before the render method returns - which is exactly
-     * where {@code WorldRenderEvents.END} fires. A read-only {@code LAST} listener (still
-     * inside the world pass) calls this so the END passes can reinstall the exact matrix.
+     * where {@code WorldRenderEvents.END} fires. A read-only listener (still inside the world
+     * pass) calls this so the post-pass draws can reinstall the exact matrix.
      */
     public static void snapshotWorldViewModelView() {
         //#if MC>=11904
@@ -87,12 +87,17 @@ public final class WorldMatrices {
         RenderSystem.applyModelViewMatrix();
         //#endif
     }
+    //#endif
 
+    //#if MC<12109
     /**
      * Saves the projection that was active on entry and installs the world pass's
      * perspective projection. Needed at {@code WorldRenderEvents.END}: deferred shader packs
      * finalize from the same method return and leave the global projection pointing at their
      * composite passes. {@link #restoreProjection()} puts the saved one back.
+     *
+     * <p>26.1 does not use this: its RETURN-time draw runs before anything swaps the world
+     * projection away, so only the view snapshot above is reinstalled there.
      */
     public static void applyWorldProjection(
         //#if MC<12000
