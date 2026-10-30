@@ -97,22 +97,25 @@ public final class WorldMatrices {
     }
 
     //#if MC>=11904
-    //$$ private static void writeRowMajor(final org.joml.Matrix4f matrix, final double[] out) {
+    //$$ static void writeRowMajor(final org.joml.Matrix4f matrix, final double[] out) {
+    //$$     // JOML's mXY() getters address column X, row Y, so the getters must be read
+    //$$     // transposed here; reading m01() as "row 0, column 1" stores the whole matrix
+    //$$     // transposed and turns the projection's clip-W row into its translation column.
     //$$     out[0] = matrix.m00();
-    //$$     out[1] = matrix.m01();
-    //$$     out[2] = matrix.m02();
-    //$$     out[3] = matrix.m03();
-    //$$     out[4] = matrix.m10();
+    //$$     out[1] = matrix.m10();
+    //$$     out[2] = matrix.m20();
+    //$$     out[3] = matrix.m30();
+    //$$     out[4] = matrix.m01();
     //$$     out[5] = matrix.m11();
-    //$$     out[6] = matrix.m12();
-    //$$     out[7] = matrix.m13();
-    //$$     out[8] = matrix.m20();
-    //$$     out[9] = matrix.m21();
+    //$$     out[6] = matrix.m21();
+    //$$     out[7] = matrix.m31();
+    //$$     out[8] = matrix.m02();
+    //$$     out[9] = matrix.m12();
     //$$     out[10] = matrix.m22();
-    //$$     out[11] = matrix.m23();
-    //$$     out[12] = matrix.m30();
-    //$$     out[13] = matrix.m31();
-    //$$     out[14] = matrix.m32();
+    //$$     out[11] = matrix.m32();
+    //$$     out[12] = matrix.m03();
+    //$$     out[13] = matrix.m13();
+    //$$     out[14] = matrix.m23();
     //$$     out[15] = matrix.m33();
     //$$ }
     //#endif
