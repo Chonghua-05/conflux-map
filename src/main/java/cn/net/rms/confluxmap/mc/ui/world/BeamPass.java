@@ -7,9 +7,12 @@ import cn.net.rms.confluxmap.mc.render.WorldMatrices;
 import net.minecraft.client.render.VertexFormats;
 
 import com.mojang.blaze3d.systems.RenderSystem;
-//#if MC>=12111 && MC<260100
-//$$ import net.minecraft.client.render.RenderLayers;
+//#if MC>=12109 && MC<260100
+//$$ import net.minecraft.client.render.RenderLayer;
 //$$ import net.minecraft.client.render.VertexConsumer;
+//#if MC>=12111
+//$$ import net.minecraft.client.render.RenderLayers;
+//#endif
 //#endif
 //#if MC>=260200
 //$$ import com.mojang.blaze3d.vertex.VertexConsumer;
@@ -39,10 +42,10 @@ import net.minecraft.client.util.math.MatrixStack;
  * every version draws additively through {@link #beginAdditiveTriangles()}, whose
  * 1.21.8 fog-slice bracket lives here. The beam geometry itself arrives from
  * {@link WaypointBeamPainter}; this class only emits it - raw tessellator triangles before
- * 1.21.11, shared-entity-consumer batches through the vanilla dragon-rays layer on 1.21.11,
- * raw triangles at renderLevel's RETURN on 26.1, and submitted custom nodes in the
- * AFTER_TERRAIN phase from 26.2 on, where the open translucent pass forbids issuing draws on
- * the spot.
+ * 1.21.9, shared-entity-consumer batches through the vanilla dragon-rays layer on
+ * 1.21.9-1.21.11, raw triangles at renderLevel's RETURN on 26.1, and submitted custom nodes
+ * in the AFTER_TERRAIN phase from 26.2 on, where the open translucent pass forbids issuing
+ * draws on the spot.
  */
 final class BeamPass implements AutoCloseable, WaypointBeamPainter.Sink {
     /** The pass frame, valid between {@link #beginPass} and {@link #endPass}. */
@@ -110,7 +113,7 @@ final class BeamPass implements AutoCloseable, WaypointBeamPainter.Sink {
     ) {
         //#if MC>=260200
         //$$ submitBeamSide(frame.beamSubmits, matrices.last().copy(), x0, z0, x1, z1, bottom, top, color);
-        //#elseif MC>=12111 && MC<260100
+        //#elseif MC>=12109 && MC<260100
         //$$ immediateBeamSide(matrices, x0, z0, x1, z1, bottom, top, color);
         //#else
         fillTriangle3D(matrices, x0, bottom, z0, x1, bottom, z1, x1, top, z1, color);
@@ -120,11 +123,15 @@ final class BeamPass implements AutoCloseable, WaypointBeamPainter.Sink {
 
     void endPass() {
         restoreDefaultBlend();
-        //#if MC>=12111 && MC<260100
+        //#if MC>=12109 && MC<260100
         //$$ // The buffered dragon-rays layer must draw now, inside the world pass at the
         //$$ // BEFORE_TRANSLUCENT slot the raw draw used; left pending it would only flush at the
         //$$ // next layer switch, when the world matrices are already gone.
+        //#if MC>=12111
         //$$ frame.immediate.draw(RenderLayers.dragonRays());
+        //#else
+        //$$ frame.immediate.draw(RenderLayer.getDragonRays());
+        //#endif
         //#endif
         //#if MC<12109
         WorldMatrices.popModelView();
@@ -139,14 +146,23 @@ final class BeamPass implements AutoCloseable, WaypointBeamPainter.Sink {
         frame = null;
     }
 
-    //#if MC>=12111 && MC<260100
+    //#if MC>=12109 && MC<260100
+    //$$ /** The vanilla dragon-rays layer; 1.21.11 relocated it from RenderLayer to RenderLayers. */
+    //$$ private static RenderLayer beamLayer() {
+    //#if MC>=12111
+    //$$     return RenderLayers.dragonRays();
+    //#else
+    //$$     return RenderLayer.getDragonRays();
+    //#endif
+    //$$ }
+    //$$
     //$$ /**
     //$$  * One tube face as two triangles with opposite winding, buffered into the shared entity
     //$$  * vertex consumers through the vanilla dragon-rays layer - the same captured path the
     //$$  * labels draw through and the same pipeline the raw mesh drew with. Submitting through
-    //$$  * the context's commandQueue() instead was checked against 1.21.11's bytecode and drops
-    //$$  * the geometry: vanilla drains that queue before the BEFORE_TRANSLUCENT hook fires, and
-    //$$  * the later particles-pass drain only buffers, never flushes.
+    //$$  * the render command queue instead was checked against 1.21.9 and 1.21.11 bytecode and
+    //$$  * drops the geometry: vanilla drains that queue before the translucent sections render,
+    //$$  * and the only later drain (the particles pass) only buffers, never flushes.
     //$$  */
     //$$ private void immediateBeamSide(
     //$$     final MatrixStack matrices,
@@ -155,7 +171,7 @@ final class BeamPass implements AutoCloseable, WaypointBeamPainter.Sink {
     //$$     final float bottom, final float top,
     //$$     final int color
     //$$ ) {
-    //$$     final VertexConsumer vertices = frame.immediate.getBuffer(RenderLayers.dragonRays());
+    //$$     final VertexConsumer vertices = frame.immediate.getBuffer(beamLayer());
     //$$     emitBeamTriangle(matrices.peek(), vertices, x0, bottom, z0, x1, bottom, z1, x1, top, z1, color);
     //$$     emitBeamTriangle(matrices.peek(), vertices, x0, bottom, z0, x1, top, z1, x0, top, z0, color);
     //$$ }
