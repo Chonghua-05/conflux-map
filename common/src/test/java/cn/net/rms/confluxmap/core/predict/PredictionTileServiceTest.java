@@ -3,6 +3,7 @@ package cn.net.rms.confluxmap.core.predict;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotEquals;
+import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import cn.net.rms.confluxmap.core.color.BiomeColorPalette;
@@ -1719,6 +1720,116 @@ class PredictionTileServiceTest {
             assertEquals(63, landColumn.surfaceY().orElseThrow(),
                 "unsynchronized neighbours keep the baseline height");
         } finally {
+            executors.shutdown(2000);
+        }
+    }
+
+    /**
+     * A tile the renderer asks for again (its texture was evicted, the LOD was left and re-entered,
+     * or the view mode came back) must be served from its own previous composition: the pixels are
+     * already identical to what sampling would produce, so paying for the native pass again is pure
+     * pan latency. Pixel-plane identity is the observable proof that no second composition ran.
+     */
+    @Test
+    void reRequestingAComposedTileReusesItsOwnCachedComposition(
+        @TempDir final Path tempDir
+    ) throws InterruptedException {
+        final SessionGuard sessionGuard = new SessionGuard();
+        final MapExecutors executors = new MapExecutors();
+        final TileService uploads = new TileService(
+            new MapWorldService(), executors, new ConfluxConfig(), new DaylightModel()
+        );
+        final PredictionState state = new PredictionState();
+        state.setPresets(WorldPreset.FLAT, WorldPreset.DEFAULT);
+        state.setFlatBaseline(new FlatBaseline(1, 7, SurfaceKind.LAND.ordinal(), 11, 0));
+        final PredictionTileService predictionTiles = newService(sessionGuard, state, executors, uploads);
+        predictionTiles.bindCorrectionStore(new CorrectionStore(tempDir));
+        sessionGuard.begin(WORLD, DIM);
+
+        final TileKey key = new TileKey(WORLD, DIM, "surface!pred", 0, 3, 4);
+        try {
+            predictionTiles.requestTile(key);
+            awaitIdle(predictionTiles, 10_000L);
+            final TileUpdate first = latestUpdate(uploads, key);
+
+            predictionTiles.requestTile(key);
+            awaitIdle(predictionTiles, 10_000L);
+            final TileUpdate second = latestUpdate(uploads, key);
+
+            assertSame(
+                first.argbPixels(),
+                second.argbPixels(),
+                "an exact cache hit must hand back the composed plane instead of sampling again"
+            );
+            assertEquals(
+                first.argbPixels()[0],
+                second.argbPixels()[0],
+                "the reused plane must be the pixels that were already on screen"
+            );
+            assertEquals(
+                7,
+                predictionTiles.predictedSurfaceYAt(DIM, 0, 3 * 256 + 8, 4 * 256 + 8).orElseThrow(),
+                "the reused composition must still publish its surface metadata"
+            );
+            assertEquals(
+                1,
+                predictionTiles.predictedBiomeAt(DIM, 0, 3 * 256 + 8, 4 * 256 + 8).orElse(-1),
+                "the reused composition must still publish its biome metadata"
+            );
+        } finally {
+            executors.shutdown(2000);
+        }
+    }
+
+    /**
+     * A ring preload must never occupy the last worker slot: the next tile the user pans onto has
+     * to start composing immediately instead of queueing behind a whole ring of native work.
+     */
+    @Test
+    void paddedRingPrefetchLeavesAWorkerSlotForTheVisibleViewport() throws InterruptedException {
+        final SessionGuard sessionGuard = new SessionGuard();
+        final MapExecutors executors = new MapExecutors();
+        final TileService uploads = new TileService(
+            new MapWorldService(), executors, new ConfluxConfig(), new DaylightModel()
+        );
+        final PredictionState state = new PredictionState();
+        state.setPresets(WorldPreset.FLAT, WorldPreset.DEFAULT);
+        state.setFlatBaseline(new FlatBaseline(1, 63, SurfaceKind.LAND.ordinal(), 11, 0));
+        final PredictionTileService predictionTiles = newService(sessionGuard, state, executors, uploads);
+        sessionGuard.begin(WORLD, DIM);
+
+        final int cap = executors.workerCount();
+        Assumptions.assumeTrue(cap >= 2, "one worker cannot both prefetch and serve a pan");
+        final CountDownLatch release = new CountDownLatch(1);
+        for (int i = 0; i < cap; i++) {
+            executors.workers().execute(() -> {
+                try {
+                    release.await();
+                } catch (final InterruptedException ignored) {
+                    Thread.currentThread().interrupt();
+                }
+            });
+        }
+        Thread.sleep(50);
+
+        try {
+            // A 1x1 viewport keeps every ring tile outside the visible rect, so the whole batch is
+            // pure prefetch and must stop one slot short of the pool.
+            predictionTiles.setViewport(DIM, 0, 5, 5, 5, 5);
+            predictionTiles.preloadViewportPaddedRing();
+            assertTrue(
+                predictionTiles.inFlightKeysForTest().size() <= cap - 1,
+                "padded-ring prefetch must reserve a worker slot"
+            );
+
+            final TileKey visible = new TileKey(WORLD, DIM, "surface!pred", 0, 5, 5);
+            predictionTiles.requestTile(visible);
+            assertTrue(
+                predictionTiles.inFlightKeysForTest().contains(visible),
+                "the visible tile must take the reserved slot while prefetch is still running"
+            );
+        } finally {
+            release.countDown();
             executors.shutdown(2000);
         }
     }

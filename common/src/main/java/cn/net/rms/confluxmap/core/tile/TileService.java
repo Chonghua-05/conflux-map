@@ -32,6 +32,7 @@ import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.HashMap;
 import java.util.HashSet;
+import java.util.Iterator;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -83,6 +84,13 @@ public final class TileService {
 
     /** Guarded by {@code this}: bounded upload queue with partial updates merged per key. */
     private final LinkedHashMap<TileKey, TileUpdate> uploads = new LinkedHashMap<>();
+
+    /**
+     * Guarded by {@code this}: prefetched (ring/background) updates. The render thread only has a
+     * handful of upload slots per frame, so these wait until no foreground update is pending - a
+     * tile no one is looking at must never delay the texture of one that is.
+     */
+    private final LinkedHashMap<TileKey, TileUpdate> deferredUploads = new LinkedHashMap<>();
 
     /** Latest fullscreen viewport. Visible requests use deterministic top-left row-major order. */
     private ViewportRect viewport;
@@ -150,6 +158,7 @@ public final class TileService {
             requestedTiles.clear();
             staleTiles.clear();
             uploads.clear();
+            deferredUploads.clear();
             viewport = null;
             viewportRegionLoadCursor = 0L;
         }
@@ -573,6 +582,7 @@ public final class TileService {
         dirty.clear();
         staleTiles.clear();
         uploads.clear();
+        deferredUploads.clear();
     }
 
     /** For a tile that's visible but has never been composed (or requested again after being evicted). */
@@ -1523,26 +1533,56 @@ public final class TileService {
         pushUpload(update);
     }
 
+    /**
+     * Queues a prefetched (ring/background) update behind every foreground upload. It is still
+     * bounded: a deferred tile nobody has looked at can simply be dropped, because the renderer
+     * re-requests any tile whose texture is missing, and a re-request now resolves from the
+     * prediction mip cache instead of native sampling.
+     */
+    public synchronized void submitDeferredUpload(final TileUpdate update) {
+        final TileUpdate pending = deferredUploads.remove(update.key());
+        deferredUploads.put(
+            update.key(),
+            pending == null ? update : TileUpdate.merge(pending, update)
+        );
+        final Iterator<TileKey> keys = deferredUploads.keySet().iterator();
+        while (deferredUploads.size() > UPLOAD_QUEUE_CAPACITY && keys.hasNext()) {
+            keys.next();
+            keys.remove();
+        }
+    }
+
     /** Drops queued uploads matching a cache-plane predicate before that plane is rebuilt. */
     public synchronized void discardUploads(final Predicate<TileKey> predicate) {
         uploads.keySet().removeIf(predicate);
+        deferredUploads.keySet().removeIf(predicate);
     }
 
     /** Render thread: pop up to {@code max} freshly-composed tiles to upload to the GPU. */
     public List<TileUpdate> drainUploads(final int max) {
         final List<TileUpdate> result = new ArrayList<>(Math.min(max, UPLOAD_QUEUE_CAPACITY));
         synchronized (this) {
-            final var it = uploads.entrySet().iterator();
-            while (it.hasNext() && result.size() < max) {
-                result.add(it.next().getValue());
-                it.remove();
-            }
+            drainInto(uploads, result, max);
+            // Only once nothing foreground is waiting does prefetch get the leftover slots.
+            drainInto(deferredUploads, result, max);
         }
         if (!result.isEmpty()) {
             // The room this just freed is what the composition backpressure in pump() waits for.
             pump();
         }
         return result;
+    }
+
+    private static void drainInto(
+        final LinkedHashMap<TileKey, TileUpdate> queue,
+        final List<TileUpdate> result,
+        final int max
+    ) {
+        final Iterator<Map.Entry<TileKey, TileUpdate>> it = queue.entrySet().iterator();
+        while (it.hasNext() && result.size() < max) {
+            result.add(it.next().getValue());
+            it.remove();
+        }
     }
 
     /** Test-support only: number of local-map compositions currently assigned to workers. */

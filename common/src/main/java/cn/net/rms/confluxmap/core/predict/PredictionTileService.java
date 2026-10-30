@@ -73,6 +73,20 @@ public final class PredictionTileService {
      * screen background bled through as black gaps; center-out ordering still picks the next tile.
      */
     private static final int VISIBLE_CONCURRENCY = 6;
+
+    /** Dispatch tiers, lowest first: user-waited, visible viewport, padded ring, background. */
+    private static final int TIER_URGENT = 0;
+    private static final int TIER_VISIBLE = 1;
+    private static final int TIER_RING = 2;
+    private static final int TIER_BACKGROUND = 3;
+
+    /**
+     * Worker slots peripheral work (ring/background) must leave free. Preloading the padded ring
+     * during a pause would otherwise fill every worker, and the next tile the user pans onto would
+     * queue behind a whole ring of native compositions - the visible gap this exists to prevent.
+     */
+    private static final int VISIBLE_SLOTS_RESERVED = 1;
+
     private volatile CorrectionStore correctionStore;
     private volatile DaylightModel daylightModel;
     private volatile PredictionViewMode viewMode = PredictionViewMode.EVERYWHERE;
@@ -561,6 +575,9 @@ public final class PredictionTileService {
         }
         synchronized (this) {
             mipCache.removeCoverage(tile);
+            // The biome twin reads the same patch, and an exact cache hit would otherwise keep
+            // serving the pixels of the correction this call just replaced.
+            mipCache.removeCoverage(BiomeTileKeys.toBiome(tile));
         }
         return true;
     }
@@ -590,6 +607,8 @@ public final class PredictionTileService {
                     continue;
                 }
                 mipCache.removeCoverage(tile);
+                // Same reason as applyPartialCorrection: the biome twin carries the coverage too.
+                mipCache.removeCoverage(BiomeTileKeys.toBiome(tile));
             }
         }
         return changed;
@@ -605,6 +624,10 @@ public final class PredictionTileService {
             lowerCoverageGeneration++;
             missingLowerCoverage.clear();
             invalidateCachedTileAndAncestors(tile);
+            // The biome twin composes from the same patch, so its cached pixels are stale for the
+            // same reason. Dropping them here is what stops an exact cache hit from resurrecting a
+            // correction the store has already replaced or cleared.
+            invalidateCachedTileAndAncestors(BiomeTileKeys.toBiome(tile));
         }
         markDirty(tile, session.token());
         markBiomeDirtyIfRequested(BiomeTileKeys.toBiome(tile), session.token());
@@ -811,9 +834,15 @@ public final class PredictionTileService {
                         session.world(), rect.dimension(), layer + PredictedTileKeys.SUFFIX,
                         rect.lod(), tileX, tileZ
                     );
-                    if (!dirty.containsKey(key) && !inFlight.contains(key)) {
-                        dirty.put(key, session.token());
+                    // Called every frame: a ring tile that already composed at this LOD and view
+                    // mode has nothing left to prefetch. Without this check the whole ring would be
+                    // recomposed (and re-uploaded) once per frame, which is exactly the kind of
+                    // background load that starves the visible tiles.
+                    if (dirty.containsKey(key) || inFlight.contains(key)
+                        || mipCache.exact(key, viewMode) != null) {
+                        continue;
                     }
+                    dirty.put(key, session.token());
                 }
             }
         }
@@ -1009,6 +1038,7 @@ public final class PredictionTileService {
             final long generation;
             final long netherGeneration;
             final int netherY;
+            final int tier;
             synchronized (this) {
                 final int compositionLimit = viewport == null
                     ? maxConcurrentCompositions
@@ -1020,6 +1050,16 @@ public final class PredictionTileService {
                 if (next == null) {
                     return;
                 }
+                tier = dispatchTier(next);
+                // Ring/background work only ever uses the slots left over after reserving room for
+                // tiles that are about to be on screen. nearestDirty() already refuses to pick a
+                // peripheral tile while a visible one is queued, so stopping here cannot strand
+                // cheaper work. With no published viewport there is no visible consumer at all, and
+                // the pool runs at full width.
+                if (tier >= TIER_RING && viewport != null
+                    && inFlight.size() >= Math.max(1, compositionLimit - VISIBLE_SLOTS_RESERVED)) {
+                    return;
+                }
                 token = dirty.remove(next);
                 generation = reloadGeneration;
                 netherGeneration = netherBiomeGeneration;
@@ -1027,9 +1067,27 @@ public final class PredictionTileService {
                 inFlight.add(next);
             }
             executors.workers().execute(() -> composeAndFinish(
-                next, token, generation, netherGeneration, netherY
+                next, token, generation, netherGeneration, netherY, tier
             ));
         }
+    }
+
+    /**
+     * Tier of one queued tile; caller must hold the monitor. Only the visible viewport earns
+     * worker slots ahead of everything else - the ring and background tiers are prefetch.
+     */
+    private int dispatchTier(final TileKey key) {
+        if (urgent.contains(key)) {
+            return TIER_URGENT;
+        }
+        final ViewportRect activeViewport = viewport;
+        if (activeViewport == null) {
+            return TIER_BACKGROUND;
+        }
+        if (activeViewport.contains(key)) {
+            return TIER_VISIBLE;
+        }
+        return activeViewport.containsPadded(key) ? TIER_RING : TIER_BACKGROUND;
     }
 
     /**
@@ -1051,10 +1109,7 @@ public final class PredictionTileService {
             if (inFlight.contains(key)) {
                 continue;
             }
-            // 0 = user-waited (menu target), 1 = visible viewport, 2 = padded ring, 3 = background.
-            final int tier = urgent.contains(key) ? 0
-                : activeViewport != null && activeViewport.contains(key) ? 1
-                : activeViewport != null && activeViewport.containsPadded(key) ? 2 : 3;
+            final int tier = dispatchTier(key);
             if (tier > bestTier) {
                 continue;
             }
@@ -1100,7 +1155,8 @@ public final class PredictionTileService {
         final long token,
         final long generation,
         final long netherGeneration,
-        final int netherY
+        final int netherY,
+        final int tier
     ) {
         Composition composition = null;
         try {
@@ -1131,7 +1187,14 @@ public final class PredictionTileService {
                     staleViewModeTiles.remove(key);
                     staleRealCoverageTiles.remove(key);
                     invalidateCachedAncestorsAndQueueVisible(key, token);
-                    uploads.submitUpload(composition.update());
+                    // Prefetched tiles never take an upload slot from a tile the user is looking
+                    // at: the render thread only has a handful per frame, and a finished ring tile
+                    // can wait a frame for its texture without anyone seeing a gap.
+                    if (tier >= TIER_RING) {
+                        uploads.submitDeferredUpload(composition.update());
+                    } else {
+                        uploads.submitUpload(composition.update());
+                    }
                 }
                 inFlight.remove(key);
                 urgent.remove(key);
@@ -1189,7 +1252,13 @@ public final class PredictionTileService {
             ? PredictionViewMode.EVERYWHERE
             : requestedMode;
 
-        final PredictionMipCache.Tile lower = mipCache.lowerTile(key, compositionMode);
+        // Two cache planes are checked in cost order: this tile's own last composition (identical
+        // pixels, nothing to aggregate) and then the four children aggregated to this LOD. Both
+        // let the tile skip native sampling, canopy styling and colouring entirely, which is what
+        // keeps a re-requested (re-evicted texture, view-mode re-entry, LOD return) tile cheap.
+        final PredictionMipCache.Tile exact = mipCache.exact(key, compositionMode);
+        final PredictionMipCache.Tile lower = exact != null
+            ? null : mipCache.lowerTile(key, compositionMode);
         final CorrectionStore store = lowerNetherBiome || state.manualSeed()
             ? null : correctionStore;
         final CorrectionTile storedCorrections = store == null
@@ -1204,36 +1273,35 @@ public final class PredictionTileService {
             ? 0L
             : directCorrections.reusableValidatedAtMillis();
         final long nowMillis = millisClock.getAsLong();
-        final boolean lowerFresh = lower != null
-            && lower.isVisuallyReusableAt(nowMillis, CORRECTION_REUSE_TTL_MS);
-        if (lowerFresh && (!directHasServerState
-            || directValidatedAt == 0L
-            || lower.freshnessValidatedAtMillis() >= directValidatedAt)) {
+        final PredictionMipCache.Tile reusable = reusableCacheTile(
+            exact, lower, nowMillis, directHasServerState, directValidatedAt
+        );
+        if (reusable != null) {
             final Composition composition = new Composition(
                 tileUpdate(
                     key,
-                    lower.pixels(),
-                    lower.blockLight(),
-                    lower.composedDaylight(),
-                    lower.composedGamma(),
+                    reusable.pixels(),
+                    reusable.blockLight(),
+                    reusable.composedDaylight(),
+                    reusable.composedGamma(),
                     mapColorStyle
                 ),
-                new TileMetadata(lower.biomes(), lower.surfaces()),
-                lower.syncEvaluated(),
-                lower.syncSourceRevisions(),
-                lower.blockLight(),
-                lower.composedDaylight(),
-                lower.composedGamma(),
-                lower.mode(),
-                lower.hasServerState(),
-                lower.freshnessValidatedAtMillis(),
-                lower.serverCoverageValidatedAtMillis(),
-                lower.correctionProfile()
+                new TileMetadata(reusable.biomes(), reusable.surfaces()),
+                reusable.syncEvaluated(),
+                reusable.syncSourceRevisions(),
+                reusable.blockLight(),
+                reusable.composedDaylight(),
+                reusable.composedGamma(),
+                reusable.mode(),
+                reusable.hasServerState(),
+                reusable.freshnessValidatedAtMillis(),
+                reusable.serverCoverageValidatedAtMillis(),
+                reusable.correctionProfile()
             );
             uploads.maskPredictedPixels(
                 realKey(key), composition.update().argbPixels(),
-                lower.syncEvaluated(), lower.syncSourceRevisions(),
-                lower.correctionProfile()
+                reusable.syncEvaluated(), reusable.syncSourceRevisions(),
+                reusable.correctionProfile()
             );
             return composition;
         }
@@ -1381,6 +1449,39 @@ public final class PredictionTileService {
             directCorrections == null
                 ? CorrectionProfile.LEGACY_V1 : directCorrections.correctionProfile()
         );
+    }
+
+    /**
+     * Picks the cheapest cache source that is still allowed to stand in for a fresh composition,
+     * preferring the tile's own previous result over an aggregated parent. A hit must be inside the
+     * correction reuse window and must not be older than the committed server state already waiting
+     * for this tile - otherwise the cached (possibly predicted-only) pixels would outrank newer
+     * authoritative data on screen.
+     */
+    private static PredictionMipCache.Tile reusableCacheTile(
+        final PredictionMipCache.Tile exact,
+        final PredictionMipCache.Tile lower,
+        final long nowMillis,
+        final boolean directHasServerState,
+        final long directValidatedAt
+    ) {
+        if (isReusable(exact, nowMillis, directHasServerState, directValidatedAt)) {
+            return exact;
+        }
+        return isReusable(lower, nowMillis, directHasServerState, directValidatedAt) ? lower : null;
+    }
+
+    private static boolean isReusable(
+        final PredictionMipCache.Tile tile,
+        final long nowMillis,
+        final boolean directHasServerState,
+        final long directValidatedAt
+    ) {
+        return tile != null
+            && tile.isVisuallyReusableAt(nowMillis, CORRECTION_REUSE_TTL_MS)
+            && (!directHasServerState
+                || directValidatedAt == 0L
+                || tile.freshnessValidatedAtMillis() >= directValidatedAt);
     }
 
     private static TileKey realKey(final TileKey predictedKey) {
@@ -1770,6 +1871,11 @@ public final class PredictionTileService {
     /** Test-support only: a snapshot of currently-queued (not yet in-flight) predicted tile keys. */
     public synchronized Set<TileKey> pendingKeysForTest() {
         return new HashSet<>(dirty.keySet());
+    }
+
+    /** Test-support only: the keys currently occupying a worker slot. */
+    public synchronized Set<TileKey> inFlightKeysForTest() {
+        return new HashSet<>(inFlight);
     }
 
     /** Test-support only: whether every queued/in-flight tile has drained. */

@@ -280,6 +280,25 @@ public final class TileTextureManager {
             }
             return false;
         }
+        bindEntry(entry);
+        return true;
+    }
+
+    /**
+     * Binds only a texture that is already uploaded, without queueing a composition for a missing
+     * one. The predicted underlay uses this for its parent-LOD fallback: asking for every parent of
+     * every unseen tile would flood the composer with coarser work nobody asked to see.
+     */
+    public boolean bindIfResident(final TileKey key) {
+        final TileTexture entry = textures.get(key);
+        if (entry == null) {
+            return false;
+        }
+        bindEntry(entry);
+        return true;
+    }
+
+    private static void bindEntry(final TileTexture entry) {
         //#if MC>=12108
         //$$ RenderUtil.bindTexture(entry.texture.getGlTextureView());
         //#elseif MC>=12105
@@ -287,7 +306,6 @@ public final class TileTextureManager {
         //#else
         RenderUtil.bindTexture(entry.texture.getGlId());
         //#endif
-        return true;
     }
 
     /** Render thread, session end: drop every cached tile texture. */
