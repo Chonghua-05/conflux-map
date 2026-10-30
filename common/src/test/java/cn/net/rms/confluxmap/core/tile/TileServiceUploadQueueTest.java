@@ -161,51 +161,6 @@ class TileServiceUploadQueueTest {
         }
     }
 
-    @Test
-    void prefetchedUploadsWaitBehindEveryForegroundUpload() {
-        final Fixture fixture = new Fixture();
-        try {
-            final TileKey ring = PredictedTileKeys.toPredicted(fixture.key(0, 40, 40));
-            final TileKey visible = PredictedTileKeys.toPredicted(fixture.key(0, 0, 0));
-            // The ring composition finished first, but the render thread only has a few upload
-            // slots per frame and the tile on screen must not wait a frame for it.
-            fixture.tiles.submitDeferredUpload(TileUpdate.fullTile(ring, blankTile()));
-            fixture.tiles.submitUpload(TileUpdate.fullTile(visible, blankTile()));
-
-            final List<TileKey> drained = fixture.tiles.drainUploads(1).stream()
-                .map(TileUpdate::key)
-                .toList();
-
-            assertEquals(List.of(visible), drained, "a prefetched tile must never take the slot");
-            assertEquals(
-                List.of(ring),
-                fixture.tiles.drainUploads(4).stream().map(TileUpdate::key).toList(),
-                "the prefetched tile is still uploaded once nothing foreground is waiting"
-            );
-        } finally {
-            fixture.close();
-        }
-    }
-
-    @Test
-    void sessionChangeDropsPrefetchedUploads() {
-        final Fixture fixture = new Fixture();
-        try {
-            fixture.tiles.submitDeferredUpload(TileUpdate.fullTile(
-                PredictedTileKeys.toPredicted(fixture.key(0, 40, 40)), blankTile()
-            ));
-
-            fixture.tiles.onSessionChanged(fixture.session);
-
-            assertTrue(
-                fixture.tiles.drainUploads(8).isEmpty(),
-                "an upload from the previous session must never reach the new one's textures"
-            );
-        } finally {
-            fixture.close();
-        }
-    }
-
     private static int[] blankTile() {
         return new int[RegionColumns.SIZE * RegionColumns.SIZE];
     }

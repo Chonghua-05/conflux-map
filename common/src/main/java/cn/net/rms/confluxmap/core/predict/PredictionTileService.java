@@ -80,13 +80,6 @@ public final class PredictionTileService {
     private static final int TIER_RING = 2;
     private static final int TIER_BACKGROUND = 3;
 
-    /**
-     * Worker slots peripheral work (ring/background) must leave free. Preloading the padded ring
-     * during a pause would otherwise fill every worker, and the next tile the user pans onto would
-     * queue behind a whole ring of native compositions - the visible gap this exists to prevent.
-     */
-    private static final int VISIBLE_SLOTS_RESERVED = 1;
-
     private volatile CorrectionStore correctionStore;
     private volatile DaylightModel daylightModel;
     private volatile PredictionViewMode viewMode = PredictionViewMode.EVERYWHERE;
@@ -1038,7 +1031,6 @@ public final class PredictionTileService {
             final long generation;
             final long netherGeneration;
             final int netherY;
-            final int tier;
             synchronized (this) {
                 final int compositionLimit = viewport == null
                     ? maxConcurrentCompositions
@@ -1050,16 +1042,6 @@ public final class PredictionTileService {
                 if (next == null) {
                     return;
                 }
-                tier = dispatchTier(next);
-                // Ring/background work only ever uses the slots left over after reserving room for
-                // tiles that are about to be on screen. nearestDirty() already refuses to pick a
-                // peripheral tile while a visible one is queued, so stopping here cannot strand
-                // cheaper work. With no published viewport there is no visible consumer at all, and
-                // the pool runs at full width.
-                if (tier >= TIER_RING && viewport != null
-                    && inFlight.size() >= Math.max(1, compositionLimit - VISIBLE_SLOTS_RESERVED)) {
-                    return;
-                }
                 token = dirty.remove(next);
                 generation = reloadGeneration;
                 netherGeneration = netherBiomeGeneration;
@@ -1067,7 +1049,7 @@ public final class PredictionTileService {
                 inFlight.add(next);
             }
             executors.workers().execute(() -> composeAndFinish(
-                next, token, generation, netherGeneration, netherY, tier
+                next, token, generation, netherGeneration, netherY
             ));
         }
     }
@@ -1155,8 +1137,7 @@ public final class PredictionTileService {
         final long token,
         final long generation,
         final long netherGeneration,
-        final int netherY,
-        final int tier
+        final int netherY
     ) {
         Composition composition = null;
         try {
@@ -1187,14 +1168,7 @@ public final class PredictionTileService {
                     staleViewModeTiles.remove(key);
                     staleRealCoverageTiles.remove(key);
                     invalidateCachedAncestorsAndQueueVisible(key, token);
-                    // Prefetched tiles never take an upload slot from a tile the user is looking
-                    // at: the render thread only has a handful per frame, and a finished ring tile
-                    // can wait a frame for its texture without anyone seeing a gap.
-                    if (tier >= TIER_RING) {
-                        uploads.submitDeferredUpload(composition.update());
-                    } else {
-                        uploads.submitUpload(composition.update());
-                    }
+                    uploads.submitUpload(composition.update());
                 }
                 inFlight.remove(key);
                 urgent.remove(key);

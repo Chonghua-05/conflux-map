@@ -1781,59 +1781,6 @@ class PredictionTileServiceTest {
         }
     }
 
-    /**
-     * A ring preload must never occupy the last worker slot: the next tile the user pans onto has
-     * to start composing immediately instead of queueing behind a whole ring of native work.
-     */
-    @Test
-    void paddedRingPrefetchLeavesAWorkerSlotForTheVisibleViewport() throws InterruptedException {
-        final SessionGuard sessionGuard = new SessionGuard();
-        final MapExecutors executors = new MapExecutors();
-        final TileService uploads = new TileService(
-            new MapWorldService(), executors, new ConfluxConfig(), new DaylightModel()
-        );
-        final PredictionState state = new PredictionState();
-        state.setPresets(WorldPreset.FLAT, WorldPreset.DEFAULT);
-        state.setFlatBaseline(new FlatBaseline(1, 63, SurfaceKind.LAND.ordinal(), 11, 0));
-        final PredictionTileService predictionTiles = newService(sessionGuard, state, executors, uploads);
-        sessionGuard.begin(WORLD, DIM);
-
-        final int cap = executors.workerCount();
-        Assumptions.assumeTrue(cap >= 2, "one worker cannot both prefetch and serve a pan");
-        final CountDownLatch release = new CountDownLatch(1);
-        for (int i = 0; i < cap; i++) {
-            executors.workers().execute(() -> {
-                try {
-                    release.await();
-                } catch (final InterruptedException ignored) {
-                    Thread.currentThread().interrupt();
-                }
-            });
-        }
-        Thread.sleep(50);
-
-        try {
-            // A 1x1 viewport keeps every ring tile outside the visible rect, so the whole batch is
-            // pure prefetch and must stop one slot short of the pool.
-            predictionTiles.setViewport(DIM, 0, 5, 5, 5, 5);
-            predictionTiles.preloadViewportPaddedRing();
-            assertTrue(
-                predictionTiles.inFlightKeysForTest().size() <= cap - 1,
-                "padded-ring prefetch must reserve a worker slot"
-            );
-
-            final TileKey visible = new TileKey(WORLD, DIM, "surface!pred", 0, 5, 5);
-            predictionTiles.requestTile(visible);
-            assertTrue(
-                predictionTiles.inFlightKeysForTest().contains(visible),
-                "the visible tile must take the reserved slot while prefetch is still running"
-            );
-        } finally {
-            release.countDown();
-            executors.shutdown(2000);
-        }
-    }
-
     private static TileUpdate latestUpdate(final TileService uploads, final TileKey key) {
         return uploads.drainUploads(64).stream()
             .filter(update -> update.key().equals(key))
