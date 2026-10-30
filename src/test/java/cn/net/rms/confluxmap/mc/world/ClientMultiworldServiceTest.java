@@ -158,6 +158,22 @@ class ClientMultiworldServiceTest {
     }
 
     @Test
+    void resolveWhileCompanionActiveReturnsNoClientIdentity() {
+        final CompanionSession companion = new CompanionSession();
+        final ClientWorldProfileRegistry registry = new ClientWorldProfileRegistry();
+        final ClientMultiworldService service = service(
+            new ClientWorldProfileResolver(registry, ids()), companion
+        );
+
+        companion.onHelloSent();
+        companion.onPolicy(policy("11111111-2222-3333-4444-555555555555"));
+        service.onGameJoin(11L);
+
+        assertTrue(service.resolve(ADDRESS).isEmpty());
+        assertTrue(service.profiles().isEmpty());
+    }
+
+    @Test
     void companionWorldsAlwaysIncludeTheWorldTheCompanionIsServing() {
         final CompanionSession companion = new CompanionSession();
         final ClientMultiworldService service = service(
@@ -165,7 +181,7 @@ class ClientMultiworldServiceTest {
             companion
         );
         service.onGameJoin(11L);
-        service.resolve(ADDRESS).orElseThrow();
+        service.observeAddress(ADDRESS);
         assertEquals(List.of(), service.companionWorlds());
 
         companion.onHelloSent();
@@ -197,7 +213,7 @@ class ClientMultiworldServiceTest {
         companion.onPolicy(policy(firstWorld));
         aliases.resolve(host, null, firstWorld);
         service.onGameJoin(11L);
-        service.resolve(host).orElseThrow();
+        service.observeAddress(host);
 
         companion.onPolicy(policy(secondWorld));
         aliases.resolve(host, null, secondWorld);
