@@ -91,7 +91,9 @@ class PredictionMipCacheTest {
         assertEquals(PredictionMipCache.MISSING, aggregate.syncSourceRevisions()[1]);
     }
 
-    /** Void columns stay \"known, no surface\" through the mip aggregate instead of averaging. */
+    /**
+     * Void columns stay "known, no surface" through the mip aggregate instead of averaging.
+     */
     @Test
     void voidSurfacesStayVoidThroughAggregation() {
         final PredictionMipCache.Tile voidChild = surfacedTile(BaselineGrid.NO_SURFACE_SHORT);
@@ -104,6 +106,46 @@ class PredictionMipCacheTest {
         assertEquals(BaselineGrid.NO_SURFACE_SHORT, aggregate.surfaces()[0],
             "four void samples must aggregate back to the void sentinel, not to Y=0");
         assertEquals((short) 80, aggregate.surfaces()[128]);
+    }
+
+    /**
+     * The int-domain aggregate skipped void samples inside a 2x2 block; the packed form must do
+     * the same, otherwise one void sample drags a real column far below the world.
+     */
+    @Test
+    void mixedVoidAndLandSamplesAverageOnlyTheLandPixels() {
+        final short[][] quad = {
+            {BaselineGrid.NO_SURFACE_SHORT, (short) 80, (short) 80, (short) 80},
+            {(short) 80, (short) 80, (short) 80, (short) 80},
+            {(short) 80, (short) 80, (short) 80, (short) 80},
+            {(short) 80, (short) 80, (short) 80, (short) 80}
+        };
+        final PredictionMipCache.Tile[] children = new PredictionMipCache.Tile[4];
+        for (int i = 0; i < 4; i++) {
+            children[i] = tiledQuadrant(quad[i]);
+        }
+
+        final PredictionMipCache.Tile aggregate = PredictionMipCache.aggregate(
+            children, PredictionViewMode.EVERYWHERE
+        );
+
+        assertEquals((short) 80, aggregate.surfaces()[0],
+            "a single void sample in the 2x2 block must not drag the average down");
+    }
+
+    private static PredictionMipCache.Tile tiledQuadrant(final short[] quadrant) {
+        final short[] surfaces = new short[PIXELS];
+        java.util.Arrays.fill(surfaces, (short) 80);
+        final int[] pixels = {0, 1, 256, 257};
+        for (int i = 0; i < 4; i++) {
+            surfaces[pixels[i]] = quadrant[i];
+        }
+        return new PredictionMipCache.Tile(
+            new int[PIXELS], new byte[PIXELS], surfaces,
+            new byte[PatchCodec.MASK_BYTES], null, new byte[PIXELS],
+            1.0F, 0F, PredictionViewMode.EVERYWHERE, false, 0L, 0L,
+            CorrectionProfile.LEGACY_V1
+        );
     }
 
     private static boolean isEvaluated(final byte[] evaluated, final int pixel) {
