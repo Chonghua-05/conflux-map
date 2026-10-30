@@ -1146,6 +1146,115 @@ class PredictionTileServiceTest {
     }
 
     @Test
+    void mapQualityUpdatesPredictionCacheLimit() {
+        final SessionGuard sessionGuard = new SessionGuard();
+        final MapExecutors executors = new MapExecutors();
+        final TileService uploads = new TileService(new MapWorldService(), executors, new ConfluxConfig(), new DaylightModel());
+        final PredictionTileService predictionTiles = newService(sessionGuard, executors, uploads);
+
+        assertEquals(64, predictionTiles.cacheLimitForTest());
+        predictionTiles.setMapQuality(ConfluxConfig.MapQuality.BALANCED);
+        assertEquals(256, predictionTiles.cacheLimitForTest());
+        predictionTiles.setMapQuality(ConfluxConfig.MapQuality.ULTRA_QUALITY);
+        assertEquals(1024, predictionTiles.cacheLimitForTest());
+    }
+
+    @Test
+    void viewportChangePreloadsPaddedRingAroundViewport() throws InterruptedException {
+        final SessionGuard sessionGuard = new SessionGuard();
+        final MapExecutors executors = new MapExecutors();
+        final TileService uploads = new TileService(new MapWorldService(), executors, new ConfluxConfig(), new DaylightModel());
+        final PredictionTileService predictionTiles = newService(sessionGuard, executors, uploads);
+        sessionGuard.begin(WORLD, DIM);
+
+        final int cap = executors.workerCount();
+        final CountDownLatch release = new CountDownLatch(1);
+        for (int i = 0; i < cap; i++) {
+            executors.workers().execute(() -> {
+                try {
+                    release.await();
+                } catch (final InterruptedException ignored) {
+                    Thread.currentThread().interrupt();
+                }
+            });
+        }
+        Thread.sleep(50);
+
+        try {
+            predictionTiles.setViewport(DIM, 0, 5, 5, 5, 5);
+            final Set<TileKey> pending = predictionTiles.queuedOrInFlightKeysForTest();
+            // A 1x1 viewport (5, 5) has a 1-padded 3x3 ring with 8 outer ring tiles:
+            // (4..6, 4..6) excluding (5, 5)
+            for (int z = 4; z <= 6; z++) {
+                for (int x = 4; x <= 6; x++) {
+                    if (x == 5 && z == 5) {
+                        continue;
+                    }
+                    final TileKey ringKey = new TileKey(WORLD, DIM, "surface!pred", 0, x, z);
+                    assertTrue(pending.contains(ringKey), "outer ring tile " + ringKey + " should be queued or in-flight");
+                }
+            }
+        } finally {
+            release.countDown();
+            executors.shutdown(2000);
+        }
+    }
+
+    @Test
+    void visibleViewportTilesComposeAheadOfPaddedRingTiles(@TempDir final Path tempDir) throws InterruptedException {
+        final SessionGuard sessionGuard = new SessionGuard();
+        final MapExecutors executors = new MapExecutors();
+        final TileService uploads = new TileService(new MapWorldService(), executors, new ConfluxConfig(), new DaylightModel());
+        final PredictionState state = new PredictionState();
+        state.setPresets(WorldPreset.FLAT, WorldPreset.DEFAULT);
+        state.setFlatBaseline(new FlatBaseline(1, 63, SurfaceKind.LAND.ordinal(), 11, 0));
+        final PredictionTileService predictionTiles = newService(sessionGuard, state, executors, uploads);
+        predictionTiles.bindCorrectionStore(new CorrectionStore(tempDir));
+        sessionGuard.begin(WORLD, DIM);
+
+        final int cap = executors.workerCount();
+        final CountDownLatch[] releaseWorkers = new CountDownLatch[cap];
+        for (int i = 0; i < cap; i++) {
+            releaseWorkers[i] = new CountDownLatch(1);
+            final CountDownLatch mine = releaseWorkers[i];
+            executors.workers().execute(() -> {
+                try {
+                    mine.await();
+                } catch (final InterruptedException ignored) {
+                    Thread.currentThread().interrupt();
+                }
+            });
+        }
+        Thread.sleep(50);
+
+        try {
+            for (int i = 0; i < cap; i++) {
+                predictionTiles.requestTile(new TileKey(WORLD, DIM, "surface!pred", 0, 100 + i, 100));
+            }
+            // 1x1 viewport at (5, 5). Ring tile is at (6, 5).
+            predictionTiles.setViewport(DIM, 0, 5, 5, 5, 5);
+            final TileKey visible = new TileKey(WORLD, DIM, "surface!pred", 0, 5, 5);
+            final TileKey ring = new TileKey(WORLD, DIM, "surface!pred", 0, 6, 5);
+            predictionTiles.requestTile(visible);
+
+            releaseWorkers[0].countDown();
+            awaitIdle(predictionTiles, 10_000L);
+            final List<TileKey> order = uploads.drainUploads(64).stream()
+                .map(TileUpdate::key)
+                .toList();
+            final int visibleAt = order.indexOf(visible);
+            final int ringAt = order.indexOf(ring);
+            assertTrue(visibleAt >= 0 && ringAt >= 0, "both visible and ring tiles must compose");
+            assertTrue(visibleAt < ringAt, "visible viewport tile must compose before padded ring tile");
+        } finally {
+            for (final CountDownLatch releaseWorker : releaseWorkers) {
+                releaseWorker.countDown();
+            }
+            executors.shutdown(2000);
+        }
+    }
+
+    @Test
     void reloadRequeuesInFlightTilesWithoutSchedulingDuplicates() throws InterruptedException {
         final SessionGuard sessionGuard = new SessionGuard();
         final MapExecutors executors = new MapExecutors();

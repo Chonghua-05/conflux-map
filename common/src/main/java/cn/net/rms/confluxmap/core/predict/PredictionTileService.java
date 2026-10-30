@@ -1730,6 +1730,12 @@ public final class PredictionTileService {
         return surfaces;
     }
 
+    public synchronized Set<TileKey> queuedOrInFlightKeysForTest() {
+        final Set<TileKey> keys = new HashSet<>(dirty.keySet());
+        keys.addAll(inFlight);
+        return keys;
+    }
+
     /** Test-support only: a snapshot of currently-queued (not yet in-flight) predicted tile keys. */
     public synchronized Set<TileKey> pendingKeysForTest() {
         return new HashSet<>(dirty.keySet());
