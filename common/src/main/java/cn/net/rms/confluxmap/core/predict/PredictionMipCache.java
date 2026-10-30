@@ -43,7 +43,6 @@ final class PredictionMipCache {
             }
         }
 
-
         boolean isVisuallyReusableAt(final long nowMillis, final long ttlMillis) {
             return !hasServerState || isFresh(freshnessValidatedAtMillis, nowMillis, ttlMillis);
         }
@@ -70,10 +69,7 @@ final class PredictionMipCache {
     }
 
     synchronized void setLimit(final int newLimit) {
-        if (newLimit <= 0) {
-            throw new IllegalArgumentException("prediction mip cache limit must be positive");
-        }
-        this.limit = newLimit;
+        this.limit = Math.max(1, newLimit);
         trim();
     }
 
@@ -291,7 +287,6 @@ final class PredictionMipCache {
         final long[] revisions = tile.syncSourceRevisions();
         return revisions == null ? Long.MIN_VALUE : revisions[pixel];
     }
-
 
     private static long maxKnown(final long a, final long b, final long c, final long d) {
         long result = Long.MIN_VALUE;

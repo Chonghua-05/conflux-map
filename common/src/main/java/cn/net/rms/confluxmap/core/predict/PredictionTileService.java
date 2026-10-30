@@ -805,6 +805,14 @@ public final class PredictionTileService {
      * Safe to call after visible tiles are bound/requested.
      */
     public void preloadViewportPaddedRing() {
+        preloadViewportPaddedRing(null);
+    }
+
+    /**
+     * Schedules low-priority preloading for the 1-tile outer ring around the current visible viewport,
+     * targeting the specified layer namespace (or the dimension's default predicted layer when null).
+     */
+    public void preloadViewportPaddedRing(final String targetLayerId) {
         final SessionGuard.Session session = sessionGuard.current();
         final ViewportRect rect;
         synchronized (this) {
@@ -813,18 +821,26 @@ public final class PredictionTileService {
                 || !state.predictable(rect.dimension())) {
                 return;
             }
-            final MapLayer predictedLayer = PredictionDimensions.layer(rect.dimension());
-            if (predictedLayer == null) {
-                return;
+            final String layer;
+            if (targetLayerId != null && !targetLayerId.isEmpty()) {
+                layer = targetLayerId;
+            } else {
+                final MapLayer predictedLayer = PredictionDimensions.layer(rect.dimension());
+                if (predictedLayer == null) {
+                    return;
+                }
+                layer = predictedLayer.cacheId();
             }
-            final String layer = predictedLayer.cacheId();
+            final String predictedLayerId = layer.endsWith(PredictedTileKeys.SUFFIX)
+                ? layer
+                : layer + PredictedTileKeys.SUFFIX;
             for (int tileZ = rect.minTileZ() - 1; tileZ <= rect.maxTileZ() + 1; tileZ++) {
                 for (int tileX = rect.minTileX() - 1; tileX <= rect.maxTileX() + 1; tileX++) {
                     if (rect.contains(tileX, tileZ)) {
                         continue;
                     }
                     final TileKey key = new TileKey(
-                        session.world(), rect.dimension(), layer + PredictedTileKeys.SUFFIX,
+                        session.world(), rect.dimension(), predictedLayerId,
                         rect.lod(), tileX, tileZ
                     );
                     // Called every frame: a ring tile that already composed at this LOD and view
@@ -1845,11 +1861,6 @@ public final class PredictionTileService {
     /** Test-support only: a snapshot of currently-queued (not yet in-flight) predicted tile keys. */
     public synchronized Set<TileKey> pendingKeysForTest() {
         return new HashSet<>(dirty.keySet());
-    }
-
-    /** Test-support only: the keys currently occupying a worker slot. */
-    public synchronized Set<TileKey> inFlightKeysForTest() {
-        return new HashSet<>(inFlight);
     }
 
     /** Test-support only: whether every queued/in-flight tile has drained. */

@@ -1997,7 +1997,7 @@ public final class FullscreenMapScreen extends ConfluxScreen {
         if (preloadPaddedRing) {
             // Only now: every visible predicted tile above has been bound, so every one of them is
             // already queued/in flight ahead of the ring.
-            predictionTiles.preloadViewportPaddedRing();
+            predictionTiles.preloadViewportPaddedRing(biomeMode ? layerId + "!biome" : layerId);
         }
     }
 

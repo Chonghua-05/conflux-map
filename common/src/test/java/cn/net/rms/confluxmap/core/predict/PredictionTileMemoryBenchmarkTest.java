@@ -1,7 +1,7 @@
 package cn.net.rms.confluxmap.core.predict;
 
-import cn.net.rms.confluxmap.core.net.CorrectionProfile;
 import cn.net.rms.confluxmap.core.net.PatchCodec;
+import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
 
 import java.io.IOException;
@@ -11,9 +11,12 @@ import java.nio.file.Paths;
 import java.util.ArrayList;
 import java.util.List;
 
+import static org.junit.jupiter.api.Assertions.assertTrue;
+
+@Tag("benchmark")
 public class PredictionTileMemoryBenchmarkTest {
 
-    // 模拟原版 Tile（优化前）：包含 512KB 的 long[65536] 和 256KB 的 int[65536]
+    // Legacy unoptimized tile layout: holds long[65536] (512 KiB) and int[65536] (256 KiB)
     record OldTile(
         int[] pixels,
         byte[] biomes,
@@ -23,7 +26,7 @@ public class PredictionTileMemoryBenchmarkTest {
         byte[] blockLight
     ) {}
 
-    // 改版后 Tile（优化后）：syncSourceRevisions 为 null，surfaces 为 short[65536]
+    // Optimized tile layout: syncSourceRevisions is null, surfaces is short[65536] (128 KiB)
     record NewTile(
         int[] pixels,
         byte[] biomes,
@@ -54,7 +57,7 @@ public class PredictionTileMemoryBenchmarkTest {
             new byte[expected],
             new short[expected],
             new byte[PatchCodec.MASK_BYTES],
-            null, // 无修正状态下为 null
+            null,
             new byte[expected]
         );
     }
@@ -80,24 +83,26 @@ public class PredictionTileMemoryBenchmarkTest {
     void runMemoryComparison() throws IOException {
         final int[] limits = {32, 64, 128};
         final StringBuilder sb = new StringBuilder();
-        sb.append("=== 预测地图瓦片内存占用实测对比报告 ===\n\n");
+        sb.append("=== Prediction Tile Memory Benchmark Report ===\n\n");
 
         final int pixels = 65536;
         final long oldArraysBytes = (long) pixels * 4 + pixels + (long) pixels * 4 + 8192 + (long) pixels * 8 + pixels;
         final long newArraysBytes = (long) pixels * 4 + pixels + (long) pixels * 2 + 8192 + 0 + pixels;
+        final double theoreticalSavings = 100.0 * (oldArraysBytes - newArraysBytes) / oldArraysBytes;
 
-        sb.append(String.format("单瓦片底层数组精确大小: 原版 %d 字节 (%.2f MB) -> 改版后 %d 字节 (%.2f MB), 降幅: %.1f%%\n\n",
+        sb.append(String.format("Single tile array footprint: old %d bytes (%.2f MB) -> new %d bytes (%.2f MB), reduction: %.1f%%\n\n",
             oldArraysBytes, oldArraysBytes / (1024.0 * 1024.0),
             newArraysBytes, newArraysBytes / (1024.0 * 1024.0),
-            100.0 * (oldArraysBytes - newArraysBytes) / oldArraysBytes
+            theoreticalSavings
         ));
 
+        assertTrue(theoreticalSavings >= 50.0, "Optimized arrays must reduce memory by at least 50%");
+
         sb.append(String.format("%-8s | %-16s | %-16s | %-12s | %-10s\n",
-            "缓存档位", "原版实际占用(JVM)", "改版实际占用(JVM)", "净省内存(RAM)", "实际压缩比例"));
+            "Limit", "Old JVM Heap", "New JVM Heap", "Saved RAM", "Reduction"));
         sb.append("--------------------------------------------------------------------------------\n");
 
         for (final int limit : limits) {
-            // 测量旧版对象列表真实占用
             final List<OldTile> oldList = new ArrayList<>(limit);
             final long oldHeap = measureHeap(() -> {
                 for (int i = 0; i < limit; i++) {
@@ -105,7 +110,6 @@ public class PredictionTileMemoryBenchmarkTest {
                 }
             });
 
-            // 测量新版对象列表真实占用
             final List<NewTile> newList = new ArrayList<>(limit);
             final long newHeap = measureHeap(() -> {
                 for (int i = 0; i < limit; i++) {
@@ -118,24 +122,15 @@ public class PredictionTileMemoryBenchmarkTest {
             final double savedMb = oldMb - newMb;
             final double reduction = 100.0 * savedMb / oldMb;
 
-            sb.append(String.format("%-8d | %6.1f MB (%6d KB) | %6.1f MB (%6d KB) | -%5.1f MB     | 减少 %4.1f%%\n",
+            sb.append(String.format("%-8d | %6.1f MB (%6d KB) | %6.1f MB (%6d KB) | -%5.1f MB     | -%4.1f%%\n",
                 limit, oldMb, oldHeap / 1024, newMb, newHeap / 1024, savedMb, reduction));
-            
+
             oldList.clear();
             newList.clear();
         }
 
-        // 推导 256 与 512 档位的真实内存数据
-        final double perOldMb = oldArraysBytes / (1024.0 * 1024.0);
-        final double perNewMb = newArraysBytes / (1024.0 * 1024.0);
-        sb.append(String.format("%-8s | %6.1f MB            | %6.1f MB            | -%5.1f MB     | 减少 %4.1f%%\n",
-            "256档", 256 * perOldMb, 256 * perNewMb, 256 * (perOldMb - perNewMb), 100.0 * (perOldMb - perNewMb) / perOldMb));
-        sb.append(String.format("%-8s | %6.1f MB            | %6.1f MB            | -%5.1f MB     | 减少 %4.1f%%\n",
-            "512档", 512 * perOldMb, 512 * perNewMb, 512 * (perOldMb - perNewMb), 100.0 * (perOldMb - perNewMb) / perOldMb));
-
         final Path reportFile = Paths.get("build", "memory-comparison-report.txt");
         Files.createDirectories(reportFile.getParent());
         Files.writeString(reportFile, sb.toString());
-        System.out.println(sb.toString());
     }
 }
