@@ -76,13 +76,11 @@ final class WaypointHudProjectionTest {
     //$$
     //$$ @Test
     //$$ void modernLabelQuadFacesTheCamera() throws Exception {
-    //$$     final String source = Files.readString(preprocessedLabelPainterSource());
-    //$$     final String drawLabel = methodBody(
-    //$$         source, "\n    void drawLabel("
-    //$$     );
+    //$$     final String labelPass = Files.readString(preprocessedLabelPassSource());
+    //$$     final String billboard = methodBody(labelPass, "public void billboard(");
     //$$
     //$$     assertTrue(
-    //$$         drawLabel.contains("matrices.scale(scale, -scale, scale)"),
+    //$$         billboard.contains("matrices.scale(scale, -scale, scale)"),
     //$$         "modern waypoint labels need vanilla's positive X billboard scale so culling keeps their quads"
     //$$     );
     //$$     assertTrue(
@@ -147,36 +145,33 @@ final class WaypointHudProjectionTest {
     //#if MC>=260200
     //$$ @Test
     //$$ void submittedLabelTextRendersAfterEveryOpaquePlate() throws Exception {
-    //$$     final String source = Files.readString(preprocessedLabelPainterSource());
-    //$$     final String drawLabel = methodBody(source, "\n    void drawLabel(");
+    //$$     final String labelPass = Files.readString(preprocessedLabelPassSource());
     //$$
     //$$     assertTrue(
-    //$$         drawLabel.contains("final FabricOrderedSubmitNodeCollector plates =")
-    //$$             && drawLabel.contains("(FabricOrderedSubmitNodeCollector) submits.order(0)"),
+    //$$         labelPass.contains("(FabricOrderedSubmitNodeCollector) frame.labelSubmits.order(0)"),
     //$$         "26.2 must submit panels and marker colors into the earlier order"
     //$$     );
     //$$     assertTrue(
-    //$$         drawLabel.contains("final FabricOrderedSubmitNodeCollector text =")
-    //$$             && drawLabel.contains("(FabricOrderedSubmitNodeCollector) submits.order(1)"),
+    //$$         labelPass.contains("(FabricOrderedSubmitNodeCollector) frame.labelSubmits.order(1)"),
     //$$         "26.2 must submit marker initials and labels after opaque plates"
     //$$     );
     //$$ }
     //$$
     //$$ @Test
     //$$ void submittedHudRendersAfterTheWaterMask() throws Exception {
-    //$$     final String source = Files.readString(preprocessedLabelPainterSource());
-    //$$     final String submitRect = methodBody(source, "\n    private static void submitRect(");
-    //$$     final String submitText = methodBody(source, "\n    private static void submitText(");
+    //$$     final String labelPass = Files.readString(preprocessedLabelPassSource());
+    //$$     final String submitRect = methodBody(labelPass, "\n    private void submitRect(");
+    //$$     final String submitText = methodBody(labelPass, "\n    private void submitText(");
     //$$
     //#if MC>=260300
     //$$     // 26.3 collectors submit text phases natively; the water-mask ordering the
     //$$     // ALWAYS_ON_TOP phase used to provide is the vanilla text phase's own.
     //$$     assertTrue(
-    //$$         submitRect.contains("submits.submitTextBackground("),
+    //$$         submitRect.contains("plateSubmits.submitTextBackground("),
     //$$         "26.3 waypoint plates must render through the collector's text-background phase"
     //$$     );
     //$$     assertTrue(
-    //$$         submitText.contains("submits.submitText("),
+    //$$         submitText.contains("textSubmits.submitText("),
     //$$         "26.3 waypoint text must render through the collector's text phase"
     //$$     );
     //#else

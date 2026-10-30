@@ -4,30 +4,56 @@ import cn.net.rms.confluxmap.core.config.ConfluxConfig;
 import cn.net.rms.confluxmap.core.waypoint.WaypointRenderEntry;
 import cn.net.rms.confluxmap.mc.render.RenderUtil;
 import com.mojang.blaze3d.systems.RenderSystem;
+//#if MC>=260200
+//$$ import net.fabricmc.fabric.api.client.rendering.v1.FabricOrderedSubmitNodeCollector;
+//$$ import net.fabricmc.fabric.api.client.rendering.v1.SubmitRenderPhases;
+//$$ import net.minecraft.client.renderer.feature.CustomFeatureRenderer;
+//$$ import net.minecraft.client.renderer.feature.TextFeatureRenderer;
+//$$ import net.minecraft.client.renderer.rendertype.RenderTypes;
+//$$ import net.minecraft.network.chat.Component;
+//$$ import org.joml.Matrix4f;
+//#endif
+//#if MC>=260200
+//$$ import net.minecraft.client.gui.Font;
+//#endif
+//#if MC>=260300
+//$$ import net.minecraft.client.renderer.OrderedSubmitNodeCollector;
+//#endif
 import net.minecraft.client.MinecraftClient;
+import net.minecraft.client.util.math.MatrixStack;
 
 /**
- * Owns the label pass's per-version state brackets and submit handles, dispatching each
- * label to {@link WaypointLabelPainter}. {@link #beginPass} and {@link #endPass} bracket
- * one label render: before 1.21.9 they reinstall the world projection and the view matrix
- * captured at LAST (the same END state repair the beam pass makes), while the in-pass
- * phases from 1.21.9 to 26.1 only save the global ModelView through {@link
- * RenderUtil#pushWorldHudModelView} so the billboard keeps the world view rotation vanilla
- * installed. Inside that bracket, {@link #beginLabels}/{@link #endLabels} wrap the label
- * loop: before 1.21.5 the labels disable depth testing (world content must never hide
- * player-facing navigation information) and the shared entity vertex consumers are flushed
- * once after the loop on every pre-26.2 version.
+ * Owns the label pass's per-version state brackets, billboard transform, and submissions.
+ * {@link #beginPass} and {@link #endPass} bracket one label render: before 1.21.9 they
+ * reinstall the world projection and the view matrix captured at LAST (the same END state
+ * repair the beam pass makes), while the in-pass phases from 1.21.9 to 26.1 only save the
+ * global ModelView through {@link RenderUtil#pushWorldHudModelView} so the billboard keeps
+ * the world view rotation vanilla installed. Inside that bracket, {@link #beginLabels}/
+ * {@link #endLabels} wrap the label loop: before 1.21.5 the labels disable depth testing
+ * (world content must never hide player-facing navigation information) and the shared
+ * entity vertex consumers are flushed once after the loop on every pre-26.2 version. The
+ * layout itself arrives from {@link WaypointLabelPainter}; this class applies the camera
+ * rotation and submits each quad/text run through the version's pipeline.
  */
-final class LabelPass implements AutoCloseable {
+final class LabelPass implements AutoCloseable, WaypointLabelPainter.Sink {
+    private final MinecraftClient client;
     private final WaypointLabelPainter labelPainter;
     /** The pass frame, valid between {@link #beginPass} and {@link #endPass}. */
     private OverlayFrame frame;
+    //#if MC>=260300
+    //$$ private OrderedSubmitNodeCollector plateSubmits;
+    //$$ private OrderedSubmitNodeCollector textSubmits;
+    //#elseif MC>=260200
+    //$$ private FabricOrderedSubmitNodeCollector plateSubmits;
+    //$$ private FabricOrderedSubmitNodeCollector textSubmits;
+    //#endif
 
     static LabelPass of(final MinecraftClient client, final ConfluxConfig config) {
         return new LabelPass(client, config);
     }
 
     private LabelPass(final MinecraftClient client, final ConfluxConfig config) {
+        this.client = client;
         this.labelPainter = new WaypointLabelPainter(client, config);
     }
 
@@ -46,12 +72,19 @@ final class LabelPass implements AutoCloseable {
         RenderSystem.disableDepthTest();
         RenderSystem.depthMask(false);
         //#endif
+        //#if MC>=260200
+        //$$ // 26.1 collects item submits separately so they render in the current frame;
+        //$$ // plates go into order(0) and text into order(1), matching the painter's layering.
+        //#if MC>=260300
+        //$$ plateSubmits = frame.labelSubmits.order(0);
+        //$$ textSubmits = frame.labelSubmits.order(1);
+        //#else
+        //$$ plateSubmits = (FabricOrderedSubmitNodeCollector) frame.labelSubmits.order(0);
+        //$$ textSubmits = (FabricOrderedSubmitNodeCollector) frame.labelSubmits.order(1);
+        //#endif
+        //#endif
     }
 
-    /**
-     * Draws one label. Layout, styling, and scaling stay in {@link WaypointLabelPainter};
-     * this only hands over the version-correct submit handles and matrices.
-     */
     void drawLabel(
         final double worldX,
         final double worldY,
@@ -63,33 +96,52 @@ final class LabelPass implements AutoCloseable {
         final float visibilityAlpha,
         final boolean selected
     ) {
-        //#if MC>=260200
-        //$$ labelPainter.drawLabel(
-        //$$     frame.matrices, frame.labelSubmits, frame.cameraRotation,
-        //$$     frame.cameraPos, worldX, worldY, worldZ, waypoint,
-        //$$     distance3d, projectionDistance, animationProgress,
-        //$$     visibilityAlpha, selected
-        //$$ );
-        //#elseif MC>=260100
-        //$$ labelPainter.drawLabel(
-        //$$     frame.matrices, frame.immediate, frame.labelSubmits, frame.camera,
-        //$$     frame.cameraPos, worldX, worldY, worldZ,
-        //$$     waypoint, distance3d, projectionDistance, animationProgress,
-        //$$     visibilityAlpha, selected
-        //$$ );
-        //#elseif MC>=12109
-        //$$ labelPainter.drawLabel(
-        //$$     frame.matrices, frame.immediate, frame.labelQueue, frame.camera,
-        //$$     frame.cameraPos, worldX, worldY, worldZ,
-        //$$     waypoint, distance3d, projectionDistance, animationProgress,
-        //$$     visibilityAlpha, selected
-        //$$ );
-        //#else
         labelPainter.drawLabel(
-            frame.matrices, frame.immediate, frame.camera,
-            frame.cameraPos, worldX, worldY, worldZ,
+            frame.matrices, frame.cameraPos, worldX, worldY, worldZ,
             waypoint, distance3d, projectionDistance, animationProgress,
-            visibilityAlpha, selected
+            visibilityAlpha, selected, this
+        );
+    }
+
+    /**
+     * The billboard rotation in its three forms - a matrix multiply on 26.3, which dropped
+     * quaternion poses; a quaternion multiply on 26.2; the camera's rotation everywhere
+     * earlier - then the label scale. Vanilla's modern billboard needs the positive X sign
+     * from 1.21 on; earlier versions cull their quads unless X is negative.
+     */
+    @Override
+    public void billboard(final MatrixStack matrices, final float scale) {
+        //#if MC>=260300
+        //$$ matrices.mulPose(new org.joml.Matrix4f().rotation(frame.cameraRotation));
+        //#elseif MC>=260200
+        //$$ matrices.mulPose(frame.cameraRotation);
+        //#else
+        matrices.multiply(frame.camera.getRotation());
+        //#endif
+        //#if MC>=12100
+        //$$ matrices.scale(scale, -scale, scale);
+        //#else
+        matrices.scale(-scale, -scale, scale);
+        //#endif
+    }
+
+    @Override
+    public void rect(final MatrixStack matrices, final float x, final float y, final float width, final float height, final int color) {
+        //#if MC>=260200
+        //$$ submitRect(matrices, x, y, width, height, color);
+        //#else
+        RenderUtil.fillRect3D(matrices, x, y, width, height, color);
+        //#endif
+    }
+
+    @Override
+    public void text(final MatrixStack matrices, final String text, final float x, final float y, final int color) {
+        //#if MC>=260200
+        //$$ submitText(matrices, text, x, y, color);
+        //#else
+        RenderUtil.drawSeeThroughText(
+            client.textRenderer, text, x, y, color, matrices, frame.immediate,
+            WaypointLabelStyle.LABEL_LIGHT
         );
         //#endif
     }
@@ -113,6 +165,72 @@ final class LabelPass implements AutoCloseable {
         //#endif
         frame = null;
     }
+
+    //#if MC>=260200
+    //$$ private void submitRect(
+    //$$     final PoseStack matrices,
+    //$$     final float x,
+    //$$     final float y,
+    //$$     final float width,
+    //$$     final float height,
+    //$$     final int color
+    //$$ ) {
+    //#if MC>=260300
+    //$$     // 26.3 removed RenderTypes.textBackgroundSeeThrough and rebuilt the text Submit
+    //$$     // records around Content objects; the collector's own background submit replaces
+    //$$     // the custom-geometry path entirely.
+    //$$     plateSubmits.submitTextBackground(
+    //$$         matrices, x, y, x + width, y + height, color,
+    //$$         Font.DisplayMode.SEE_THROUGH, WaypointLabelStyle.LABEL_LIGHT
+    //$$     );
+    //#else
+    //$$     plateSubmits.submitCustom(
+    //$$         SubmitRenderPhases.ALWAYS_ON_TOP,
+    //$$         new CustomFeatureRenderer.Submit(
+    //$$             matrices.last().copy(),
+    //$$             RenderTypes.textBackgroundSeeThrough(),
+    //$$             (pose, vertices) -> {
+    //$$                 vertices.addVertex(pose, x, y + height, 0f).setColor(color).setLight(WaypointLabelStyle.LABEL_LIGHT);
+    //$$                 vertices.addVertex(pose, x + width, y + height, 0f).setColor(color).setLight(WaypointLabelStyle.LABEL_LIGHT);
+    //$$                 vertices.addVertex(pose, x + width, y, 0f).setColor(color).setLight(WaypointLabelStyle.LABEL_LIGHT);
+    //$$                 vertices.addVertex(pose, x, y, 0f).setColor(color).setLight(WaypointLabelStyle.LABEL_LIGHT);
+    //$$             }
+    //$$         )
+    //$$     );
+    //#endif
+    //$$ }
+    //$$
+    //$$ private void submitText(
+    //$$     final PoseStack matrices,
+    //$$     final String text,
+    //$$     final float x,
+    //$$     final float y,
+    //$$     final int color
+    //$$ ) {
+    //#if MC>=260300
+    //$$     textSubmits.submitText(
+    //$$         matrices, x, y, Component.literal(text).getVisualOrderText(),
+    //$$         false, Font.DisplayMode.SEE_THROUGH, WaypointLabelStyle.LABEL_LIGHT, color, 0, 0
+    //$$     );
+    //#else
+    //$$     textSubmits.submitCustom(
+    //$$         SubmitRenderPhases.ALWAYS_ON_TOP,
+    //$$         new TextFeatureRenderer.Submit(
+    //$$             new Matrix4f(matrices.last().pose()),
+    //$$             x,
+    //$$             y,
+    //$$             Component.literal(text).getVisualOrderText(),
+    //$$             false,
+    //$$             Font.DisplayMode.SEE_THROUGH,
+    //$$             WaypointLabelStyle.LABEL_LIGHT,
+    //$$             color,
+    //$$             0,
+    //$$             0
+    //$$         )
+    //$$     );
+    //#endif
+    //$$ }
+    //#endif
 
     /**
      * The pass brackets restore every state they touch inline, so nothing here outlives
