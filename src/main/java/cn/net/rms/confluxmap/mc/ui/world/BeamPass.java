@@ -7,6 +7,10 @@ import cn.net.rms.confluxmap.mc.render.WorldMatrices;
 import net.minecraft.client.render.VertexFormats;
 
 import com.mojang.blaze3d.systems.RenderSystem;
+//#if MC>=12111 && MC<260100
+//$$ import net.minecraft.client.render.RenderLayers;
+//$$ import net.minecraft.client.render.VertexConsumer;
+//#endif
 //#if MC>=260200
 //$$ import com.mojang.blaze3d.vertex.VertexConsumer;
 //$$ import net.fabricmc.fabric.api.client.rendering.v1.FabricOrderedSubmitNodeCollector;
@@ -34,9 +38,11 @@ import net.minecraft.client.util.math.MatrixStack;
  * global projection pointing at composite passes and after vanilla popped the world view);
  * every version draws additively through {@link #beginAdditiveTriangles()}, whose
  * 1.21.8 fog-slice bracket lives here. The beam geometry itself arrives from
- * {@link WaypointBeamPainter}; this class only emits it - immediate triangles before 26.2,
- * submitted custom nodes in the AFTER_TERRAIN phase from 26.2 on, where the open translucent
- * pass forbids issuing draws on the spot.
+ * {@link WaypointBeamPainter}; this class only emits it - raw tessellator triangles before
+ * 1.21.11, shared-entity-consumer batches through the vanilla dragon-rays layer on 1.21.11,
+ * raw triangles at renderLevel's RETURN on 26.1, and submitted custom nodes in the
+ * AFTER_TERRAIN phase from 26.2 on, where the open translucent pass forbids issuing draws on
+ * the spot.
  */
 final class BeamPass implements AutoCloseable, WaypointBeamPainter.Sink {
     /** The pass frame, valid between {@link #beginPass} and {@link #endPass}. */
@@ -104,6 +110,8 @@ final class BeamPass implements AutoCloseable, WaypointBeamPainter.Sink {
     ) {
         //#if MC>=260200
         //$$ submitBeamSide(frame.beamSubmits, matrices.last().copy(), x0, z0, x1, z1, bottom, top, color);
+        //#elseif MC>=12111 && MC<260100
+        //$$ immediateBeamSide(matrices, x0, z0, x1, z1, bottom, top, color);
         //#else
         fillTriangle3D(matrices, x0, bottom, z0, x1, bottom, z1, x1, top, z1, color);
         fillTriangle3D(matrices, x0, bottom, z0, x1, top, z1, x0, top, z0, color);
@@ -112,6 +120,12 @@ final class BeamPass implements AutoCloseable, WaypointBeamPainter.Sink {
 
     void endPass() {
         restoreDefaultBlend();
+        //#if MC>=12111 && MC<260100
+        //$$ // The buffered dragon-rays layer must draw now, inside the world pass at the
+        //$$ // BEFORE_TRANSLUCENT slot the raw draw used; left pending it would only flush at the
+        //$$ // next layer switch, when the world matrices are already gone.
+        //$$ frame.immediate.draw(RenderLayers.dragonRays());
+        //#endif
         //#if MC<12109
         WorldMatrices.popModelView();
         WorldMatrices.restoreProjection();
@@ -124,6 +138,49 @@ final class BeamPass implements AutoCloseable, WaypointBeamPainter.Sink {
         //#endif
         frame = null;
     }
+
+    //#if MC>=12111 && MC<260100
+    //$$ /**
+    //$$  * One tube face as two triangles with opposite winding, buffered into the shared entity
+    //$$  * vertex consumers through the vanilla dragon-rays layer - the same captured path the
+    //$$  * labels draw through and the same pipeline the raw mesh drew with. Submitting through
+    //$$  * the context's commandQueue() instead was checked against 1.21.11's bytecode and drops
+    //$$  * the geometry: vanilla drains that queue before the BEFORE_TRANSLUCENT hook fires, and
+    //$$  * the later particles-pass drain only buffers, never flushes.
+    //$$  */
+    //$$ private void immediateBeamSide(
+    //$$     final MatrixStack matrices,
+    //$$     final float x0, final float z0,
+    //$$     final float x1, final float z1,
+    //$$     final float bottom, final float top,
+    //$$     final int color
+    //$$ ) {
+    //$$     final VertexConsumer vertices = frame.immediate.getBuffer(RenderLayers.dragonRays());
+    //$$     emitBeamTriangle(matrices.peek(), vertices, x0, bottom, z0, x1, bottom, z1, x1, top, z1, color);
+    //$$     emitBeamTriangle(matrices.peek(), vertices, x0, bottom, z0, x1, top, z1, x0, top, z0, color);
+    //$$ }
+    //$$
+    //$$ /** One triangle written twice with opposite winding, the double-sided emission the immediate path uses. */
+    //$$ private static void emitBeamTriangle(
+    //$$     final MatrixStack.Entry entry,
+    //$$     final VertexConsumer vertices,
+    //$$     final float x0, final float y0, final float z0,
+    //$$     final float x1, final float y1, final float z1,
+    //$$     final float x2, final float y2, final float z2,
+    //$$     final int argbColor
+    //$$ ) {
+    //$$     final float a = Argb.alpha(argbColor) / 255f;
+    //$$     final float r = Argb.red(argbColor) / 255f;
+    //$$     final float g = Argb.green(argbColor) / 255f;
+    //$$     final float b = Argb.blue(argbColor) / 255f;
+    //$$     vertices.vertex(entry, x0, y0, z0).color(r, g, b, a);
+    //$$     vertices.vertex(entry, x1, y1, z1).color(r, g, b, a);
+    //$$     vertices.vertex(entry, x2, y2, z2).color(r, g, b, a);
+    //$$     vertices.vertex(entry, x2, y2, z2).color(r, g, b, a);
+    //$$     vertices.vertex(entry, x1, y1, z1).color(r, g, b, a);
+    //$$     vertices.vertex(entry, x0, y0, z0).color(r, g, b, a);
+    //$$ }
+    //#endif
 
     //#if MC>=260200
     //$$ private static void submitBeamSide(
