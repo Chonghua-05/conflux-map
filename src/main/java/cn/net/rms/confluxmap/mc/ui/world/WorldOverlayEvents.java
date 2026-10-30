@@ -104,10 +104,14 @@ public final class WorldOverlayEvents {
     public static void register(final WaypointWorldRenderer renderer) {
         //#if MC>=260300
         //$$ LevelRenderEvents.COLLECT_SUBMITS.register(context ->
+        //$$     captureWorldView());
+        //$$ LevelRenderEvents.COLLECT_SUBMITS.register(context ->
         //$$     renderer.renderBeams(beamFrame(context)));
         //$$ LevelRenderEvents.COLLECT_SUBMITS.register(context ->
         //$$     renderer.renderHud(labelFrame(context)));
         //#elseif MC>=260200
+        //$$ LevelRenderEvents.AFTER_TRANSLUCENT_TERRAIN.register(context ->
+        //$$     captureWorldView());
         //$$ LevelRenderEvents.AFTER_TRANSLUCENT_TERRAIN.register(context ->
         //$$     renderer.renderBeams(beamFrame(context)));
         //$$ LevelRenderEvents.COLLECT_SUBMITS.register(context ->
@@ -123,8 +127,10 @@ public final class WorldOverlayEvents {
         //$$ LevelRenderEvents.END_MAIN.register(context ->
         //$$     renderer.renderHud(labelFrame(context)));
         //#elseif MC>=12111
-        //$$ WorldRenderEvents.BEFORE_TRANSLUCENT.register(context ->
-        //$$     renderer.renderBeams(frame(context)));
+        //$$ WorldRenderEvents.BEFORE_TRANSLUCENT.register(context -> {
+        //$$     captureWorldView();
+        //$$     renderer.renderBeams(frame(context));
+        //$$ });
         //$$ WorldRenderEvents.END_MAIN.register(context ->
         //$$     renderer.renderHud(frame(context)));
         //#elseif MC>=12109
@@ -137,7 +143,10 @@ public final class WorldOverlayEvents {
         // after the pack's finalize, so both passes draw on the finished frame instead: the
         // beam depth-tests against the completed scene depth buffer, and the labels draw
         // after it with depth testing disabled.
-        WorldRenderEvents.LAST.register(context -> captureWorldView());
+        WorldRenderEvents.LAST.register(context -> {
+            WorldMatrices.captureHudProjection(context.projectionMatrix());
+            captureWorldView();
+        });
         WorldRenderEvents.END.register(context -> {
             final OverlayFrame beamFrame = frame(context);
             renderState("end-beam", beamFrame, null);
@@ -147,9 +156,15 @@ public final class WorldOverlayEvents {
         //#endif
     }
 
-    //#if MC<12109 || MC>=260100 && MC<260200
-    /** Read-only listener: records the world view matrix for the post-pass draws (see WorldMatrices). */
+    /**
+     * World-pass capture listener: pairs the live camera view with this frame's already
+     * staged projection into the HUD item-label snapshot (see WorldMatrices), and on the
+     * pre-1.21.9 lines additionally records the view matrix for the post-pass END draws
+     * (see {@link WorldMatrices#snapshotWorldViewModelView}).
+     */
     private static void captureWorldView() {
+        WorldMatrices.captureHudView();
+        //#if MC<12109 || MC>=260100 && MC<260200
         WorldMatrices.snapshotWorldViewModelView();
         //#if MC>=260100 && MC<260200
         //$$ // The RETURN draw replays the fog the in-pass beam draw saw; by then later frame
@@ -158,8 +173,8 @@ public final class WorldOverlayEvents {
         //#else
         renderState("last-capture", null, null);
         //#endif
+        //#endif
     }
-    //#endif
 
     //#if MC>=260100 && MC<260200
     //$$ private static GpuBufferSlice levelReturnFog;
@@ -201,6 +216,7 @@ public final class WorldOverlayEvents {
     //$$  * section-layer call on the 1.21.9 line.
     //$$  */
     //$$ public static void onBeforeTranslucent(final MatrixStack matrices) {
+    //$$     captureWorldView();
     //$$     if (active != null) {
     //$$         active.renderBeams(frame(matrices, null));
     //$$     }
@@ -208,6 +224,7 @@ public final class WorldOverlayEvents {
     //$$
     //$$ /** Entry point {@code WorldRendererMixin} drives at the end of the main pass. */
     //$$ public static void onEndMain(final MatrixStack matrices, final OrderedRenderCommandQueue commandQueue) {
+    //$$     captureWorldView();
     //$$     if (active != null) {
     //$$         active.renderHud(frame(matrices, commandQueue));
     //$$     }

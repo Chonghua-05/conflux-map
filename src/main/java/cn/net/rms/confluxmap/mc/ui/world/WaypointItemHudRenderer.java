@@ -6,11 +6,13 @@ import cn.net.rms.confluxmap.core.waypoint.WaypointRenderEntry;
 import cn.net.rms.confluxmap.mixin.GameRendererAccessor;
 //#endif
 import cn.net.rms.confluxmap.compat.MinecraftAccess;
+import cn.net.rms.confluxmap.mc.render.WaypointHudFrameMatrices;
 import cn.net.rms.confluxmap.mc.ui.GuiDraw;
 import cn.net.rms.confluxmap.mc.ui.WaypointMarkerRenderer;
 import cn.net.rms.confluxmap.mc.radar.EntityIconManager;
 import cn.net.rms.confluxmap.mc.radar.RadarMarkerRenderer;
 import java.util.List;
+import java.util.Optional;
 import java.util.UUID;
 //#if MC>=12106
 //$$ import net.fabricmc.fabric.api.client.rendering.v1.hud.HudElementRegistry;
@@ -119,6 +121,7 @@ public final class WaypointItemHudRenderer {
         final float cameraYaw = cameraYaw(camera);
         final float cameraPitch = cameraPitch(camera);
         final double verticalFov = verticalFov(camera, tickDelta);
+        final WaypointHudFrameMatrices.Snapshot frame = WaypointHudFrameMatrices.current();
         //#if MC>=260100
         //$$ final int screenWidth = client.getWindow().getGuiScaledWidth();
         //$$ final int screenHeight = client.getWindow().getGuiScaledHeight();
@@ -142,20 +145,36 @@ public final class WaypointItemHudRenderer {
                 WaypointLabelStyle.LABEL_ICON_COLLAPSED_SIZE,
                 WaypointLabelStyle.LABEL_ICON_EXPANDED_SIZE
             );
-            WaypointHudItemProjection.project(
-                cameraYaw,
-                cameraPitch,
-                dx,
-                dy,
-                dz,
-                screenWidth,
-                screenHeight,
-                verticalFov,
-                renderedDistance,
-                easedProgress,
-                iconSize,
-                config.waypointLabelScalePercent
-            ).ifPresent(placement -> drawLabel(draw, label, placement, easedProgress));
+            // Prefer the world pass's captured matrices - they carry the nausea sway exactly
+            // like the 3D labels; without a capture this frame, fall back to the camera basis.
+            final Optional<WaypointHudItemProjection.Placement> placement = frame != null
+                ? WaypointHudItemProjection.project(
+                    frame,
+                    dx,
+                    dy,
+                    dz,
+                    screenWidth,
+                    screenHeight,
+                    renderedDistance,
+                    easedProgress,
+                    iconSize,
+                    config.waypointLabelScalePercent
+                )
+                : WaypointHudItemProjection.project(
+                    cameraYaw,
+                    cameraPitch,
+                    dx,
+                    dy,
+                    dz,
+                    screenWidth,
+                    screenHeight,
+                    verticalFov,
+                    renderedDistance,
+                    easedProgress,
+                    iconSize,
+                    config.waypointLabelScalePercent
+                );
+            placement.ifPresent(value -> drawLabel(draw, label, value, easedProgress));
         }
     }
 

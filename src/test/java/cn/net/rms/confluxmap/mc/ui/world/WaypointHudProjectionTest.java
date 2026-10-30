@@ -114,6 +114,37 @@ final class WaypointHudProjectionTest {
     //$$ }
     //$$
     //$$ @Test
+    //$$ void hudItemLabelsProjectThroughTheCapturedSwayMatrices() throws Exception {
+    //$$     final String hudSource = Files.readString(
+    //$$         preprocessedSource().getParent().resolve("WaypointItemHudRenderer.java")
+    //$$     );
+    //$$     final String worldMatrices = Files.readString(preprocessedWorldMatricesSource());
+    //$$
+    //$$     assertTrue(
+    //$$         hudSource.contains("WaypointHudFrameMatrices.current()"),
+    //$$         "the HUD item pass must read the world pass's captured matrices"
+    //$$     );
+    //$$     assertTrue(
+    //$$         countOccurrences(hudSource, "WaypointHudItemProjection.project(") >= 2,
+    //$$         "the captured-matrix path and the hand-rolled basis fallback must both stay wired"
+    //$$     );
+    //$$     assertTrue(
+    //$$         worldMatrices.contains("WaypointHudFrameMatrices.update(")
+    //$$             && worldMatrices.contains("clearHudFrame"),
+    //$$         "the world-pass capture must commit into the HUD snapshot and support cleanup"
+    //$$     );
+    //$$ }
+    //$$
+    //$$ private static int countOccurrences(final String haystack, final String needle) {
+    //$$     int count = 0;
+    //$$     for (int index = haystack.indexOf(needle); index >= 0;
+    //$$         index = haystack.indexOf(needle, index + 1)) {
+    //$$         count++;
+    //$$     }
+    //$$     return count;
+    //$$ }
+    //$$
+    //$$ @Test
     //$$ void itemLabelsRenderBeforeTheVanillaCrosshair() throws Exception {
     //$$     final String hudSource = Files.readString(
     //$$         preprocessedSource().getParent().resolve("WaypointItemHudRenderer.java")

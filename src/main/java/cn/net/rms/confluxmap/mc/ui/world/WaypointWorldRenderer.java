@@ -6,9 +6,11 @@ import cn.net.rms.confluxmap.compat.MinecraftAccess;
 import cn.net.rms.confluxmap.core.config.ConfluxConfig;
 import cn.net.rms.confluxmap.core.model.DimensionId;
 import cn.net.rms.confluxmap.core.radar.ServerPlayerRadarState;
+import cn.net.rms.confluxmap.core.task.SessionGuard;
 import cn.net.rms.confluxmap.core.waypoint.Waypoint;
 import cn.net.rms.confluxmap.core.waypoint.WaypointRenderCatalog;
 import cn.net.rms.confluxmap.core.waypoint.WaypointRenderEntry;
+import cn.net.rms.confluxmap.mc.render.WorldMatrices;
 import cn.net.rms.confluxmap.mc.ui.WaypointMarkerRenderer;
 import java.util.ArrayList;
 import java.util.HashMap;
@@ -56,6 +58,7 @@ public final class WaypointWorldRenderer {
     private final LabelPass labelPass;
     private final Map<UUID, Float> labelAnimationProgress = new HashMap<>();
     private long lastAnimationNanos;
+    private SessionGuard.Session lastSnapshotSession;
 
     public WaypointWorldRenderer(
         final MinecraftClient client,
@@ -132,6 +135,13 @@ public final class WaypointWorldRenderer {
     }
 
     void renderHud(final OverlayFrame frame) {
+        // A new session or dimension invalidates the HUD label matrices captured during the
+        // previous world pass; the current pass re-captures them right after this.
+        final SessionGuard.Session session = gameBridge.session();
+        if (!session.equals(lastSnapshotSession)) {
+            lastSnapshotSession = session;
+            WorldMatrices.clearHudFrame();
+        }
         if (!config.waypointLabelsEnabled) {
             labelAnimationProgress.clear();
             waypointItemHudRenderer.publish(List.of());

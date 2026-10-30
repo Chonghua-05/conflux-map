@@ -1,6 +1,7 @@
 package cn.net.rms.confluxmap.mc.render;
 
 import com.mojang.blaze3d.systems.RenderSystem;
+import java.nio.FloatBuffer;
 //#if MC>=12108 && MC<12109
 //$$ import net.minecraft.client.render.RawProjectionMatrix;
 //#endif
@@ -36,8 +37,86 @@ public final class WorldMatrices {
     private static boolean worldViewCaptured;
     //#endif
 
+    // HUD item-label frame staging: the projection arrives where vanilla installs it (the
+    // LAST context before 1.21.9, the GameRenderer renderWorld/renderLevel capture on later
+    // lines), the view arrives from the world-pass hooks; the view is captured last in every
+    // frame, so it commits the pair into the HUD snapshot.
+    private static final double[] hudProjectionFrame = new double[16];
+    private static final double[] hudViewFrame = new double[16];
+    //#if MC<11904
+    private static final float[] hudMatrixScratch = new float[16];
+    //#endif
+    private static boolean hudProjectionCaptured;
+
     private WorldMatrices() {
     }
+
+    /** Stages the world pass's projection for the HUD item-label snapshot (row-major doubles). */
+    //#if MC<11904
+    public static void captureHudProjection(final net.minecraft.util.math.Matrix4f projection) {
+        final FloatBuffer floats = FloatBuffer.wrap(hudMatrixScratch);
+        projection.writeRowMajor(floats);
+        for (int i = 0; i < hudMatrixScratch.length; i++) {
+            hudProjectionFrame[i] = hudMatrixScratch[i];
+        }
+        hudProjectionCaptured = true;
+    }
+    //#else
+    //$$ public static void captureHudProjection(final org.joml.Matrix4f projection) {
+    //$$     writeRowMajor(projection, hudProjectionFrame);
+    //$$     hudProjectionCaptured = true;
+    //$$ }
+    //#endif
+
+    /**
+     * Captures the live world-pass camera view and, once this frame's projection has been
+     * staged, commits both into the HUD item-label snapshot. Called from a world-pass hook
+     * that runs after the projection is installed and before the HUD phase of the same frame.
+     */
+    public static void captureHudView() {
+        //#if MC<11904
+        final FloatBuffer floats = FloatBuffer.wrap(hudMatrixScratch);
+        RenderSystem.getModelViewMatrix().writeRowMajor(floats);
+        for (int i = 0; i < hudMatrixScratch.length; i++) {
+            hudViewFrame[i] = hudMatrixScratch[i];
+        }
+        //#elseif MC>=260200
+        //$$ writeRowMajor(RenderSystem.getModelViewMatrixCopy(), hudViewFrame);
+        //#else
+        //$$ writeRowMajor(RenderSystem.getModelViewMatrix(), hudViewFrame);
+        //#endif
+        if (hudProjectionCaptured) {
+            WaypointHudFrameMatrices.update(hudProjectionFrame, hudViewFrame);
+        }
+    }
+
+    /** Drops the HUD item-label snapshot and its staged projection (session/dimension change). */
+    public static void clearHudFrame() {
+        hudProjectionCaptured = false;
+        WaypointHudFrameMatrices.clear();
+    }
+
+    //#if MC>=11904
+    //$$ private static void writeRowMajor(final org.joml.Matrix4f matrix, final double[] out) {
+    //$$     out[0] = matrix.m00();
+    //$$     out[1] = matrix.m01();
+    //$$     out[2] = matrix.m02();
+    //$$     out[3] = matrix.m03();
+    //$$     out[4] = matrix.m10();
+    //$$     out[5] = matrix.m11();
+    //$$     out[6] = matrix.m12();
+    //$$     out[7] = matrix.m13();
+    //$$     out[8] = matrix.m20();
+    //$$     out[9] = matrix.m21();
+    //$$     out[10] = matrix.m22();
+    //$$     out[11] = matrix.m23();
+    //$$     out[12] = matrix.m30();
+    //$$     out[13] = matrix.m31();
+    //$$     out[14] = matrix.m32();
+    //$$     out[15] = matrix.m33();
+    //$$ }
+    //#endif
+
 
     //#if MC<12109 || MC>=260100 && MC<260200
     /**
