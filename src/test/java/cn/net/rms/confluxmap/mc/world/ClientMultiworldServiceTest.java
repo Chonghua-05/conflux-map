@@ -133,6 +133,31 @@ class ClientMultiworldServiceTest {
     }
 
     @Test
+    void activeCompanionDoesNotCreateClientProfilesWhenSignalsChange() {
+        final CompanionSession companion = new CompanionSession();
+        final ClientWorldProfileRegistry registry = new ClientWorldProfileRegistry();
+        final ClientMultiworldService service = service(
+            new ClientWorldProfileResolver(registry, ids()), companion
+        );
+
+        // Signals settle while the address namespace is still unprimed, like the first
+        // second after join; the session tracker never runs the profile machine.
+        service.onGameJoin(11L);
+        service.observeSignals(Map.of("dimension", "overworld", "brand", "vanilla"));
+
+        companion.onHelloSent();
+        companion.onPolicy(policy("11111111-2222-3333-4444-555555555555"));
+        service.observeAddress(ADDRESS);
+
+        // A nether portal is a same-seed respawn: signals reset, then re-collect with a
+        // different dimension hash.
+        service.onRespawn(11L);
+        service.observeSignals(Map.of("dimension", "the_nether", "brand", "vanilla"));
+
+        assertTrue(service.profiles().isEmpty());
+    }
+
+    @Test
     void companionWorldsAlwaysIncludeTheWorldTheCompanionIsServing() {
         final CompanionSession companion = new CompanionSession();
         final ClientMultiworldService service = service(

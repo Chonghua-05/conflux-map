@@ -507,6 +507,11 @@ public final class ClientMultiworldService {
         terrainAttempted = false;
         observationGeneration++;
         if (serverId != null) {
+            // The companion owns the storage identity; running the fallback machine here
+            // would invent profiles (a spurious "World 1" after a dimension switch).
+            if (companionWorldIdentityAuthoritative()) {
+                return;
+            }
             if (velocityQuery.blocksFallback() && supportsVelocityServerQuery()) {
                 resolution = ClientWorldResolution.collecting();
                 return;
@@ -757,7 +762,7 @@ public final class ClientMultiworldService {
         lockedSeedHash = OptionalLong.empty();
     }
 
-    private void observeAddress(final String currentAddress) {
+    void observeAddress(final String currentAddress) {
         if (currentAddress.equals(address)) {
             return;
         }
