@@ -120,6 +120,54 @@ class PredictionTileServiceTest {
     }
 
     @Test
+    void fullscreenViewportCompositionsUseTheWholeWorkerPool() throws InterruptedException {
+        final SessionGuard sessionGuard = new SessionGuard();
+        sessionGuard.begin(WORLD, DIM);
+        // 8 workers: above the stale visible cap of 6 that outlived the worker-pool expansion.
+        final MapExecutors executors = new MapExecutors(8);
+        final TileService uploads = new TileService(
+            new MapWorldService(), executors, new ConfluxConfig(), new DaylightModel()
+        );
+        final PredictionState state = new PredictionState();
+        state.setPresets(WorldPreset.FLAT, WorldPreset.DEFAULT);
+        state.setFlatBaseline(new FlatBaseline(1, 63, SurfaceKind.LAND.ordinal(), 11, 0));
+        final PredictionTileService predictionTiles = newService(sessionGuard, state, executors, uploads);
+
+        // Block every worker: pump() counts a tile in-flight at dispatch, not execution, so the
+        // dirty queue holds exactly what the composition limit held back.
+        final CountDownLatch workersBusy = new CountDownLatch(executors.workerCount());
+        final CountDownLatch releaseWorkers = new CountDownLatch(1);
+        for (int i = 0; i < executors.workerCount(); i++) {
+            executors.workers().execute(() -> {
+                workersBusy.countDown();
+                try {
+                    releaseWorkers.await();
+                } catch (final InterruptedException ignored) {
+                    Thread.currentThread().interrupt();
+                }
+            });
+        }
+        assertTrue(workersBusy.await(2, TimeUnit.SECONDS));
+
+        try {
+            predictionTiles.setViewport(DIM, 0, 0, 7, 0, 0);
+            for (int tileX = 0; tileX <= 7; tileX++) {
+                predictionTiles.requestTile(new TileKey(WORLD, DIM, "surface!pred", 0, tileX, 0));
+            }
+            assertTrue(
+                predictionTiles.pendingKeysForTest().isEmpty(),
+                "a fullscreen viewport must be able to dispatch one composition per worker"
+            );
+
+            releaseWorkers.countDown();
+            awaitIdle(predictionTiles);
+        } finally {
+            releaseWorkers.countDown();
+            executors.shutdown(2000L);
+        }
+    }
+
+    @Test
     void biomePredictionExposesItsBiomeForCursorReadout(@TempDir final Path tempDir) throws InterruptedException {
         Assumptions.assumeTrue(NativeLib.initForTests(), "native prediction library unavailable on this platform");
         final SessionGuard sessionGuard = new SessionGuard();

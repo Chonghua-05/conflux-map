@@ -39,9 +39,9 @@ import java.util.function.LongSupplier;
 
 /**
  * Predicted-underlay twin of {@code core.tile.TileService}: a synchronized dirty-tile queue
- * bounded by an in-flight cap (one per worker outside a visible viewport, a small bounded cap
- * inside one that still picks tiles outward from the viewport center, and user-waited
- * menu-target tiles always first), session-token guarded - same discipline,
+ * bounded by an in-flight cap of one composition per worker (tiles inside a visible viewport
+ * are still picked outward from the viewport center, and user-waited menu-target tiles
+ * always first), session-token guarded - same discipline,
  * entirely separate data. Predictions never enter {@code ColumnStore}/{@code
  * RegionDiskCache}; composition here samples cubiomes directly (via {@link NativeBaselineSampler})
  * and shares {@code TileService}'s upload queue through {@link TileService#submitUpload}. Native
@@ -66,12 +66,6 @@ public final class PredictionTileService {
     private final TileService uploads;
     private final LongSupplier millisClock;
     private final int maxConcurrentCompositions;
-    /**
-     * Bounded concurrency while a fullscreen viewport is active. Strict serialization (1) left the
-     * predicted underlay trailing the real tile's transparent unexplored pixels during pans, so the
-     * screen background bled through as black gaps; center-out ordering still picks the next tile.
-     */
-    private static final int VISIBLE_CONCURRENCY = 6;
     private volatile CorrectionStore correctionStore;
     private volatile DaylightModel daylightModel;
     private volatile PredictionViewMode viewMode = PredictionViewMode.EVERYWHERE;
@@ -965,10 +959,7 @@ public final class PredictionTileService {
             final long netherGeneration;
             final int netherY;
             synchronized (this) {
-                final int compositionLimit = viewport == null
-                    ? maxConcurrentCompositions
-                    : Math.min(maxConcurrentCompositions, VISIBLE_CONCURRENCY);
-                if (inFlight.size() >= compositionLimit || dirty.isEmpty()) {
+                if (inFlight.size() >= maxConcurrentCompositions || dirty.isEmpty()) {
                     return;
                 }
                 next = nearestDirty();
