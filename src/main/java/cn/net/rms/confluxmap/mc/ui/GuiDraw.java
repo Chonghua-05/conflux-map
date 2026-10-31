@@ -78,7 +78,24 @@ public final class GuiDraw {
         matrices.pop();
     }
 
-    /** Draws the item's normal 16px GUI model, scaled and centered on one radar marker. */
+    /**
+     * Fills one axis-aligned rect in float coordinates through this GuiDraw's own transform,
+     * without rounding. Unlike {@link #fill(int, int, int, int, int)} this carries transforms
+     * pushed with {@link #pushTransform()} (the context's own fill would drop them on 1.21.8+),
+     * at the cost of bypassing the shared vertex-consumer batching - pair it with
+     * {@link #flushGui()} when earlier buffered fills must stay underneath.
+     */
+    public void fillRect(
+        final float x1,
+        final float y1,
+        final float x2,
+        final float y2,
+        final int color
+    ) {
+        GuiShapes.fillRect(matrices, x1, y1, x2 - x1, y2 - y1, color);
+    }
+
+    /** Draws the item's normal 16px GUI model, scaled and centered on one marker position. */
     public void drawItemIcon(
         final MinecraftClient client,
         final ItemStack stack,
@@ -93,6 +110,10 @@ public final class GuiDraw {
         //$$ final Matrix3x2fStack pose = context.getMatrices();
         //$$ pose.pushMatrix();
         //$$ try {
+        //$$     // Items are recorded with the context pose, which never sees this GuiDraw's own
+        //$$     // stack; install it first (same fold as withTextPose).
+        //$$     final Matrix4f model = matrices.peek().getPositionMatrix();
+        //$$     pose.set(model.m00(), model.m01(), model.m10(), model.m11(), model.m30(), model.m31());
         //$$     pose.translate(left, top);
         //$$     pose.scale(scale, scale);
         //#if MC>=260100
@@ -116,6 +137,10 @@ public final class GuiDraw {
         final MatrixStack modelView = RenderSystem.getModelViewStack();
         modelView.push();
         try {
+            // Items render through the model-view stack, which the HUD's MatrixStack is
+            // relative to - fold this GuiDraw's transform in or a pushed label transform
+            // never reaches the icon.
+            modelView.method_34425(matrices.peek().getModel());
             modelView.translate(left, top, 0);
             modelView.scale(scale, scale, 1f);
             RenderSystem.applyModelViewMatrix();
