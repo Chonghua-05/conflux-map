@@ -12,12 +12,18 @@ import java.util.LinkedHashMap;
 final class PredictionMipCache {
     static final long MISSING = Long.MIN_VALUE;
 
+    /** Cells per cache-tile side at {@code lod}; every cell covers one correction chunk. */
+    static int chunksPerSide(final int lod) {
+        return 16 << lod;
+    }
+
     record Tile(
+        int lod,
         int[] pixels,
         byte[] biomes,
         short[] surfaces,
         byte[] syncEvaluated,
-        long[] syncSourceRevisions,
+        long[] syncChunkSourceRevisions,
         byte[] blockLight,
         float composedDaylight,
         float composedGamma,
@@ -29,14 +35,18 @@ final class PredictionMipCache {
     ) {
         Tile {
             final int expected = BaselineGrid.PIXELS * BaselineGrid.PIXELS;
-            if (pixels == null || pixels.length != expected
+            final int expectedChunks = chunksPerSide(lod) * chunksPerSide(lod);
+            if (lod < 0 || lod > TileMath.MAX_LOD
+                || pixels == null || pixels.length != expected
                 || biomes == null || biomes.length != expected
                 || surfaces == null || surfaces.length != expected
                 || syncEvaluated == null || syncEvaluated.length != PatchCodec.MASK_BYTES
                 // null is the "no server revision anywhere in this tile" form: a tile composed
                 // without a server differential can never carry an evaluated sync pixel, so the
-                // 512 KiB revision plane is not allocated at all.
-                || (syncSourceRevisions != null && syncSourceRevisions.length != expected)
+                // revision plane is not allocated at all. Non-null planes are chunk-granular
+                // ((16<<lod)^2 cells) because a chunk's pixels share one source revision; the
+                // per-pixel form would cost 512 KiB on every corrected tile.
+                || (syncChunkSourceRevisions != null && syncChunkSourceRevisions.length != expectedChunks)
                 || blockLight == null || blockLight.length != expected
                 || mode == null || correctionProfile == null) {
                 throw new IllegalArgumentException("invalid prediction mip tile");
@@ -103,7 +113,7 @@ final class PredictionMipCache {
             return null;
         }
         final Tile[] children = children(parent, mode);
-        return children == null ? null : aggregate(children, mode);
+        return children == null ? null : aggregate(children, mode, parent.lod());
     }
 
     synchronized Tile exact(final TileKey key, final PredictionViewMode mode) {
@@ -157,7 +167,7 @@ final class PredictionMipCache {
         if (children == null) {
             return null;
         }
-        final Tile aggregate = aggregate(children, mode);
+        final Tile aggregate = aggregate(children, mode, key.lod());
         tiles.put(key, aggregate);
         trim();
         return aggregate;
@@ -190,15 +200,17 @@ final class PredictionMipCache {
         );
     }
 
-    static Tile aggregate(final Tile[] children, final PredictionViewMode mode) {
+    static Tile aggregate(final Tile[] children, final PredictionViewMode mode, final int parentLod) {
         final int[] pixels = new int[BaselineGrid.PIXELS * BaselineGrid.PIXELS];
         final byte[] biomes = new byte[pixels.length];
         final short[] surfaces = new short[pixels.length];
         final byte[] syncEvaluated = new byte[PatchCodec.MASK_BYTES];
         // Allocated only when at least one child carries revision data, so a parent built purely
         // from client-side predictions keeps the null (unallocated) form.
-        long[] syncSourceRevisions = null;
+        long[] syncChunkSourceRevisions = null;
         final byte[] blockLight = new byte[pixels.length];
+        final int parentChunksPerSide = chunksPerSide(parentLod);
+        final int parentSamplesPerChunk = BaselineGrid.PIXELS / parentChunksPerSide;
         final float composedDaylight = children[0].composedDaylight();
         final float composedGamma = children[0].composedGamma();
         for (int z = 0; z < BaselineGrid.PIXELS; z++) {
@@ -228,11 +240,15 @@ final class PredictionMipCache {
                     && evaluated(child, i2) && evaluated(child, i3);
                 if (allSync) {
                     PatchCodec.setEvaluated(syncEvaluated, out);
-                    if (syncSourceRevisions == null) {
-                        syncSourceRevisions = new long[pixels.length];
-                        java.util.Arrays.fill(syncSourceRevisions, Long.MIN_VALUE);
+                    if (syncChunkSourceRevisions == null) {
+                        syncChunkSourceRevisions = new long[parentChunksPerSide * parentChunksPerSide];
+                        java.util.Arrays.fill(syncChunkSourceRevisions, Long.MIN_VALUE);
                     }
-                    syncSourceRevisions[out] = maxKnown(
+                    // One parent chunk covers exactly one child chunk at every LOD, so every
+                    // pixel of a cell writes the same value and plain assignment is exact.
+                    final int cell = (z / parentSamplesPerChunk) * parentChunksPerSide
+                        + x / parentSamplesPerChunk;
+                    syncChunkSourceRevisions[cell] = maxKnown(
                         revision(child, i0), revision(child, i1),
                         revision(child, i2), revision(child, i3)
                     );
@@ -262,11 +278,12 @@ final class PredictionMipCache {
             }
         }
         return new Tile(
+            parentLod,
             pixels,
             biomes,
             surfaces,
             syncEvaluated,
-            syncSourceRevisions,
+            syncChunkSourceRevisions,
             blockLight,
             composedDaylight,
             composedGamma,
@@ -282,10 +299,15 @@ final class PredictionMipCache {
         return (tile.syncEvaluated()[pixel >>> 3] & (1 << (pixel & 7))) != 0;
     }
 
-    /** Null-tolerant revision read: an unallocated plane means "unknown" for every pixel. */
+    /** Null-tolerant chunk-cell read for one pixel: an unallocated plane means "unknown". */
     private static long revision(final Tile tile, final int pixel) {
-        final long[] revisions = tile.syncSourceRevisions();
-        return revisions == null ? Long.MIN_VALUE : revisions[pixel];
+        final long[] revisions = tile.syncChunkSourceRevisions();
+        if (revisions == null) {
+            return Long.MIN_VALUE;
+        }
+        final int chunks = chunksPerSide(tile.lod());
+        final int samplesPerChunk = BaselineGrid.PIXELS / chunks;
+        return revisions[(pixel >>> 8) / samplesPerChunk * chunks + (pixel & 255) / samplesPerChunk];
     }
 
     private static long maxKnown(final long a, final long b, final long c, final long d) {

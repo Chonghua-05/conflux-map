@@ -1167,11 +1167,12 @@ public final class PredictionTileService {
                     requestedTiles.add(key);
                     metadataTiles.put(metadataKey(key), composition.metadata());
                     mipCache.put(key, new PredictionMipCache.Tile(
+                        key.lod(),
                         composition.update().argbPixels(),
                         composition.metadata().biomes(),
                         composition.metadata().surfaces(),
                         composition.syncEvaluated(),
-                        composition.syncSourceRevisions(),
+                        composition.syncChunkSourceRevisions(),
                         composition.blockLight(),
                         composition.composedDaylight(),
                         composition.composedGamma(),
@@ -1278,7 +1279,7 @@ public final class PredictionTileService {
                 ),
                 new TileMetadata(reusable.biomes(), reusable.surfaces()),
                 reusable.syncEvaluated(),
-                reusable.syncSourceRevisions(),
+                reusable.syncChunkSourceRevisions(),
                 reusable.blockLight(),
                 reusable.composedDaylight(),
                 reusable.composedGamma(),
@@ -1290,7 +1291,7 @@ public final class PredictionTileService {
             );
             uploads.maskPredictedPixels(
                 realKey(key), composition.update().argbPixels(),
-                reusable.syncEvaluated(), reusable.syncSourceRevisions(),
+                reusable.syncEvaluated(), reusable.syncChunkSourceRevisions(),
                 reusable.correctionProfile()
             );
             return composition;
@@ -1403,14 +1404,15 @@ public final class PredictionTileService {
             );
         final byte[] syncEvaluated = directCorrections == null
             ? new byte[PatchCodec.MASK_BYTES] : directCorrections.copyEvaluated();
-        // No server differential means no column can be an evaluated sync pixel, so the 512 KiB
-        // revision plane is left unallocated instead of being filled with Long.MIN_VALUE.
-        final long[] syncSourceRevisions = directCorrections == null
-            ? null : directCorrections.copyPixelSourceRevisions();
+        // No server differential means no column can be an evaluated sync pixel, so the
+        // chunk-granular revision plane is left unallocated instead of being filled with
+        // Long.MIN_VALUE.
+        final long[] syncChunkSourceRevisions = directCorrections == null
+            ? null : directCorrections.copyChunkSourceRevisions();
         final byte[] blockLight = directCorrections == null
             ? new byte[PatchCodec.PIXELS] : directCorrections.copyBlockLight();
         uploads.maskPredictedPixels(
-            realKey(key), pixels, syncEvaluated, syncSourceRevisions,
+            realKey(key), pixels, syncEvaluated, syncChunkSourceRevisions,
             directCorrections == null
                 ? CorrectionProfile.LEGACY_V1 : directCorrections.correctionProfile()
         );
@@ -1428,7 +1430,7 @@ public final class PredictionTileService {
                 surfaceYs(derived, directCorrections, derived)
             ),
             syncEvaluated,
-            syncSourceRevisions,
+            syncChunkSourceRevisions,
             blockLight,
             composedDaylight,
             composedGamma,
@@ -1697,16 +1699,17 @@ public final class PredictionTileService {
                 children[childZ * 2 + childX] = child;
             }
         }
-        return PredictionMipCache.aggregate(children, mode);
+        return PredictionMipCache.aggregate(children, mode, parent.lod());
     }
 
     private static PredictionMipCache.Tile mipTile(final Composition composition) {
         return new PredictionMipCache.Tile(
+            composition.update().key().lod(),
             composition.update().argbPixels(),
             composition.metadata().biomes(),
             composition.metadata().surfaces(),
             composition.syncEvaluated(),
-            composition.syncSourceRevisions(),
+            composition.syncChunkSourceRevisions(),
             composition.blockLight(),
             composition.composedDaylight(),
             composition.composedGamma(),
@@ -1920,7 +1923,7 @@ public final class PredictionTileService {
         TileUpdate update,
         TileMetadata metadata,
         byte[] syncEvaluated,
-        long[] syncSourceRevisions,
+        long[] syncChunkSourceRevisions,
         byte[] blockLight,
         float composedDaylight,
         float composedGamma,
