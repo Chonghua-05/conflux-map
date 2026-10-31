@@ -1156,32 +1156,26 @@ public final class PredictionTileService {
         final int netherY
     ) {
         Composition composition = null;
+        // The mode this composition runs under: composeTile reads the same field, so comparing
+        // it against the live field inside the monitor is the same staleness check comparing the
+        // composition's mode used to be.
+        final PredictionViewMode requestedMode = viewMode;
         try {
-            composition = composeTile(key, token, viewMode, netherY);
+            composition = composeTile(key, token, requestedMode, netherY);
         } finally {
             synchronized (this) {
                 if (composition != null && generation == reloadGeneration
                     && (!isCurrentNetherBiomeKey(key)
                         || netherGeneration == netherBiomeGeneration)
-                    && composition.mode() == viewMode) {
+                    && requestedMode == viewMode) {
                     requestedTiles.add(key);
                     metadataTiles.put(metadataKey(key), composition.metadata());
-                    mipCache.put(key, new PredictionMipCache.Tile(
-                        key.lod(),
-                        composition.update().argbPixels(),
-                        composition.metadata().biomes(),
-                        composition.metadata().surfaces(),
-                        composition.syncEvaluated(),
-                        composition.syncChunkSourceRevisions(),
-                        composition.blockLight(),
-                        composition.composedDaylight(),
-                        composition.composedGamma(),
-                        composition.mode(),
-                        composition.hasServerState(),
-                        composition.freshnessValidatedAtMillis(),
-                        composition.serverCoverageValidatedAtMillis(),
-                        composition.correctionProfile()
-                    ));
+                    // A null tile means "not planar-cacheable" (see planarTile): it still
+                    // composed and uploads, it just never enters the mip cache. Re-putting a
+                    // cache hit refreshes the same tile instance's LRU position.
+                    if (composition.tile() != null) {
+                        mipCache.put(key, composition.tile());
+                    }
                     staleViewModeTiles.remove(key);
                     staleRealCoverageTiles.remove(key);
                     invalidateCachedAncestorsAndQueueVisible(key, token);
@@ -1264,42 +1258,54 @@ public final class PredictionTileService {
             ? 0L
             : directCorrections.reusableValidatedAtMillis();
         final long nowMillis = millisClock.getAsLong();
+        final MapColorStyle style = mapColorStyle;
         final PredictionMipCache.Tile reusable = reusableCacheTile(
             exact, lower, nowMillis, directHasServerState, directValidatedAt
         );
         if (reusable != null) {
-            final Composition composition = new Composition(
-                tileUpdate(
-                    key,
-                    reusable.pixels(),
-                    reusable.blockLight(),
-                    reusable.composedDaylight(),
-                    reusable.composedGamma(),
-                    mapColorStyle
-                ),
-                new TileMetadata(reusable.biomes(), reusable.surfaces()),
-                reusable.syncEvaluated(),
-                reusable.syncChunkSourceRevisions(),
-                reusable.blockLight(),
-                reusable.composedDaylight(),
-                reusable.composedGamma(),
-                reusable.mode(),
-                reusable.hasServerState(),
-                reusable.freshnessValidatedAtMillis(),
-                reusable.serverCoverageValidatedAtMillis(),
-                reusable.correctionProfile()
+            // The cached tile carries derived planes, not pixels: rebuild the grids it encodes
+            // and re-run the fresh path's own composer seam (shade), so the hit is bit-identical
+            // to a fresh composition and tracks the live styling instead of the composing-time
+            // one.
+            final DerivedGrid cachedDerived = new DerivedGrid();
+            final BaselineGrid cachedGrid = new BaselineGrid(lod, tileOriginX, tileOriginZ);
+            reconstructGrids(reusable, cachedGrid, cachedDerived);
+            final QuadrantLayout.Mask quadrantMask =
+                reapplyCachedLayering(key, cachedGrid, cachedDerived);
+            final int[] pixels = shade(
+                key, cachedDerived, cachedGrid, directCorrections, compositionMode, quadrantMask
             );
+            // Live corrections win; the cached planes are the no-corrections fallback - the same
+            // expressions the fresh path derives these planes with.
+            final byte[] syncEvaluated = directCorrections == null
+                ? reusable.syncEvaluated() : directCorrections.copyEvaluated();
+            final long[] syncChunkSourceRevisions = directCorrections == null
+                ? reusable.syncChunkSourceRevisions() : directCorrections.copyChunkSourceRevisions();
+            final byte[] blockLight = directCorrections == null
+                ? reusable.blockLight() : directCorrections.copyBlockLight();
             uploads.maskPredictedPixels(
-                realKey(key), composition.update().argbPixels(),
-                reusable.syncEvaluated(), reusable.syncChunkSourceRevisions(),
-                reusable.correctionProfile()
+                realKey(key), pixels, syncEvaluated, syncChunkSourceRevisions,
+                directCorrections == null
+                    ? reusable.correctionProfile() : directCorrections.correctionProfile()
             );
-            return composition;
+            final AppliedLighting appliedLighting = applyLayerLighting(
+                key, pixels, blockLight, style
+            );
+            return new Composition(
+                tileUpdate(
+                    key, pixels, blockLight, appliedLighting.daylight(), appliedLighting.gamma(),
+                    style
+                ),
+                new TileMetadata(
+                    biomeIds(cachedGrid, directCorrections, cachedGrid),
+                    surfaceYs(cachedDerived, directCorrections, cachedDerived)
+                ),
+                reusable
+            );
         }
 
         final BaselineGrid grid;
         final DerivedGrid derived;
-        final int baselineMapColorId;
         final QuadrantLayout quadrants = state.quadrantLayout(key.dimension());
         final QuadrantLayout.Mask quadrantMask;
         if (lowerNetherBiome) {
@@ -1319,17 +1325,14 @@ public final class PredictionTileService {
                 quadrants.applyBiomes(grid);
             }
             derived = BaselineDeriver.derive(grid);
-            baselineMapColorId = Proto.MAP_COLOR_NONE;
             quadrantMask = null;
         } else {
             final FlatBaseline flat = state.flatBaseline(key.dimension());
-            if (state.preset(key.dimension()) == WorldPreset.FLAT && flat != null) {
+            if (isSuperflat(key.dimension())) {
                 // Superflat: every column is the same known surface - no seed, no native sampling.
                 grid = flat.toBaselineGrid();
                 derived = flat.toDerivedGrid();
-                baselineMapColorId = flat.mapColorId();
-                quadrantMask = flat.topMaterialId().isEmpty() ? null
-                    : new QuadrantLayout.Mask(null, uniformFlatMaterials(flat.topMaterialId()));
+                quadrantMask = flatQuadrantMask(key.dimension());
             } else {
                 final long seed = state.seed();
                 final BaselineSampler sampler = new NativeBaselineSampler(
@@ -1351,7 +1354,6 @@ public final class PredictionTileService {
                         quadrants.applyBiomes(grid);
                     }
                     derived = BaselineDeriver.derive(grid);
-                    baselineMapColorId = Proto.MAP_COLOR_NONE;
                     quadrantMask = null;
                 } else {
                     grid = key.dimension().equals(DimensionId.NETHER)
@@ -1368,40 +1370,13 @@ public final class PredictionTileService {
                     // canopy, so synthetic trees cannot survive in a cleared or flat quadrant. The
                     // companion's PatchBuilder masks its residual baseline with the same code.
                     quadrantMask = quadrants == null ? null : quadrants.apply(grid, derived);
-                    // Terrain mode owns the roof material, while the separate biome composer below owns
-                    // biome identity. Treat the fixed Nether plane like a uniform bedrock superflat.
-                    baselineMapColorId = key.dimension().equals(DimensionId.NETHER)
-                        ? PredictionDimensions.NETHER_ROOF_MAP_COLOR_ID
-                        : Proto.MAP_COLOR_NONE;
                 }
             }
         }
 
-        final MapColorStyle style = mapColorStyle;
-        final XaeroMapStyle.Shadow shadow = XaeroMapStyle.shadowFor(key.dimension());
-        final int[] pixels = BiomeTileKeys.isBiome(key)
-            ? PredictedBiomeComposer.compose(
-                derived, grid, directCorrections, compositionMode, lod, derived, grid
-            )
-            : PredictedTileComposer.compose(
-                derived, grid, state.palette(), directCorrections, compositionMode, lod,
-                baselineMapColorId, derived, grid, baselineMapColorId,
-                !key.dimension().equals(DimensionId.NETHER),
-                key.dimension().equals(DimensionId.NETHER)
-                    ? LightTint.multiplier(0, 0, true)
-                    : key.dimension().equals(DimensionId.END) && style == MapColorStyle.CONFLUX
-                        // The End owes the cave dark-light contract too: bake the zero-light
-                        // ambient in here (baseline and corrections alike), then the per-column
-                        // block-light plane replaces it in applyLayerLighting. The Xaero style
-                        // bakes nothing - its terrain shading adds light, which the ambient
-                        // ratio-replace cannot invert - and instead takes the curve applied
-                        // over the shaded pixel, exactly like the captured Xaero End tiles.
-                        ? LightTint.multiplier(0, 0, false)
-                        : 0xFFFFFFFF,
-                syncedMaterials, style, shadow,
-                quadrantMask == null ? null : quadrantMask.mapColorOverrides(),
-                quadrantMask == null ? null : quadrantMask.topMaterials()
-            );
+        final int[] pixels = shade(
+            key, derived, grid, directCorrections, compositionMode, quadrantMask
+        );
         final byte[] syncEvaluated = directCorrections == null
             ? new byte[PatchCodec.MASK_BYTES] : directCorrections.copyEvaluated();
         // No server differential means no column can be an evaluated sync pixel, so the
@@ -1419,27 +1394,214 @@ public final class PredictionTileService {
         final AppliedLighting appliedLighting = applyLayerLighting(
             key, pixels, blockLight, style
         );
-        final float composedDaylight = appliedLighting.daylight();
-        final float composedGamma = appliedLighting.gamma();
         return new Composition(
             tileUpdate(
-                key, pixels, blockLight, composedDaylight, composedGamma, style
+                key, pixels, blockLight, appliedLighting.daylight(), appliedLighting.gamma(), style
             ),
             new TileMetadata(
                 biomeIds(grid, directCorrections, grid),
                 surfaceYs(derived, directCorrections, derived)
             ),
+            planarTile(
+                key, grid, derived, blockLight, syncEvaluated, syncChunkSourceRevisions,
+                compositionMode, directHasServerState, directValidatedAt,
+                directCorrections == null
+                    ? CorrectionProfile.LEGACY_V1 : directCorrections.correctionProfile()
+            )
+        );
+    }
+
+    /**
+     * The single composer invocation both composition paths run: the fresh path right after
+     * sampling and canopy, the cache-hit path after rebuilding the grids from a cached tile's
+     * planes. Sharing this seam is what makes a cache hit bit-identical to a fresh composition by
+     * construction rather than by luck; styling inputs (palette, map-color style, ambient tint)
+     * are read live here, so a re-shade tracks the current settings instead of stale ones.
+     */
+    private int[] shade(
+        final TileKey key,
+        final DerivedGrid derived,
+        final BaselineGrid grid,
+        final CorrectionTile directCorrections,
+        final PredictionViewMode compositionMode,
+        final QuadrantLayout.Mask quadrantMask
+    ) {
+        if (BiomeTileKeys.isBiome(key)) {
+            return PredictedBiomeComposer.compose(
+                derived, grid, directCorrections, compositionMode, key.lod(), derived, grid
+            );
+        }
+        final MapColorStyle style = mapColorStyle;
+        final int baselineMapColorId = baselineMapColorId(key);
+        return PredictedTileComposer.compose(
+            derived, grid, state.palette(), directCorrections, compositionMode, key.lod(),
+            baselineMapColorId, derived, grid, baselineMapColorId,
+            !key.dimension().equals(DimensionId.NETHER),
+            ambientLightTint(key, style),
+            syncedMaterials, style, XaeroMapStyle.shadowFor(key.dimension()),
+            quadrantMask == null ? null : quadrantMask.mapColorOverrides(),
+            quadrantMask == null ? null : quadrantMask.topMaterials()
+        );
+    }
+
+    /**
+     * The compose-wide vanilla map colour non-corrected baseline pixels paint: a superflat's
+     * actual top block, the fixed Nether roof plane, or the biome palette. Purely a function of
+     * the tile's identity and live state, so both composition paths derive the same value.
+     */
+    private int baselineMapColorId(final TileKey key) {
+        if (isSuperflat(key.dimension())) {
+            return state.flatBaseline(key.dimension()).mapColorId();
+        }
+        // Terrain mode owns the roof material, while the separate biome composer owns
+        // biome identity. Treat the fixed Nether plane like a uniform bedrock superflat.
+        return key.dimension().equals(DimensionId.NETHER)
+            ? PredictionDimensions.NETHER_ROOF_MAP_COLOR_ID
+            : Proto.MAP_COLOR_NONE;
+    }
+
+    /** Ambient tint baked in before height and relief shading. */
+    private static int ambientLightTint(final TileKey key, final MapColorStyle style) {
+        if (key.dimension().equals(DimensionId.NETHER)) {
+            return LightTint.multiplier(0, 0, true);
+        }
+        if (key.dimension().equals(DimensionId.END) && style == MapColorStyle.CONFLUX) {
+            // The End owes the cave dark-light contract too: bake the zero-light ambient in
+            // here (baseline and corrections alike), then the per-column block-light plane
+            // replaces it in applyLayerLighting. The Xaero style bakes nothing - its terrain
+            // shading adds light, which the ambient ratio-replace cannot invert - and instead
+            // takes the curve applied over the shaded pixel, exactly like the captured Xaero
+            // End tiles.
+            return LightTint.multiplier(0, 0, false);
+        }
+        return 0xFFFFFFFF;
+    }
+
+    /** Whether the dimension composes from a uniform flat baseline instead of sampled terrain. */
+    private boolean isSuperflat(final DimensionId dimension) {
+        return state.preset(dimension) == WorldPreset.FLAT && state.flatBaseline(dimension) != null;
+    }
+
+    /** A whole-dimension flat surface declares the same top material in every quadrant. */
+    private QuadrantLayout.Mask flatQuadrantMask(final DimensionId dimension) {
+        final String topMaterialId = state.flatBaseline(dimension).topMaterialId();
+        return topMaterialId.isEmpty() ? null
+            : new QuadrantLayout.Mask(null, uniformFlatMaterials(topMaterialId));
+    }
+
+    private boolean lowerNetherBiomeView(final TileKey key) {
+        if (!BiomeTileKeys.isBiome(key)) {
+            return false;
+        }
+        try {
+            return isLowerNetherLayer(
+                key.dimension(), MapLayer.parse(BiomeTileKeys.baseLayerId(key))
+            );
+        } catch (final IllegalArgumentException e) {
+            return false;
+        }
+    }
+
+    /**
+     * Re-applies the quadrant/flat layering a fresh composition applied before its planes were
+     * snapshotted, so the composer arguments (the {@link QuadrantLayout.Mask} in particular)
+     * come out identical on a cache hit. Every apply overwrites its columns with constants, so
+     * re-running it on reconstructed grids is idempotent.
+     */
+    private QuadrantLayout.Mask reapplyCachedLayering(
+        final TileKey key,
+        final BaselineGrid grid,
+        final DerivedGrid derived
+    ) {
+        final QuadrantLayout quadrants = state.quadrantLayout(key.dimension());
+        if (lowerNetherBiomeView(key)) {
+            if (quadrants != null) {
+                quadrants.applyBiomes(grid);
+            }
+            return null;
+        }
+        if (isSuperflat(key.dimension())) {
+            return flatQuadrantMask(key.dimension());
+        }
+        if (BiomeTileKeys.isBiome(key)) {
+            if (quadrants != null) {
+                quadrants.applyBiomes(grid);
+            }
+            return null;
+        }
+        return quadrants == null ? null : quadrants.apply(grid, derived);
+    }
+
+    /**
+     * Rebuilds the sampled grids a cached tile's planes encode: the packed plane unpacks to the
+     * full margin-inclusive derived arrays (void cells back to {@link BaselineGrid#NO_SURFACE})
+     * and the biome plane fills the inner cells; margin biome cells stay zero because the
+     * composer and the metadata helpers only ever read inner indices. Package-visible so the
+     * plane parity test round-trips through the exact seam the hit path uses.
+     */
+    static void reconstructGrids(
+        final PredictionMipCache.Tile tile,
+        final BaselineGrid grid,
+        final DerivedGrid derived
+    ) {
+        PackedSurfacePlane.unpackPlane(tile.packedSurfaceKind(), derived.surfaceY, derived.kind);
+        final byte[] fluidDepth = tile.fluidDepth();
+        for (int i = 0; i < PackedSurfacePlane.CELLS; i++) {
+            derived.fluidDepth[i] = fluidDepth[i] & 0xFF;
+        }
+        final byte[] biomes = tile.biomes();
+        for (int z = 0; z < BaselineGrid.PIXELS; z++) {
+            for (int x = 0; x < BaselineGrid.PIXELS; x++) {
+                grid.biomeId[BaselineGrid.index(x, z)] = biomes[z * BaselineGrid.PIXELS + x] & 0xFF;
+            }
+        }
+    }
+
+    /**
+     * Compacts the freshly derived planes into a cache tile, or returns null when the tile
+     * cannot round-trip: the biome plane is byte-wide, and a server-synced flat baseline can
+     * declare biome ids beyond it. A null result still composes and uploads; the tile just never
+     * enters the mip cache.
+     */
+    private static PredictionMipCache.Tile planarTile(
+        final TileKey key,
+        final BaselineGrid grid,
+        final DerivedGrid derived,
+        final byte[] blockLight,
+        final byte[] syncEvaluated,
+        final long[] syncChunkSourceRevisions,
+        final PredictionViewMode compositionMode,
+        final boolean directHasServerState,
+        final long directValidatedAt,
+        final CorrectionProfile correctionProfile
+    ) {
+        final short[] packedSurfaceKind = PackedSurfacePlane.packPlane(derived.surfaceY, derived.kind);
+        // Fluid depths are already 0-255, so the narrowing byte is the plane's own storage form.
+        final byte[] fluidDepth = new byte[PackedSurfacePlane.CELLS];
+        for (int i = 0; i < PackedSurfacePlane.CELLS; i++) {
+            fluidDepth[i] = (byte) derived.fluidDepth[i];
+        }
+        final byte[] biomes = new byte[BaselineGrid.PIXELS * BaselineGrid.PIXELS];
+        for (int pixel = 0; pixel < biomes.length; pixel++) {
+            final int biomeId = grid.biomeId[BaselineGrid.index(pixel & 255, pixel >>> 8)];
+            if (biomeId < 0 || biomeId > 0xFF) {
+                return null;
+            }
+            biomes[pixel] = (byte) biomeId;
+        }
+        return new PredictionMipCache.Tile(
+            key.lod(),
+            packedSurfaceKind,
+            fluidDepth,
+            biomes,
+            blockLight,
             syncEvaluated,
             syncChunkSourceRevisions,
-            blockLight,
-            composedDaylight,
-            composedGamma,
             compositionMode,
             directHasServerState,
             directValidatedAt,
             directHasServerState ? directValidatedAt : 0L,
-            directCorrections == null
-                ? CorrectionProfile.LEGACY_V1 : directCorrections.correctionProfile()
+            correctionProfile
         );
     }
 
@@ -1607,10 +1769,31 @@ public final class PredictionTileService {
         final long generation
     ) {
         PredictionMipCache.Tile reduced = null;
+        TileMetadata reducedMetadata = null;
+        int[] reducedPixels = null;
         try {
             final long nowMillis = millisClock.getAsLong();
             if (hasFreshPersistedChildren(parent, token, nowMillis)) {
                 reduced = reduceFreshChildren(parent, token, nowMillis, viewMode);
+            }
+            if (reduced != null) {
+                // The reduced tile is planar, so its upload re-shades through the same seam a
+                // cache hit uses. The reduction path has no parent-level CorrectionTile to
+                // re-apply; the aggregated correction planes already ride along on the tile.
+                // Shaded out here so the compose never runs under the service monitor.
+                final DerivedGrid cachedDerived = new DerivedGrid();
+                final BaselineGrid cachedGrid = new BaselineGrid(
+                    parent.lod(), parent.originBlockX(), parent.originBlockZ()
+                );
+                reconstructGrids(reduced, cachedGrid, cachedDerived);
+                final QuadrantLayout.Mask quadrantMask =
+                    reapplyCachedLayering(parent, cachedGrid, cachedDerived);
+                reducedPixels = shade(parent, cachedDerived, cachedGrid, null, viewMode, quadrantMask);
+                applyLayerLighting(parent, reducedPixels, reduced.blockLight(), mapColorStyle);
+                reducedMetadata = new TileMetadata(
+                    biomeIds(cachedGrid, null, cachedGrid),
+                    surfaceYs(cachedDerived, null, cachedDerived)
+                );
             }
         } finally {
             synchronized (this) {
@@ -1619,11 +1802,8 @@ public final class PredictionTileService {
                         missingLowerCoverage.add(parent);
                     } else {
                         mipCache.put(parent, reduced);
-                        metadataTiles.put(
-                            metadataKey(parent),
-                            new TileMetadata(reduced.biomes(), reduced.surfaces())
-                        );
-                        uploads.submitUpload(TileUpdate.fullTile(parent, reduced.pixels()));
+                        metadataTiles.put(metadataKey(parent), reducedMetadata);
+                        uploads.submitUpload(TileUpdate.fullTile(parent, reducedPixels));
                     }
                 }
                 lowerCoverageInFlight.remove(parent);
@@ -1689,7 +1869,7 @@ public final class PredictionTileService {
                 if (correction != null && correction.hasCommittedState()
                     && correction.isFreshAt(nowMillis, CORRECTION_REUSE_TTL_MS)) {
                     final Composition composition = composeTile(childKey, token);
-                    child = composition == null ? null : mipTile(composition);
+                    child = composition == null ? null : composition.tile();
                 } else {
                     child = reduceFreshChildren(childKey, token, nowMillis, mode);
                 }
@@ -1700,25 +1880,6 @@ public final class PredictionTileService {
             }
         }
         return PredictionMipCache.aggregate(children, mode, parent.lod());
-    }
-
-    private static PredictionMipCache.Tile mipTile(final Composition composition) {
-        return new PredictionMipCache.Tile(
-            composition.update().key().lod(),
-            composition.update().argbPixels(),
-            composition.metadata().biomes(),
-            composition.metadata().surfaces(),
-            composition.syncEvaluated(),
-            composition.syncChunkSourceRevisions(),
-            composition.blockLight(),
-            composition.composedDaylight(),
-            composition.composedGamma(),
-            composition.mode(),
-            composition.hasServerState(),
-            composition.freshnessValidatedAtMillis(),
-            composition.serverCoverageValidatedAtMillis(),
-            composition.correctionProfile()
-        );
     }
 
     /** Caller must hold the monitor. */
@@ -1919,19 +2080,16 @@ public final class PredictionTileService {
         return new PixelLookup(metadataKey, requestKey, pixel);
     }
 
+    /**
+     * One finished composition: what to upload, the cursor metadata it published, and the planar
+     * cache tile it produced or served - {@code null} when the tile is not planar-cacheable (see
+     * {@link #planarTile}). Every correction or styling plane a composition needs is either
+     * inside the tile or rebuilt locally by the path that produced it.
+     */
     private record Composition(
         TileUpdate update,
         TileMetadata metadata,
-        byte[] syncEvaluated,
-        long[] syncChunkSourceRevisions,
-        byte[] blockLight,
-        float composedDaylight,
-        float composedGamma,
-        PredictionViewMode mode,
-        boolean hasServerState,
-        long freshnessValidatedAtMillis,
-        long serverCoverageValidatedAtMillis,
-        CorrectionProfile correctionProfile
+        PredictionMipCache.Tile tile
     ) {
     }
 

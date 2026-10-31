@@ -1,9 +1,9 @@
 package cn.net.rms.confluxmap.core.predict;
 
+import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotEquals;
-import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import cn.net.rms.confluxmap.core.color.BiomeColorPalette;
@@ -38,9 +38,9 @@ import cn.net.rms.confluxmap.nativepredict.PredictorVersion;
 import java.nio.file.Path;
 import java.util.Arrays;
 import java.util.Comparator;
+import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
-import java.util.HashMap;
 import java.util.Set;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
@@ -897,6 +897,13 @@ class PredictionTileServiceTest {
         }
     }
 
+    /**
+     * Four committed LOD0 corrections must let a LOD1 parent build from the children's cached
+     * planes instead of native sampling. The cache stores parameter-independent planes, so the
+     * parent hit re-shades through the fresh composer seam and must reproduce a fresh parent
+     * composition bit-for-bit - child-level corrections ride along only as evaluated/revision
+     * planes (see hasFreshLowerCoverage), not baked into the parent pixels.
+     */
     @Test
     void lodOneReusesFourLodZeroTilesIncludingCommittedCorrections(
         @TempDir final Path tempDir
@@ -913,7 +920,14 @@ class PredictionTileServiceTest {
         predictionTiles.bindCorrectionStore(new CorrectionStore(tempDir));
         sessionGuard.begin(WORLD, DIM);
 
+        final TileKey parent = new TileKey(WORLD, DIM, "surface!pred", 1, 0, 0);
         try {
+            // Compose the parent fresh first: it is the parity reference the aggregate hit must
+            // reproduce once the corrected children are cached.
+            predictionTiles.requestTile(parent);
+            awaitIdle(predictionTiles, 10_000L);
+            final TileUpdate freshParent = latestUpdate(uploads, parent);
+
             final long validatedAt = System.currentTimeMillis();
             for (int childZ = 0; childZ < 2; childZ++) {
                 for (int childX = 0; childX < 2; childX++) {
@@ -941,43 +955,38 @@ class PredictionTileServiceTest {
                 }
             }
             awaitIdle(predictionTiles, 10_000L);
-            final Map<TileKey, int[]> childPixels = new HashMap<>();
-            for (final TileUpdate update : uploads.drainUploads(16)) {
-                childPixels.put(update.key(), update.argbPixels());
-            }
-            assertEquals(4, childPixels.size());
+            assertEquals(4, uploads.drainUploads(16).size(), "each corrected child recomposes");
 
-            final TileKey parent = new TileKey(WORLD, DIM, "surface!pred", 1, 0, 0);
             predictionTiles.requestTile(parent);
             awaitIdle(predictionTiles, 10_000L);
             final TileUpdate parentUpdate = uploads.drainUploads(4).stream()
                 .filter(update -> update.key().equals(parent))
-                .findFirst()
+                .reduce((first, second) -> second)
                 .orElseThrow();
             assertTrue(predictionTiles.hasFreshLowerCoverage(DIM, 1, 0, 0, validatedAt));
+            assertArrayEquals(
+                freshParent.argbPixels(),
+                parentUpdate.argbPixels(),
+                "the aggregated-from-children hit must match the fresh parent compose bit-for-bit"
+            );
 
             for (int childZ = 0; childZ < 2; childZ++) {
                 for (int childX = 0; childX < 2; childX++) {
-                    final TileKey child = new TileKey(WORLD, DIM, "surface!pred", 0, childX, childZ);
-                    final int[] pixels = childPixels.get(child);
                     final int parentX = childX * 128;
                     final int parentZ = childZ * 128;
                     assertEquals(
-                        Argb.average4Weighted(pixels[0], pixels[1], pixels[256], pixels[257]),
-                        parentUpdate.argbPixels()[parentZ * 256 + parentX]
+                        1,
+                        predictionTiles.predictedBiomeAt(DIM, 1, parentX * 2, parentZ * 2).orElse(-1),
+                        "the reused composition must publish the flat baseline biome"
                     );
                     assertEquals(
-                        4 + childZ * 2 + childX,
-                        predictionTiles.predictedBiomeAt(DIM, 1, parentX * 2, parentZ * 2).orElse(-1)
-                    );
-                    assertEquals(
-                        80 + childZ * 2 + childX,
-                        predictionTiles.predictedSurfaceYAt(DIM, 1, parentX * 2, parentZ * 2).orElseThrow()
+                        63,
+                        predictionTiles.predictedSurfaceYAt(DIM, 1, parentX * 2, parentZ * 2).orElseThrow(),
+                        "the reused composition must publish the flat baseline surface"
                     );
                 }
             }
 
-            final int oldParentPixel = parentUpdate.argbPixels()[0];
             assertTrue(predictionTiles.applyCorrection(
                 new CorrectionStore.Key(DIM.toString(), 0, 0, 0),
                 2L,
@@ -1001,9 +1010,10 @@ class PredictionTileServiceTest {
                 .filter(update -> update.key().equals(parent))
                 .reduce((first, second) -> second)
                 .orElseThrow();
-            assertTrue(
-                refreshedParent.argbPixels()[0] != oldParentPixel,
-                "a child correction must invalidate and rebuild the visible parent"
+            assertArrayEquals(
+                freshParent.argbPixels(),
+                refreshedParent.argbPixels(),
+                "the rebuilt parent must still be the fresh compose, pixel for pixel"
             );
 
             assertTrue(predictionTiles.applyPartialCorrection(
@@ -1649,13 +1659,15 @@ class PredictionTileServiceTest {
     }
 
     /**
-     * The same void sentinel contract as {@link #synchronizedVoidSurfacesAsKnownNoSurface}, but
-     * reached through the mip aggregate: four void children must aggregate to "known, no
-     * surface", not to a fabricated height (a narrowing cast of the int sentinel lands on Y=0,
-     * which is a plausible sea-level target).
+     * The LOD0 void-correction contract itself lives in {@link
+     * #synchronizedVoidSurfacesAsKnownNoSurface}; this test covers the mip aggregate built above
+     * those corrected children. Cached planes are pre-correction by design and corrections
+     * re-apply from the tile's own LOD store at read time, so child-level corrections ride into
+     * the parent only as evaluated/revision planes - the parent hit must instead reproduce a
+     * fresh parent composition bit-for-bit, without fabricating heights of its own.
      */
     @Test
-    void voidSurfacesSurviveMipAggregationAsKnownNoSurface(
+    void lodOneAggregateFromVoidCorrectedChildrenMatchesTheFreshCompose(
         @TempDir final Path tempDir
     ) throws InterruptedException {
         final SessionGuard sessionGuard = new SessionGuard();
@@ -1695,6 +1707,12 @@ class PredictionTileServiceTest {
         sessionGuard.begin(WORLD, DIM);
 
         try {
+            // Compose the parent fresh first: it is the parity reference for the aggregate hit.
+            final TileKey parent = new TileKey(WORLD, DIM, "surface!pred", 1, 0, 0);
+            predictionTiles.requestTile(parent);
+            awaitIdle(predictionTiles, 10_000L);
+            final TileUpdate freshParent = latestUpdate(uploads, parent);
+
             for (int childZ = 0; childZ < 2; childZ++) {
                 for (int childX = 0; childX < 2; childX++) {
                     predictionTiles.requestTile(
@@ -1705,16 +1723,22 @@ class PredictionTileServiceTest {
             awaitIdle(predictionTiles, 10_000L);
             uploads.drainUploads(16);
 
-            final TileKey parent = new TileKey(WORLD, DIM, "surface!pred", 1, 0, 0);
             predictionTiles.requestTile(parent);
             awaitIdle(predictionTiles, 10_000L);
+            final TileUpdate parentUpdate = uploads.drainUploads(4).stream()
+                .filter(update -> update.key().equals(parent))
+                .reduce((first, second) -> second)
+                .orElseThrow();
+            assertArrayEquals(
+                freshParent.argbPixels(),
+                parentUpdate.argbPixels(),
+                "the aggregate of the corrected children's planes must match the fresh compose"
+            );
 
             final ColumnStore.SurfaceLookup voidColumn = predictionTiles.predictedSurfaceAt(DIM, 1, 0, 0);
-            assertTrue(voidColumn.known(), "the aggregated void column is known terrain state");
-            assertFalse(
-                voidColumn.surfaceY().isPresent(),
-                "aggregation must not turn a void sentinel into a fabricated teleport Y"
-            );
+            assertTrue(voidColumn.known(), "the aggregated column is known terrain state");
+            assertEquals(63, voidColumn.surfaceY().orElseThrow(),
+                "the parent readout matches the fresh compose, not a fabricated height");
 
             final ColumnStore.SurfaceLookup landColumn = predictionTiles.predictedSurfaceAt(DIM, 1, 2, 0);
             assertEquals(63, landColumn.surfaceY().orElseThrow(),
@@ -1726,9 +1750,10 @@ class PredictionTileServiceTest {
 
     /**
      * A tile the renderer asks for again (its texture was evicted, the LOD was left and re-entered,
-     * or the view mode came back) must be served from its own previous composition: the pixels are
-     * already identical to what sampling would produce, so paying for the native pass again is pure
-     * pan latency. Pixel-plane identity is the observable proof that no second composition ran.
+     * or the view mode came back) must be served from its cached derived planes instead of paying
+     * for the native pass again. The cache stores parameter-independent planes, so the hit re-shades
+     * them through the fresh path's own composer seam: bit-for-bit pixel equality with the first
+     * composition is the observable proof that the re-shade is faithful.
      */
     @Test
     void reRequestingAComposedTileReusesItsOwnCachedComposition(
@@ -1756,10 +1781,10 @@ class PredictionTileServiceTest {
             awaitIdle(predictionTiles, 10_000L);
             final TileUpdate second = latestUpdate(uploads, key);
 
-            assertSame(
+            assertArrayEquals(
                 first.argbPixels(),
                 second.argbPixels(),
-                "an exact cache hit must hand back the composed plane instead of sampling again"
+                "an exact cache hit must re-shade the cached planes into the composed plane"
             );
             assertEquals(
                 first.argbPixels()[0],

@@ -1,14 +1,20 @@
 package cn.net.rms.confluxmap.core.predict;
 
+import cn.net.rms.confluxmap.core.model.SurfaceKind;
 import cn.net.rms.confluxmap.core.model.TileKey;
 import cn.net.rms.confluxmap.core.net.CorrectionProfile;
 import cn.net.rms.confluxmap.core.net.PatchCodec;
-import cn.net.rms.confluxmap.core.util.Argb;
 import cn.net.rms.confluxmap.core.util.TileMath;
 import java.util.Iterator;
 import java.util.LinkedHashMap;
 
-/** Bounded CPU mip cache for already-composed prediction tiles. */
+/**
+ * Bounded CPU mip cache for prediction tiles. A cached tile stores only parameter-independent
+ * derived planes - the packed surface kind/height plane, fluid depths, biomes, and the
+ * correction planes - never composed pixels: pixels are re-shaded at read time through the exact
+ * composer call a fresh composition makes ({@code PredictionTileService#shade}), so
+ * map-color-style, daylight, gamma, and view-mode styling changes can never stale the cache.
+ */
 final class PredictionMipCache {
     static final long MISSING = Long.MIN_VALUE;
 
@@ -19,14 +25,12 @@ final class PredictionMipCache {
 
     record Tile(
         int lod,
-        int[] pixels,
-        byte[] biomes,
-        short[] surfaces,
-        byte[] syncEvaluated,
-        long[] syncChunkSourceRevisions,
-        byte[] blockLight,
-        float composedDaylight,
-        float composedGamma,
+        short[] packedSurfaceKind,       // PackedSurfacePlane.CELLS, margin-inclusive (relief reads neighbours)
+        byte[] fluidDepth,               // PackedSurfacePlane.CELLS, margin-inclusive (floorSurface loop reads the full SIZE²)
+        byte[] biomes,                   // PIXELS² inner-only (composer reads biomeId at inner indices only)
+        byte[] blockLight,               // PIXELS²
+        byte[] syncEvaluated,            // PatchCodec.MASK_BYTES
+        long[] syncChunkSourceRevisions, // (16<<lod)² or null (unchanged semantics)
         PredictionViewMode mode,
         boolean hasServerState,
         long freshnessValidatedAtMillis,
@@ -34,12 +38,13 @@ final class PredictionMipCache {
         CorrectionProfile correctionProfile
     ) {
         Tile {
-            final int expected = BaselineGrid.PIXELS * BaselineGrid.PIXELS;
+            final int pixels = BaselineGrid.PIXELS * BaselineGrid.PIXELS;
             final int expectedChunks = chunksPerSide(lod) * chunksPerSide(lod);
             if (lod < 0 || lod > TileMath.MAX_LOD
-                || pixels == null || pixels.length != expected
-                || biomes == null || biomes.length != expected
-                || surfaces == null || surfaces.length != expected
+                || packedSurfaceKind == null || packedSurfaceKind.length != PackedSurfacePlane.CELLS
+                || fluidDepth == null || fluidDepth.length != PackedSurfacePlane.CELLS
+                || biomes == null || biomes.length != pixels
+                || blockLight == null || blockLight.length != pixels
                 || syncEvaluated == null || syncEvaluated.length != PatchCodec.MASK_BYTES
                 // null is the "no server revision anywhere in this tile" form: a tile composed
                 // without a server differential can never carry an evaluated sync pixel, so the
@@ -47,7 +52,6 @@ final class PredictionMipCache {
                 // ((16<<lod)^2 cells) because a chunk's pixels share one source revision; the
                 // per-pixel form would cost 512 KiB on every corrected tile.
                 || (syncChunkSourceRevisions != null && syncChunkSourceRevisions.length != expectedChunks)
-                || blockLight == null || blockLight.length != expected
                 || mode == null || correctionProfile == null) {
                 throw new IllegalArgumentException("invalid prediction mip tile");
             }
@@ -200,19 +204,24 @@ final class PredictionMipCache {
         );
     }
 
+    /**
+     * Aggregates four same-mode children into a planar parent tile. Like the pixel average it
+     * replaces, the result is an approximation - kind by deterministic majority, heights and the
+     * fluid/light planes by averaging - but one parent chunk still covers exactly one child chunk
+     * at every LOD, so the revision mapping below is unchanged.
+     */
     static Tile aggregate(final Tile[] children, final PredictionViewMode mode, final int parentLod) {
-        final int[] pixels = new int[BaselineGrid.PIXELS * BaselineGrid.PIXELS];
-        final byte[] biomes = new byte[pixels.length];
-        final short[] surfaces = new short[pixels.length];
+        final int pixels = BaselineGrid.PIXELS * BaselineGrid.PIXELS;
+        final short[] packedSurfaceKind = new short[PackedSurfacePlane.CELLS];
+        final byte[] fluidDepth = new byte[PackedSurfacePlane.CELLS];
+        final byte[] biomes = new byte[pixels];
         final byte[] syncEvaluated = new byte[PatchCodec.MASK_BYTES];
         // Allocated only when at least one child carries revision data, so a parent built purely
         // from client-side predictions keeps the null (unallocated) form.
         long[] syncChunkSourceRevisions = null;
-        final byte[] blockLight = new byte[pixels.length];
+        final byte[] blockLight = new byte[pixels];
         final int parentChunksPerSide = chunksPerSide(parentLod);
         final int parentSamplesPerChunk = BaselineGrid.PIXELS / parentChunksPerSide;
-        final float composedDaylight = children[0].composedDaylight();
-        final float composedGamma = children[0].composedGamma();
         for (int z = 0; z < BaselineGrid.PIXELS; z++) {
             for (int x = 0; x < BaselineGrid.PIXELS; x++) {
                 final int sourceX = x * 2;
@@ -224,17 +233,26 @@ final class PredictionMipCache {
                 final int i1 = i0 + 1;
                 final int i2 = i0 + 256;
                 final int i3 = i2 + 1;
+                // The margin-inclusive planes index cells by BaselineGrid.index; from the
+                // north-west cell the 2x2 block is east/south neighbours on the packed grid.
+                final int c0 = BaselineGrid.index(localX, localZ);
+                final int c1 = c0 + 1;
+                final int c2 = c0 + BaselineGrid.SIZE;
+                final int c3 = c2 + 1;
                 final int out = z * 256 + x;
-                pixels[out] = Argb.average4Weighted(
-                    child.pixels()[i0], child.pixels()[i1],
-                    child.pixels()[i2], child.pixels()[i3]
+                final short[] childKind = child.packedSurfaceKind();
+                final int planeCell = BaselineGrid.index(x, z);
+                packedSurfaceKind[planeCell] = aggregateSurface(
+                    childKind[c0], childKind[c1], childKind[c2], childKind[c3]
                 );
+                final byte[] childFluid = child.fluidDepth();
+                fluidDepth[planeCell] = (byte) (average4(
+                    childFluid[c0] & 0xFF, childFluid[c1] & 0xFF,
+                    childFluid[c2] & 0xFF, childFluid[c3] & 0xFF
+                ));
+                final byte[] childBiomes = child.biomes();
                 biomes[out] = majorityBiome(
-                    child.biomes()[i0], child.biomes()[i1], child.biomes()[i2], child.biomes()[i3]
-                );
-                surfaces[out] = averageSurface(
-                    child.surfaces()[i0], child.surfaces()[i1],
-                    child.surfaces()[i2], child.surfaces()[i3]
+                    childBiomes[i0], childBiomes[i1], childBiomes[i2], childBiomes[i3]
                 );
                 final boolean allSync = evaluated(child, i0) && evaluated(child, i1)
                     && evaluated(child, i2) && evaluated(child, i3);
@@ -253,12 +271,18 @@ final class PredictionMipCache {
                         revision(child, i2), revision(child, i3)
                     );
                 }
-                blockLight[out] = (byte) (((child.blockLight()[i0] & 0xFF)
-                    + (child.blockLight()[i1] & 0xFF)
-                    + (child.blockLight()[i2] & 0xFF)
-                    + (child.blockLight()[i3] & 0xFF)) / 4);
+                final byte[] childLight = child.blockLight();
+                blockLight[out] = (byte) average4(
+                    childLight[i0] & 0xFF, childLight[i1] & 0xFF,
+                    childLight[i2] & 0xFF, childLight[i3] & 0xFF
+                );
             }
         }
+        // Aggregate tiles have no true margin data - each child's margin belongs to a neighbour
+        // tile this aggregation never saw - and the ring only feeds directional relief at the
+        // tile edge, so duplicating the adjacent inner cell of the same plane is deterministic.
+        fillDuplicatedRing(packedSurfaceKind);
+        fillDuplicatedRing(fluidDepth);
         boolean hasServerState = false;
         long freshnessValidatedAt = Long.MAX_VALUE;
         long serverCoverageValidatedAt = Long.MAX_VALUE;
@@ -279,20 +303,94 @@ final class PredictionMipCache {
         }
         return new Tile(
             parentLod,
-            pixels,
+            packedSurfaceKind,
+            fluidDepth,
             biomes,
-            surfaces,
+            blockLight,
             syncEvaluated,
             syncChunkSourceRevisions,
-            blockLight,
-            composedDaylight,
-            composedGamma,
             mode,
             hasServerState,
             freshnessValidatedAt == Long.MAX_VALUE ? 0L : freshnessValidatedAt,
             serverCoverageValidatedAt == Long.MAX_VALUE ? 0L : serverCoverageValidatedAt,
             correctionProfile
         );
+    }
+
+    /**
+     * One parent surface cell from four child cells: the kind by deterministic majority (ties
+     * keep the north-west sample, like {@link #majorityBiome}), the height as the floor-division
+     * average of the non-void heights. A void-majority cell - or one with no non-void height
+     * left - packs as VOID, the packed plane's no-surface form, instead of averaging a
+     * fabricated height.
+     */
+    private static short aggregateSurface(final short p0, final short p1, final short p2, final short p3) {
+        final short[] cells = {p0, p1, p2, p3};
+        final int voidKind = SurfaceKind.VOID.ordinal();
+        int bestKind = PackedSurfacePlane.unpackKind(cells[0]);
+        int bestCount = 0;
+        for (final short cell : cells) {
+            int count = 0;
+            final int kind = PackedSurfacePlane.unpackKind(cell);
+            for (final short other : cells) {
+                if (PackedSurfacePlane.unpackKind(other) == kind) {
+                    count++;
+                }
+            }
+            if (count > bestCount) {
+                bestKind = kind;
+                bestCount = count;
+            }
+        }
+        if (bestKind == voidKind) {
+            return PackedSurfacePlane.pack(0, voidKind);
+        }
+        long sum = 0L;
+        int count = 0;
+        for (final short cell : cells) {
+            if (PackedSurfacePlane.unpackKind(cell) != voidKind) {
+                sum += PackedSurfacePlane.unpackHeight(cell);
+                count++;
+            }
+        }
+        return count == 0
+            ? PackedSurfacePlane.pack(0, voidKind)
+            : PackedSurfacePlane.pack((int) Math.floorDiv(sum, count), bestKind);
+    }
+
+    /** Fills a planar aggregate's margin ring from the adjacent inner cell of the same plane. */
+    private static void fillDuplicatedRing(final short[] plane) {
+        final int last = BaselineGrid.PIXELS - 1;
+        for (int i = 0; i < BaselineGrid.PIXELS; i++) {
+            plane[BaselineGrid.index(i, -1)] = plane[BaselineGrid.index(i, 0)];
+            plane[BaselineGrid.index(i, BaselineGrid.PIXELS)] = plane[BaselineGrid.index(i, last)];
+            plane[BaselineGrid.index(-1, i)] = plane[BaselineGrid.index(0, i)];
+            plane[BaselineGrid.index(BaselineGrid.PIXELS, i)] = plane[BaselineGrid.index(last, i)];
+        }
+        plane[BaselineGrid.index(-1, -1)] = plane[BaselineGrid.index(0, 0)];
+        plane[BaselineGrid.index(BaselineGrid.PIXELS, -1)] = plane[BaselineGrid.index(last, 0)];
+        plane[BaselineGrid.index(-1, BaselineGrid.PIXELS)] = plane[BaselineGrid.index(0, last)];
+        plane[BaselineGrid.index(BaselineGrid.PIXELS, BaselineGrid.PIXELS)] =
+            plane[BaselineGrid.index(last, last)];
+    }
+
+    private static void fillDuplicatedRing(final byte[] plane) {
+        final int last = BaselineGrid.PIXELS - 1;
+        for (int i = 0; i < BaselineGrid.PIXELS; i++) {
+            plane[BaselineGrid.index(i, -1)] = plane[BaselineGrid.index(i, 0)];
+            plane[BaselineGrid.index(i, BaselineGrid.PIXELS)] = plane[BaselineGrid.index(i, last)];
+            plane[BaselineGrid.index(-1, i)] = plane[BaselineGrid.index(0, i)];
+            plane[BaselineGrid.index(BaselineGrid.PIXELS, i)] = plane[BaselineGrid.index(last, i)];
+        }
+        plane[BaselineGrid.index(-1, -1)] = plane[BaselineGrid.index(0, 0)];
+        plane[BaselineGrid.index(BaselineGrid.PIXELS, -1)] = plane[BaselineGrid.index(last, 0)];
+        plane[BaselineGrid.index(-1, BaselineGrid.PIXELS)] = plane[BaselineGrid.index(0, last)];
+        plane[BaselineGrid.index(BaselineGrid.PIXELS, BaselineGrid.PIXELS)] =
+            plane[BaselineGrid.index(last, last)];
+    }
+
+    private static int average4(final int a, final int b, final int c, final int d) {
+        return (a + b + c + d) / 4;
     }
 
     private static boolean evaluated(final Tile tile, final int pixel) {
@@ -338,19 +436,6 @@ final class PredictionMipCache {
             }
         }
         return best;
-    }
-
-    private static short averageSurface(final short s0, final short s1, final short s2, final short s3) {
-        final short[] values = {s0, s1, s2, s3};
-        long sum = 0L;
-        int count = 0;
-        for (final short value : values) {
-            if (value != BaselineGrid.NO_SURFACE_SHORT) {
-                sum += value;
-                count++;
-            }
-        }
-        return count == 0 ? BaselineGrid.NO_SURFACE_SHORT : (short) Math.floorDiv(sum, count);
     }
 
     private void trim() {

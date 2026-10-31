@@ -6,12 +6,15 @@ import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
+import cn.net.rms.confluxmap.core.model.SurfaceKind;
 import cn.net.rms.confluxmap.core.net.CorrectionProfile;
 import cn.net.rms.confluxmap.core.net.PatchCodec;
+import java.util.Arrays;
 import org.junit.jupiter.api.Test;
 
 class PredictionMipCacheTest {
     private static final int PIXELS = BaselineGrid.PIXELS * BaselineGrid.PIXELS;
+    private static final int CELLS = PackedSurfacePlane.CELLS;
     /** LOD0 children aggregate into a LOD1 parent: 32 chunk cells per side. */
     private static final int PARENT_LOD = 1;
     private static final int PARENT_CHUNK_CELLS = 32 * 32;
@@ -52,22 +55,33 @@ class PredictionMipCacheTest {
     @Test
     void nullRevisionsAreAcceptedByTheTileInvariant() {
         final PredictionMipCache.Tile tile = new PredictionMipCache.Tile(
-            0, new int[PIXELS], new byte[PIXELS], new short[PIXELS],
-            new byte[PatchCodec.MASK_BYTES], null, new byte[PIXELS],
-            1.0F, 0F, PredictionViewMode.EVERYWHERE, false, 0L, 0L,
+            0, new short[CELLS], new byte[CELLS], new byte[PIXELS],
+            new byte[PIXELS], new byte[PatchCodec.MASK_BYTES], null,
+            PredictionViewMode.EVERYWHERE, false, 0L, 0L,
             CorrectionProfile.LEGACY_V1
         );
 
         assertNull(tile.syncChunkSourceRevisions());
     }
 
-    /** The plane is chunk-granular: a per-pixel-sized array must be rejected at LOD0. */
+    /** The revision plane is chunk-granular: a per-pixel-sized array must be rejected at LOD0. */
     @Test
     void tileRejectsPerPixelRevisionPlanes() {
         assertThrows(IllegalArgumentException.class, () -> new PredictionMipCache.Tile(
-            0, new int[PIXELS], new byte[PIXELS], new short[PIXELS],
-            new byte[PatchCodec.MASK_BYTES], new long[PIXELS], new byte[PIXELS],
-            1.0F, 0F, PredictionViewMode.EVERYWHERE, false, 0L, 0L,
+            0, new short[CELLS], new byte[CELLS], new byte[PIXELS],
+            new byte[PIXELS], new byte[PatchCodec.MASK_BYTES], new long[PIXELS],
+            PredictionViewMode.EVERYWHERE, false, 0L, 0L,
+            CorrectionProfile.LEGACY_V1
+        ));
+    }
+
+    /** The surface plane is margin-inclusive: a per-pixel-sized plane must be rejected. */
+    @Test
+    void tileRejectsPerPixelSurfacePlanes() {
+        assertThrows(IllegalArgumentException.class, () -> new PredictionMipCache.Tile(
+            0, new short[PIXELS], new byte[CELLS], new byte[PIXELS],
+            new byte[PIXELS], new byte[PatchCodec.MASK_BYTES], null,
+            PredictionViewMode.EVERYWHERE, false, 0L, 0L,
             CorrectionProfile.LEGACY_V1
         ));
     }
@@ -121,59 +135,160 @@ class PredictionMipCacheTest {
     }
 
     /**
-     * Void columns stay "known, no surface" through the mip aggregate instead of averaging.
+     * The parent cell's kind is the deterministic majority of the 2x2 child kinds, while the
+     * height averages only the non-void samples - and a kind tie keeps the north-west cell.
      */
     @Test
-    void voidSurfacesStayVoidThroughAggregation() {
-        final PredictionMipCache.Tile voidChild = surfacedTile(BaselineGrid.NO_SURFACE_SHORT);
-        final PredictionMipCache.Tile landChild = surfacedTile((short) 80);
-        final PredictionMipCache.Tile aggregate = PredictionMipCache.aggregate(
-            new PredictionMipCache.Tile[] {voidChild, landChild, landChild, landChild},
-            PredictionViewMode.EVERYWHERE, PARENT_LOD
-        );
+    void aggregateMajorityKindWinsAndHeightAveragesNonVoidSamples() {
+        final short land = PackedSurfacePlane.pack(70, SurfaceKind.LAND.ordinal());
+        final short water0 = PackedSurfacePlane.pack(72, SurfaceKind.WATER.ordinal());
+        final short water1 = PackedSurfacePlane.pack(74, SurfaceKind.WATER.ordinal());
+        final short water2 = PackedSurfacePlane.pack(76, SurfaceKind.WATER.ordinal());
+        final PredictionMipCache.Tile aggregate = aggregateNorthWestBlock(land, water0, water1, water2);
 
-        assertEquals(BaselineGrid.NO_SURFACE_SHORT, aggregate.surfaces()[0],
-            "four void samples must aggregate back to the void sentinel, not to Y=0");
-        assertEquals((short) 80, aggregate.surfaces()[128]);
+        assertEquals(SurfaceKind.WATER.ordinal(), PackedSurfacePlane.unpackKind(
+            aggregate.packedSurfaceKind()[BaselineGrid.index(0, 0)]),
+            "three water samples must outvote the one land sample");
+        assertEquals(73, PackedSurfacePlane.unpackHeight(aggregate.packedSurfaceKind()[BaselineGrid.index(0, 0)]),
+            "the height must average every non-void sample, whatever its kind");
+    }
+
+    @Test
+    void aggregateKindTiesKeepTheNorthWestSample() {
+        final short land = PackedSurfacePlane.pack(70, SurfaceKind.LAND.ordinal());
+        final short water0 = PackedSurfacePlane.pack(80, SurfaceKind.WATER.ordinal());
+        final short water1 = PackedSurfacePlane.pack(82, SurfaceKind.WATER.ordinal());
+        final short land1 = PackedSurfacePlane.pack(84, SurfaceKind.LAND.ordinal());
+        final PredictionMipCache.Tile aggregate = aggregateNorthWestBlock(land, water0, land1, water1);
+
+        assertEquals(SurfaceKind.LAND.ordinal(), PackedSurfacePlane.unpackKind(
+            aggregate.packedSurfaceKind()[BaselineGrid.index(0, 0)]),
+            "a 2-2 tie must keep the north-west sample's kind");
+        assertEquals(79, PackedSurfacePlane.unpackHeight(aggregate.packedSurfaceKind()[BaselineGrid.index(0, 0)]),
+            "the height averages every non-void sample regardless of its kind");
+    }
+
+    /** A void majority aggregates to "known, no surface", never to an averaged height. */
+    @Test
+    void voidMajorityStaysVoidThroughAggregation() {
+        final short voidCell = PackedSurfacePlane.pack(0, SurfaceKind.VOID.ordinal());
+        final short land0 = PackedSurfacePlane.pack(80, SurfaceKind.LAND.ordinal());
+        final short land1 = PackedSurfacePlane.pack(82, SurfaceKind.LAND.ordinal());
+        final PredictionMipCache.Tile aggregate = aggregateNorthWestBlock(voidCell, voidCell, land0, land1);
+
+        assertEquals(SurfaceKind.VOID.ordinal(), PackedSurfacePlane.unpackKind(
+            aggregate.packedSurfaceKind()[BaselineGrid.index(0, 0)]));
+        assertEquals(BaselineGrid.NO_SURFACE,
+            PackedSurfacePlane.unpackHeight(aggregate.packedSurfaceKind()[BaselineGrid.index(0, 0)]),
+            "a void-majority cell must not surface a fabricated average height");
+    }
+
+    /** A single void sample in the block must not drag the average of the land samples down. */
+    @Test
+    void voidMinorityDoesNotDragTheHeightAverage() {
+        final short voidCell = PackedSurfacePlane.pack(0, SurfaceKind.VOID.ordinal());
+        final short land0 = PackedSurfacePlane.pack(80, SurfaceKind.LAND.ordinal());
+        final short land1 = PackedSurfacePlane.pack(82, SurfaceKind.LAND.ordinal());
+        final short land2 = PackedSurfacePlane.pack(84, SurfaceKind.LAND.ordinal());
+        final PredictionMipCache.Tile aggregate = aggregateNorthWestBlock(voidCell, land0, land1, land2);
+
+        assertEquals(SurfaceKind.LAND.ordinal(), PackedSurfacePlane.unpackKind(
+            aggregate.packedSurfaceKind()[BaselineGrid.index(0, 0)]));
+        assertEquals(82, PackedSurfacePlane.unpackHeight(aggregate.packedSurfaceKind()[BaselineGrid.index(0, 0)]));
     }
 
     /**
-     * The int-domain aggregate skipped void samples inside a 2x2 block; the packed form must do
-     * the same, otherwise one void sample drags a real column far below the world.
+     * Aggregate tiles have no true margin data; the ring must duplicate the adjacent inner cell
+     * of the same parent plane (corners diagonally inward) so edge relief stays deterministic.
      */
     @Test
-    void mixedVoidAndLandSamplesAverageOnlyTheLandPixels() {
-        final short[][] quad = {
-            {BaselineGrid.NO_SURFACE_SHORT, (short) 80, (short) 80, (short) 80},
-            {(short) 80, (short) 80, (short) 80, (short) 80},
-            {(short) 80, (short) 80, (short) 80, (short) 80},
-            {(short) 80, (short) 80, (short) 80, (short) 80}
-        };
+    void marginRingDuplicatesTheAdjacentInnerCells() {
+        final byte[] fluids = new byte[CELLS];
+        Arrays.fill(fluids, (byte) 7);
         final PredictionMipCache.Tile[] children = new PredictionMipCache.Tile[4];
         for (int i = 0; i < 4; i++) {
-            children[i] = tiledQuadrant(quad[i]);
+            final short[] packed = new short[CELLS];
+            Arrays.fill(packed, PackedSurfacePlane.pack(64 + i, SurfaceKind.LAND.ordinal()));
+            children[i] = tile(packed, fluids);
         }
-
         final PredictionMipCache.Tile aggregate = PredictionMipCache.aggregate(
             children, PredictionViewMode.EVERYWHERE, PARENT_LOD
         );
+        final short[] packed = aggregate.packedSurfaceKind();
 
-        assertEquals((short) 80, aggregate.surfaces()[0],
-            "a single void sample in the 2x2 block must not drag the average down");
+        assertEquals(packed[BaselineGrid.index(0, 0)], packed[BaselineGrid.index(-1, -1)],
+            "the north-west corner copies diagonally inward");
+        assertEquals(packed[BaselineGrid.index(BaselineGrid.PIXELS - 1, 0)],
+            packed[BaselineGrid.index(BaselineGrid.PIXELS, -1)]);
+        assertEquals(packed[BaselineGrid.index(0, BaselineGrid.PIXELS - 1)],
+            packed[BaselineGrid.index(-1, BaselineGrid.PIXELS)]);
+        assertEquals(packed[BaselineGrid.index(BaselineGrid.PIXELS - 1, BaselineGrid.PIXELS - 1)],
+            packed[BaselineGrid.index(BaselineGrid.PIXELS, BaselineGrid.PIXELS)]);
+        for (int i = 0; i < BaselineGrid.PIXELS; i++) {
+            assertEquals(packed[BaselineGrid.index(0, i)], packed[BaselineGrid.index(-1, i)],
+                "the x=-1 ring cell copies x=0 of the same row");
+            assertEquals(packed[BaselineGrid.index(BaselineGrid.PIXELS - 1, i)],
+                packed[BaselineGrid.index(BaselineGrid.PIXELS, i)]);
+        }
+        assertEquals(aggregate.fluidDepth()[BaselineGrid.index(-1, 128)],
+            aggregate.fluidDepth()[BaselineGrid.index(0, 128)],
+            "the fluid plane's ring duplicates the same way");
     }
 
-    private static PredictionMipCache.Tile tiledQuadrant(final short[] quadrant) {
-        final short[] surfaces = new short[PIXELS];
-        java.util.Arrays.fill(surfaces, (short) 80);
-        final int[] pixels = {0, 1, 256, 257};
-        for (int i = 0; i < 4; i++) {
-            surfaces[pixels[i]] = quadrant[i];
-        }
-        return new PredictionMipCache.Tile(
-            0, new int[PIXELS], new byte[PIXELS], surfaces,
-            new byte[PatchCodec.MASK_BYTES], null, new byte[PIXELS],
-            1.0F, 0F, PredictionViewMode.EVERYWHERE, false, 0L, 0L,
-            CorrectionProfile.LEGACY_V1
+    @Test
+    void blockLightAveragesTheFourChildCells() {
+        final byte[] light = new byte[PIXELS];
+        light[0] = 0;
+        light[1] = 4;
+        light[256] = 8;
+        light[257] = 12;
+        final PredictionMipCache.Tile aggregate = PredictionMipCache.aggregate(
+            new PredictionMipCache.Tile[] {tile(light), pureTile(), pureTile(), pureTile()},
+            PredictionViewMode.EVERYWHERE, PARENT_LOD
+        );
+
+        assertEquals(6, aggregate.blockLight()[0] & 0xFF,
+            "the parent cell is the plain average of the 2x2 child block");
+    }
+
+    @Test
+    void fluidDepthAveragesTheFourChildCells() {
+        final byte[] fluids = new byte[CELLS];
+        Arrays.fill(fluids, (byte) 10);
+        fluids[BaselineGrid.index(1, 0)] = 20;
+        fluids[BaselineGrid.index(0, 1)] = 30;
+        fluids[BaselineGrid.index(1, 1)] = 40;
+        final short[] packed = new short[CELLS];
+        Arrays.fill(packed, PackedSurfacePlane.pack(64, SurfaceKind.WATER.ordinal()));
+        final PredictionMipCache.Tile aggregate = PredictionMipCache.aggregate(
+            new PredictionMipCache.Tile[] {
+                tile(packed, fluids), pureTile(), pureTile(), pureTile()},
+            PredictionViewMode.EVERYWHERE, PARENT_LOD
+        );
+
+        assertEquals(25, aggregate.fluidDepth()[BaselineGrid.index(0, 0)] & 0xFF,
+            "the parent cell is the plain average of the 2x2 child block");
+    }
+
+    /**
+     * Builds four LOD0 children whose north-west block's 2x2 cells are the given packed samples
+     * (order: north-west, north-east, south-west, south-east) and aggregates them into a LOD1
+     * parent.
+     */
+    private static PredictionMipCache.Tile aggregateNorthWestBlock(
+        final short c0, final short c1, final short c2, final short c3
+    ) {
+        final short[] packed = new short[CELLS];
+        Arrays.fill(packed, PackedSurfacePlane.pack(64, SurfaceKind.LAND.ordinal()));
+        packed[BaselineGrid.index(0, 0)] = c0;
+        packed[BaselineGrid.index(1, 0)] = c1;
+        packed[BaselineGrid.index(0, 1)] = c2;
+        packed[BaselineGrid.index(1, 1)] = c3;
+        final PredictionMipCache.Tile child = tile(packed, new byte[CELLS]);
+        return PredictionMipCache.aggregate(
+            new PredictionMipCache.Tile[] {child, tile(new short[CELLS], new byte[CELLS]),
+                tile(new short[CELLS], new byte[CELLS]), tile(new short[CELLS], new byte[CELLS])},
+            PredictionViewMode.EVERYWHERE, PARENT_LOD
         );
     }
 
@@ -182,12 +297,7 @@ class PredictionMipCacheTest {
     }
 
     private static PredictionMipCache.Tile pureTile() {
-        return new PredictionMipCache.Tile(
-            0, new int[PIXELS], new byte[PIXELS], new short[PIXELS],
-            new byte[PatchCodec.MASK_BYTES], null, new byte[PIXELS],
-            1.0F, 0F, PredictionViewMode.EVERYWHERE, false, 0L, 0L,
-            CorrectionProfile.LEGACY_V1
-        );
+        return tile(new short[CELLS], new byte[CELLS]);
     }
 
     /** LOD0 tile with one fully evaluated 2x2 block inside chunk ({@code chunkX}, {@code chunkZ}). */
@@ -198,7 +308,7 @@ class PredictionMipCacheTest {
     ) {
         final byte[] evaluated = new byte[PatchCodec.MASK_BYTES];
         final long[] chunkRevisions = new long[16 * 16];
-        java.util.Arrays.fill(chunkRevisions, PredictionMipCache.MISSING);
+        Arrays.fill(chunkRevisions, PredictionMipCache.MISSING);
         final int pixelX = chunkX * 16;
         final int pixelZ = chunkZ * 16;
         for (final int pixel : new int[] {
@@ -209,20 +319,27 @@ class PredictionMipCacheTest {
         }
         chunkRevisions[chunkZ * 16 + chunkX] = value;
         return new PredictionMipCache.Tile(
-            0, new int[PIXELS], new byte[PIXELS], new short[PIXELS],
-            evaluated, chunkRevisions, new byte[PIXELS],
-            1.0F, 0F, PredictionViewMode.EVERYWHERE, false, 0L, 0L,
+            0, new short[CELLS], new byte[CELLS], new byte[PIXELS],
+            new byte[PIXELS], evaluated, chunkRevisions,
+            PredictionViewMode.EVERYWHERE, false, 0L, 0L,
             CorrectionProfile.LEGACY_V1
         );
     }
 
-    private static PredictionMipCache.Tile surfacedTile(final short surfaceY) {
-        final short[] surfaces = new short[PIXELS];
-        java.util.Arrays.fill(surfaces, surfaceY);
+    private static PredictionMipCache.Tile tile(final short[] packedSurfaceKind, final byte[] fluidDepth) {
         return new PredictionMipCache.Tile(
-            0, new int[PIXELS], new byte[PIXELS], surfaces,
-            new byte[PatchCodec.MASK_BYTES], null, new byte[PIXELS],
-            1.0F, 0F, PredictionViewMode.EVERYWHERE, false, 0L, 0L,
+            0, packedSurfaceKind, fluidDepth, new byte[PIXELS],
+            new byte[PIXELS], new byte[PatchCodec.MASK_BYTES], null,
+            PredictionViewMode.EVERYWHERE, false, 0L, 0L,
+            CorrectionProfile.LEGACY_V1
+        );
+    }
+
+    private static PredictionMipCache.Tile tile(final byte[] blockLight) {
+        return new PredictionMipCache.Tile(
+            0, new short[CELLS], new byte[CELLS], new byte[PIXELS],
+            blockLight, new byte[PatchCodec.MASK_BYTES], null,
+            PredictionViewMode.EVERYWHERE, false, 0L, 0L,
             CorrectionProfile.LEGACY_V1
         );
     }
@@ -230,14 +347,12 @@ class PredictionMipCacheTest {
     private static PredictionMipCache.Tile tile(final CorrectionProfile profile) {
         return new PredictionMipCache.Tile(
             0,
-            new int[PIXELS],
+            new short[CELLS],
+            new byte[CELLS],
             new byte[PIXELS],
-            new short[PIXELS],
+            new byte[PIXELS],
             new byte[PatchCodec.MASK_BYTES],
             new long[16 * 16],
-            new byte[PIXELS],
-            1.0F,
-            0F,
             PredictionViewMode.EVERYWHERE,
             false,
             0L,
