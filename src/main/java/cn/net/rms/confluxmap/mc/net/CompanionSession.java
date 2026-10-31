@@ -184,13 +184,6 @@ public final class CompanionSession {
         ticksSinceHello = 0;
     }
 
-    private Runnable helloRetrier;
-    private int retryCooldownTicks;
-
-    public void bindHelloRetrier(final Runnable retrier) {
-        this.helloRetrier = retrier;
-    }
-
     /** Called from {@link ClientTickEvents#END_CLIENT_TICK} every tick. */
     public void tick() {
         if (state.get() == State.HELLO_SENT) {
@@ -200,11 +193,6 @@ public final class CompanionSession {
                 ConfluxMapMod.LOGGER.info(
                     "companion silent for {} ticks, assuming non-companion server", TIMEOUT_TICKS
                 );
-            }
-        } else if (state.get() == State.NO_COMPANION && helloRetrier != null) {
-            if (++retryCooldownTicks >= 40) {
-                retryCooldownTicks = 0;
-                helloRetrier.run();
             }
         }
     }

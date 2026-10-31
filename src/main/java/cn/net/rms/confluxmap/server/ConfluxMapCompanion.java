@@ -414,7 +414,24 @@ public final class ConfluxMapCompanion {
         if (!runtime.activateIfAllowed(config.enabled, server.isDedicated(), server.getServerPort())) {
             return;
         }
-        summaries = new RegionSummaryService(config);
+        final ServerConfig effectiveConfig;
+        if (!server.isDedicated()) {
+            effectiveConfig = new ServerConfig();
+            effectiveConfig.shareSeed = config.shareSeed;
+            effectiveConfig.allowBiomeMap = config.allowBiomeMap;
+            effectiveConfig.allowStructureSearch = config.allowStructureSearch;
+            effectiveConfig.shareCorrections = config.shareCorrections;
+            effectiveConfig.shareChunkLoadState = config.shareChunkLoadState;
+            effectiveConfig.allowEntityRadar = config.allowEntityRadar;
+            effectiveConfig.shareWaypoints = config.shareWaypoints;
+            effectiveConfig.maxBytesPerSecondPerPlayer = 64 * 1024 * 1024;
+            effectiveConfig.maxPendingTilesPerPlayer = 256;
+            effectiveConfig.maxTilesPerRequest = 64;
+            effectiveConfig.minRequestIntervalMs = 0;
+        } else {
+            effectiveConfig = config;
+        }
+        summaries = new RegionSummaryService(effectiveConfig);
         datapackLangs = new DatapackLangService(
             () -> server.getSavePath(WorldSavePath.DATAPACKS), ConfluxMapMod.LOGGER
         );

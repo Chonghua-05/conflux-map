@@ -1927,7 +1927,10 @@ public final class FullscreenMapScreen extends ConfluxScreen {
         final String layerId = layer.cacheId();
         final boolean biomeMode = biomeMode();
         final boolean predictionActive = predictionActive(layer, session, biomeMode);
-        final boolean syncActive = predictionActive(layer, session, false);
+        final boolean syncActive = config.predictionNetworkSync
+            && session.world().equals(gameBridge.session().world())
+            && session.dimension().equals(gameBridge.session().dimension())
+            && companion.isActive();
         // The padded ring is prefetch. It is ordered *after* this frame's visible tiles have been
         // bound (and therefore requested), so a preload never competes with a tile the user is
         // already looking at for worker slots or upload slots.
@@ -1941,30 +1944,29 @@ public final class FullscreenMapScreen extends ConfluxScreen {
                 predictionTiles.setViewport(
                     session.dimension(), lod, firstTileX, lastTileX, firstTileZ, lastTileZ
                 );
-                if (syncActive) {
-                    final ChunkViewport mapChunks = ChunkViewport.covering(
-                        centerX, centerZ, width, height, scale
-                    );
-                    final ChunkViewport playerView;
-                    if (this.client.player == null) {
-                        playerView = null;
-                    } else {
-                        final int playerChunkX = this.client.player.getBlockPos().getX() >> 4;
-                        final int playerChunkZ = this.client.player.getBlockPos().getZ() >> 4;
-                        final int advertisedRadius = companion.serverViewDistance();
-                        final int radius = advertisedRadius >= 0
-                            ? advertisedRadius : MinecraftAccess.viewDistance(this.client);
-                        playerView = ChunkViewport.centered(playerChunkX, playerChunkZ, radius);
-                    }
-                    ConfluxMapClient.get().mapSyncClient().reportViewport(
-                        session.dimension(), lod, firstTileX, lastTileX, firstTileZ, lastTileZ,
-                        mapChunks, playerView
-                    );
-                } else {
-                    ConfluxMapClient.get().mapSyncClient().clearViewport();
-                }
             } else {
                 predictionTiles.clearViewport();
+            }
+            if (syncActive) {
+                final ChunkViewport mapChunks = ChunkViewport.covering(
+                    centerX, centerZ, width, height, scale
+                );
+                final ChunkViewport playerView;
+                if (this.client.player == null) {
+                    playerView = null;
+                } else {
+                    final int playerChunkX = this.client.player.getBlockPos().getX() >> 4;
+                    final int playerChunkZ = this.client.player.getBlockPos().getZ() >> 4;
+                    final int advertisedRadius = companion.serverViewDistance();
+                    final int radius = advertisedRadius >= 0
+                        ? advertisedRadius : MinecraftAccess.viewDistance(this.client);
+                    playerView = ChunkViewport.centered(playerChunkX, playerChunkZ, radius);
+                }
+                ConfluxMapClient.get().mapSyncClient().reportViewport(
+                    session.dimension(), lod, firstTileX, lastTileX, firstTileZ, lastTileZ,
+                    mapChunks, playerView
+                );
+            } else {
                 ConfluxMapClient.get().mapSyncClient().clearViewport();
             }
         }
@@ -1987,7 +1989,7 @@ public final class FullscreenMapScreen extends ConfluxScreen {
 
         // The predicted texture is already transparent wherever local real data wins. Drawing it
         // last lets a newer synchronized chunk cover an older local capture without a third texture.
-        if (predictionActive) {
+        if (predictionActive || syncActive) {
             drawPredictedTiles(
                 matrices, session, layerId, lod, firstTileX, lastTileX,
                 firstTileZ, lastTileZ, pxPerBlock, blocksPerTile, biomeMode

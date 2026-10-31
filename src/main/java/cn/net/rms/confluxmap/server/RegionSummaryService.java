@@ -616,7 +616,7 @@ public final class RegionSummaryService {
         }
         synchronized (regionBaselineTasks) {
             for (final RegionBaselineTask task : regionBaselineTasks.values()) {
-                task.future.cancel(false);
+                task.future.cancel(true);
             }
             regionBaselineTasks.clear();
         }
@@ -624,9 +624,9 @@ public final class RegionSummaryService {
         progressiveWorker.shutdownNow();
         anvilWorkers.shutdownNow();
         try {
-            progressiveScanWorker.awaitTermination(2L, TimeUnit.SECONDS);
-            progressiveWorker.awaitTermination(2L, TimeUnit.SECONDS);
-            anvilWorkers.awaitTermination(2L, TimeUnit.SECONDS);
+            progressiveScanWorker.awaitTermination(100L, TimeUnit.MILLISECONDS);
+            progressiveWorker.awaitTermination(100L, TimeUnit.MILLISECONDS);
+            anvilWorkers.awaitTermination(100L, TimeUnit.MILLISECONDS);
         } catch (final InterruptedException e) {
             Thread.currentThread().interrupt();
         }
