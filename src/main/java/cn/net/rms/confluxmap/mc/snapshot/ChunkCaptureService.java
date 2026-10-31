@@ -103,7 +103,9 @@ public final class ChunkCaptureService {
         this.serverViewDistance = serverViewDistance;
         this.regionCache = regionCache;
         this.layerSelector = layerSelector;
-        this.factory = new McChunkSnapshotFactory(client, sampler, tintResolver);
+        this.factory = new McChunkSnapshotFactory(
+            client, sampler, tintResolver, () -> config.showNetherCeilingBedrockThickness
+        );
         this.terrainEncoder = new McTerrainChunkEncoder(client);
         this.terrainWorker = new McTerrainWorker(new McTerrainMaterialResolver(client));
     }
@@ -138,6 +140,14 @@ public final class ChunkCaptureService {
             return;
         }
         reseedViewport(viewpoint.blockX() >> 4, viewpoint.blockZ() >> 4);
+    }
+
+    /** Re-marks all viewport chunks dirty so a layer-shading policy change takes effect immediately. */
+    public void recaptureCurrentView() {
+        final PlayerView viewpoint = gameBridge.viewpoint().orElse(null);
+        if (viewpoint != null) {
+            reseedViewport(viewpoint.blockX() >> 4, viewpoint.blockZ() >> 4);
+        }
     }
 
     /** Main thread, from packet mixins. */

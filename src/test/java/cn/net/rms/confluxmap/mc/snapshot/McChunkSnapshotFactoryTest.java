@@ -165,4 +165,21 @@ class McChunkSnapshotFactoryTest {
         assertTrue(collapsed.isOf(Blocks.WATER));
         assertFalse(McChunkSnapshotFactory.isSeafloorCapturable(collapsed));
     }
+
+    @Test
+    void bedrockThicknessCountsDiscreteLayersDownward() {
+        // Window [solidY - 4, solidY] on a vanilla-roof column: solidY itself counts by contract.
+        assertEquals(5, McChunkSnapshotFactory.countBedrockThickness(y -> true, 127, 123));
+        assertEquals(1, McChunkSnapshotFactory.countBedrockThickness(y -> false, 127, 123));
+        // A sandwich column (bedrock, air, bedrock, bedrock, netherrack from the top) counts
+        // discretely instead of aborting on the internal pocket.
+        assertEquals(
+            3,
+            McChunkSnapshotFactory.countBedrockThickness(y -> y == 127 || y == 125 || y == 124, 127, 123)
+        );
+        // Only blocks inside the window are counted even when bedrock continues below it.
+        assertEquals(3, McChunkSnapshotFactory.countBedrockThickness(y -> true, 127, 125));
+        // The window never reaches below the world floor.
+        assertEquals(1, McChunkSnapshotFactory.countBedrockThickness(y -> true, 0, 0));
+    }
 }

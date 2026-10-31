@@ -568,7 +568,8 @@ public final class TileService {
         invalidateCompositions();
     }
 
-    private void invalidateCompositions() {
+    /** Drops composed results whose capture-time baked data has been replaced underneath them. */
+    public synchronized void invalidateCompositions() {
         compositionGeneration++;
         dirty.clear();
         staleTiles.clear();

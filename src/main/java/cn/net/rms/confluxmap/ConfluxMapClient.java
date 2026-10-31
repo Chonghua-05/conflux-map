@@ -664,6 +664,17 @@ public final class ConfluxMapClient implements ClientModInitializer {
         ConfluxMapMod.LOGGER.info("Map color style changed to {}", config.mapColorStyle);
     }
 
+    /** Invalidates terrain planes after the Nether ceiling bedrock thickness toggle changes. */
+    public void onNetherCeilingBedrockThicknessChanged() {
+        // Predicted bedrock is flat regardless of this toggle, so only captured planes reload.
+        tileService.invalidateCompositions();
+        gameBridge.runOnRenderThread(tileTextureManager::releaseAll);
+        if (chunkCapture != null) {
+            chunkCapture.recaptureCurrentView();
+        }
+        ConfluxMapMod.LOGGER.info("Nether ceiling bedrock thickness shading toggled to {}", config.showNetherCeilingBedrockThickness);
+    }
+
     /** Re-resolves the active session's seed source after a local seed setting changes. */
     private void refreshPredictionSource() {
         final SessionGuard.Session session = sessionGuard.current();
