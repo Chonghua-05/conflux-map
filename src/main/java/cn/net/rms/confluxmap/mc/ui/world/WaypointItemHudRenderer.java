@@ -227,12 +227,13 @@ public final class WaypointItemHudRenderer {
         }
 
         final float plateAlpha = visibilityAlpha * labelOpacity;
+        final PlateRect plate = snapPlateRect(centerX, centerY, iconHalfSize, unitScale);
         fill(
             draw,
-            centerX - iconHalfSize - unitScale,
-            centerY - iconHalfSize - unitScale,
-            centerX + iconHalfSize + unitScale,
-            centerY + iconHalfSize + unitScale,
+            plate.left() - plate.border(),
+            plate.top() - plate.border(),
+            plate.right() + plate.border(),
+            plate.bottom() + plate.border(),
             WaypointLabelStyle.withAlpha(
                 label.selected() ? 0xFFFFE066 : WaypointLabelStyle.outlineColor(waypoint),
                 plateAlpha
@@ -240,10 +241,10 @@ public final class WaypointItemHudRenderer {
         );
         fill(
             draw,
-            centerX - iconHalfSize,
-            centerY - iconHalfSize,
-            centerX + iconHalfSize,
-            centerY + iconHalfSize,
+            plate.left(),
+            plate.top(),
+            plate.right(),
+            plate.bottom(),
             WaypointLabelStyle.withAlpha(waypoint.colorArgb() | 0xFF000000, plateAlpha)
         );
         if (label.playerId() != null) {
@@ -297,6 +298,30 @@ public final class WaypointItemHudRenderer {
             WaypointLabelStyle.withAlpha(WaypointLabelStyle.LABEL_DISTANCE_COLOR, textAlpha)
         );
         draw.popTransform();
+    }
+
+    /**
+     * Plate snapped to whole pixels: the outline is only {@code unitScale} wide (under one
+     * GUI pixel at typical label distances), so rounding the two rects independently let it
+     * collapse onto the inner square and flicker away while moving; deriving it from the
+     * snapped square keeps a strict whole-pixel frame on every side.
+     */
+    record PlateRect(int left, int top, int right, int bottom, int border) {
+    }
+
+    static PlateRect snapPlateRect(
+        final float centerX,
+        final float centerY,
+        final float halfSize,
+        final float unitScale
+    ) {
+        return new PlateRect(
+            MathHelper.floor(centerX - halfSize),
+            MathHelper.floor(centerY - halfSize),
+            MathHelper.ceil(centerX + halfSize),
+            MathHelper.ceil(centerY + halfSize),
+            Math.max(1, Math.round(unitScale))
+        );
     }
 
     private TextRenderer textRenderer() {

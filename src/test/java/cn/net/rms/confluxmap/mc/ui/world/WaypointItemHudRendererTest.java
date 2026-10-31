@@ -2,11 +2,13 @@ package cn.net.rms.confluxmap.mc.ui.world;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import cn.net.rms.confluxmap.core.model.DimensionId;
 import cn.net.rms.confluxmap.core.waypoint.Waypoint;
 import cn.net.rms.confluxmap.core.waypoint.WaypointRenderEntry;
 import java.util.ArrayList;
+import net.minecraft.util.math.MathHelper;
 import java.util.List;
 import java.util.UUID;
 import org.junit.jupiter.api.Test;
@@ -54,6 +56,30 @@ final class WaypointItemHudRendererTest {
         );
 
         assertEquals(playerId, player.playerId());
+    }
+
+    @Test
+    void plateOutlineStaysAWholePixelFrameAtEverySubPixelPosition() {
+        final float halfSize = 4.2f;
+        final float[] unitScales = {0.3f, 0.501f, 0.75f, 1f, 1.4f, 2.7f};
+        for (final float unitScale : unitScales) {
+            final int expectedBorder = Math.max(1, Math.round(unitScale));
+            for (float frac = 0f; frac <= 1f; frac += 0.05f) {
+                final WaypointItemHudRenderer.PlateRect plate =
+                    WaypointItemHudRenderer.snapPlateRect(250f + frac, 94f + frac, halfSize, unitScale);
+                assertEquals(expectedBorder, plate.border());
+                assertEquals(
+                    MathHelper.floor(250f + frac - halfSize),
+                    plate.left()
+                );
+                assertEquals(
+                    MathHelper.ceil(250f + frac + halfSize),
+                    plate.right()
+                );
+                assertTrue(plate.left() < plate.right());
+                assertTrue(plate.top() < plate.bottom());
+            }
+        }
     }
 
     private static WaypointItemHudRenderer.Label label() {
