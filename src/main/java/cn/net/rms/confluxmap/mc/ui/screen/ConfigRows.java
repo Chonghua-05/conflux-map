@@ -182,7 +182,7 @@ final class ConfigRows {
                     () -> config.showNetherCeilingBedrockThickness,
                     v -> {
                         config.showNetherCeilingBedrockThickness = v;
-                        ConfluxMapClient.get().onBedrockRoofThicknessShadingChanged();
+                        ConfluxMapClient.get().onNetherCeilingBedrockThicknessChanged();
                     }
                 );
                 y = addEnumRow(

@@ -108,6 +108,8 @@ public final class PredictionPaletteBuilder {
         );
         materials.put(
             SurfaceKind.BEDROCK_CEILING,
+            // Prediction has no per-column bedrock count; the roof stays flat instead of
+            // faking thickness with position-hash noise.
             MaterialDetailProfile.flat()
         );
         materialBaseColors.put(

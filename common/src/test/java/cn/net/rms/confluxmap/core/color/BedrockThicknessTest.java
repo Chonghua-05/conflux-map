@@ -57,40 +57,4 @@ class BedrockThicknessTest {
             }
         }
     }
-
-    @Test
-    void sandwichStructureCountingLogic() {
-        // Mock a 5-layer column: index 0 (top/solidY), 1, 2, 3, 4 (minY)
-        // Scenario A: all 5 are bedrock -> count = 5
-        final boolean[] allBedrock = {true, true, true, true, true};
-        assertEquals(5, countBedrock(allBedrock));
-
-        // Scenario B: top is bedrock, but with air/netherrack sandwich (e.g. bedrock, air, bedrock, bedrock, netherrack)
-        final boolean[] sandwich = {true, false, true, true, false};
-        assertEquals(3, countBedrock(sandwich));
-
-        // Scenario C: only top is bedrock
-        final boolean[] topOnly = {true, false, false, false, false};
-        assertEquals(1, countBedrock(topOnly));
-    }
-
-    @Test
-    void penetrationWhenTopIsNotBedrock() {
-        // If top is not bedrock, the thickness logic is skipped, normal floor-scan continues.
-        final boolean topIsBedrock = false;
-        final float thicknessMultiplier = topIsBedrock
-            ? ShadingPipeline.bedrockThicknessMultiplier(5)
-            : 1.0f;
-        assertEquals(1.0f, thicknessMultiplier, 1e-6f, "Non-bedrock surface must not receive thickness shading");
-    }
-
-    private static int countBedrock(final boolean[] layers) {
-        int count = 0;
-        for (final boolean isBedrock : layers) {
-            if (isBedrock) {
-                count++;
-            }
-        }
-        return count;
-    }
 }
