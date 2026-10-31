@@ -446,7 +446,7 @@ public final class ConfluxMapCompanion {
         if (config.shareWaypoints) {
             sharedWaypoints = loadSharedWaypoints(server);
         }
-        if (config.webMap.enabled) {
+        if (server.isDedicated() && config.webMap.enabled) {
             try {
                 webMapBackend = new FabricWebMapBackend(server, this);
                 webMap = WebMapServer.start(config.webMap, webMapBackend, configIo.directory());

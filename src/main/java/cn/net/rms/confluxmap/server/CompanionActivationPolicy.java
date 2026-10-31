@@ -13,6 +13,6 @@ final class CompanionActivationPolicy {
         final boolean dedicated,
         final int serverPort
     ) {
-        return configured && (dedicated || serverPort >= 0);
+        return configured;
     }
 }

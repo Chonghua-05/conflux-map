@@ -7,13 +7,12 @@ import org.junit.jupiter.api.Test;
 
 class CompanionRuntimeStateTest {
     @Test
-    void lanPublicationActivatesRuntimeOnlyOnce() {
+    void singleplayerActivatesRuntimeOnlyOnce() {
         final CompanionRuntimeState state = new CompanionRuntimeState();
 
-        assertFalse(state.activateIfAllowed(true, false, -1));
-        assertFalse(state.isActive());
-        assertTrue(state.activateIfAllowed(true, false, 25565));
+        assertTrue(state.activateIfAllowed(true, false, -1));
         assertTrue(state.isActive());
+        assertFalse(state.activateIfAllowed(true, false, -1));
         assertFalse(state.activateIfAllowed(true, false, 25565));
     }
 

@@ -7,8 +7,8 @@ import org.junit.jupiter.api.Test;
 
 class CompanionActivationPolicyTest {
     @Test
-    void pureSingleplayerDoesNotActivateCompanion() {
-        assertFalse(CompanionActivationPolicy.shouldActivate(true, false, -1));
+    void pureSingleplayerActivatesCompanion() {
+        assertTrue(CompanionActivationPolicy.shouldActivate(true, false, -1));
     }
 
     @Test
@@ -24,5 +24,6 @@ class CompanionActivationPolicyTest {
     @Test
     void disabledConfigNeverActivatesCompanion() {
         assertFalse(CompanionActivationPolicy.shouldActivate(false, true, 25565));
+        assertFalse(CompanionActivationPolicy.shouldActivate(false, false, -1));
     }
 }
