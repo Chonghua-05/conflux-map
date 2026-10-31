@@ -99,8 +99,8 @@ public final class ConfluxConfig {
         ULTRA_PERFORMANCE(1.60, 64),
         PERFORMANCE(1.30, 128),
         BALANCED(1.00, 256),
-        QUALITY(0.75, 512),
-        ULTRA_QUALITY(0.55, 1024);
+        QUALITY(0.75, 384),
+        ULTRA_QUALITY(0.55, 512);
 
         private final double slope;
         private final int predictionTileCacheLimit;

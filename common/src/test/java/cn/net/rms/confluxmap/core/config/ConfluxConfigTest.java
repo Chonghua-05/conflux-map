@@ -15,8 +15,8 @@ final class ConfluxConfigTest {
         assertEquals(64, ConfluxConfig.MapQuality.ULTRA_PERFORMANCE.predictionTileCacheLimit());
         assertEquals(128, ConfluxConfig.MapQuality.PERFORMANCE.predictionTileCacheLimit());
         assertEquals(256, ConfluxConfig.MapQuality.BALANCED.predictionTileCacheLimit());
-        assertEquals(512, ConfluxConfig.MapQuality.QUALITY.predictionTileCacheLimit());
-        assertEquals(1024, ConfluxConfig.MapQuality.ULTRA_QUALITY.predictionTileCacheLimit());
+        assertEquals(384, ConfluxConfig.MapQuality.QUALITY.predictionTileCacheLimit());
+        assertEquals(512, ConfluxConfig.MapQuality.ULTRA_QUALITY.predictionTileCacheLimit());
     }
 
     @Test
