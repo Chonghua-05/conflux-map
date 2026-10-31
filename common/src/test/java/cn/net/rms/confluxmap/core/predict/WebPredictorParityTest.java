@@ -75,7 +75,6 @@ class WebPredictorParityTest {
         assertNotNull(javaGrid, "Java baseline LOD" + lod);
         final DerivedGrid derived = BaselineDeriver.derive(javaGrid);
         final int[] beforeCanopy = derived.surfaceY.clone();
-        final int[] beforeSubCanopy = derived.subSurfaceY.clone();
         CanopyStylizer.apply(derived, javaGrid, SEED, lod, blockX, blockZ);
         final Process process = new ProcessBuilder(
             "node", dumpScript.toString(), wasm.toString(),
@@ -90,8 +89,7 @@ class WebPredictorParityTest {
             while ((line = reader.readLine()) != null) {
                 final String[] values = line.split(",");
                 assertEquals(
-                    javaGrid.supersampled() ? 16 : 4,
-                    values.length, "WASM output at line " + index
+                    4, values.length, "WASM output at line " + index
                 );
                 assertEquals(
                     javaGrid.terrainY[index], Integer.parseInt(values[0]),
@@ -113,27 +111,6 @@ class WebPredictorParityTest {
                     Integer.parseInt(values[3]),
                     "canopy height at LOD" + lod + " index " + index
                 );
-                if (javaGrid.supersampled()) {
-                    for (int sample = 0; sample < 4; sample++) {
-                        final int sub = index * 4 + sample;
-                        final int offset = 4 + sample * 3;
-                        assertEquals(
-                            javaGrid.subBiomeId[sub], Integer.parseInt(values[offset]),
-                            "sub-biome at LOD" + lod + " index " + sub
-                        );
-                        assertEquals(
-                            (javaGrid.subSurfaceFlags[sub] & BaselineGrid.SURFACE_FLUID) != 0
-                                ? 1 : 0,
-                            Integer.parseInt(values[offset + 1]),
-                            "sub-fluid at LOD" + lod + " index " + sub
-                        );
-                        assertEquals(
-                            derived.subSurfaceY[sub] - beforeSubCanopy[sub],
-                            Integer.parseInt(values[offset + 2]),
-                            "sub-canopy at LOD" + lod + " index " + sub
-                        );
-                    }
-                }
                 index++;
             }
         }

@@ -46,9 +46,9 @@ public final class BaselineGrid {
     public final int[] surfaceFlags = new int[SIZE * SIZE];
 
     /**
-     * Sub-samples per axis inside one output pixel. {@link #NO_SUPERSAMPLING} at LODs whose pixel
-     * is already at or below the native quart biome grid; 2 at the coarse LODs, where one biome
-     * lookup per pixel drops most thin features (rivers, shorelines) between samples.
+     * Sub-samples per axis inside one output pixel. Currently {@link #NO_SUPERSAMPLING} at every
+     * LOD: the coarse LODs' 2x2 biome sweep was switched off, so one lookup per pixel runs
+     * everywhere and the sweep machinery around this field stays dormant.
      */
     public final int subPerAxis;
     /**

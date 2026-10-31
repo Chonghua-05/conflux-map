@@ -378,19 +378,12 @@ public final class PredictedTileComposer {
                         surface[idx], ShadingPipeline.REFERENCE_HEIGHT
                     )
                     : 0.0;
-                final int composed = corrected[outIdx] || !grid.supersampled()
-                    ? baseColor(kind, biomes[idx], fluids[idx], palette, syncedMaterials,
-                        corrected[outIdx], colors[outIdx], floorColors[outIdx],
-                        effectiveBaseline(baselineMapColorId, baselineMapColorOverride, outIdx),
-                        floorReliefMultiplier, materials[outIdx], floorMaterials[outIdx],
-                        flatTopMaterial(flatTopMaterials, grid.blockX(x), grid.blockZ(z)),
-                        grid.blockX(x), grid.blockZ(z))
-                    : averagedSubColor(
-                        derived, grid, palette, idx,
-                        effectiveBaseline(baselineMapColorId, baselineMapColorOverride, outIdx),
-                        flatTopMaterial(flatTopMaterials, grid.blockX(x), grid.blockZ(z)),
-                        syncedMaterials, grid.blockX(x), grid.blockZ(z)
-                    );
+                final int composed = baseColor(kind, biomes[idx], fluids[idx], palette,
+                    syncedMaterials, corrected[outIdx], colors[outIdx], floorColors[outIdx],
+                    effectiveBaseline(baselineMapColorId, baselineMapColorOverride, outIdx),
+                    floorReliefMultiplier, materials[outIdx], floorMaterials[outIdx],
+                    flatTopMaterial(flatTopMaterials, grid.blockX(x), grid.blockZ(z)),
+                    grid.blockX(x), grid.blockZ(z));
                 final boolean synchronizedMaterial = syncedMaterials != null && (
                     corrected[outIdx] && syncedMaterials.contains(materials[outIdx])
                         || flatPaintsSyncedMaterial(
@@ -634,49 +627,6 @@ public final class PredictedTileComposer {
             return palette.materialBaseColor(kind, MapColorTable.argb(baselineMapColorId));
         }
         return colorFor(kind, biomeId, palette);
-    }
-
-    /**
-     * Box-filters one pixel's biome sub-samples into a single colour, the same operator the
-     * captured map's {@code TileService.downsample} applies when it averages finer pixels into a
-     * coarse tile. This is what keeps a river narrower than one output pixel visible: it survives
-     * as a fraction of the blend instead of being hit or missed by a single point sample.
-     *
-     * <p>Sub-samples never carry corrections - a correction is authoritative for its exact pixel,
-     * so the caller routes corrected pixels through {@link #baseColor} instead.
-     */
-    private static int averagedSubColor(
-        final DerivedGrid derived,
-        final BaselineGrid grid,
-        final PredictionPalette palette,
-        final int idx,
-        final int baselineMapColorId,
-        final String flatTopMaterial,
-        final SyncedMaterialPalette syncedMaterials,
-        final int worldX,
-        final int worldZ
-    ) {
-        int a = 0;
-        int r = 0;
-        int g = 0;
-        int b = 0;
-        final int count = grid.subCount();
-        for (int sz = 0; sz < grid.subPerAxis; sz++) {
-            for (int sx = 0; sx < grid.subPerAxis; sx++) {
-                final int s = grid.subIndex(idx, sx, sz);
-                final int color = baseColor(
-                    SurfaceKind.byOrdinal(derived.subKind[s]), grid.subBiomeId[s],
-                    derived.subFluidDepth[s], palette, syncedMaterials, false,
-                    Proto.MAP_COLOR_NONE, MapPixel.MAP_COLOR_NONE,
-                    baselineMapColorId, 1.0, "", "", flatTopMaterial, worldX, worldZ
-                );
-                a += Argb.alpha(color);
-                r += Argb.red(color);
-                g += Argb.green(color);
-                b += Argb.blue(color);
-            }
-        }
-        return Argb.pack(a / count, r / count, g / count, b / count);
     }
 
     /**
