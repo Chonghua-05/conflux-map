@@ -13,7 +13,9 @@ import java.util.LinkedHashMap;
  * derived planes - the packed surface kind/height plane, fluid depths, biomes, and the
  * correction planes - never composed pixels: pixels are re-shaded at read time through the exact
  * composer call a fresh composition makes ({@code PredictionTileService#shade}), so
- * map-color-style, daylight, gamma, and view-mode styling changes can never stale the cache.
+ * map-colour-style, daylight, and gamma changes can never stale the cache. View modes are
+ * still part of the cache key: a tile is only reused under the mode it was cached for, and a
+ * mode switch re-composes the visible set.
  */
 final class PredictionMipCache {
     static final long MISSING = Long.MIN_VALUE;

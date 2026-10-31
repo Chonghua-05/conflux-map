@@ -59,7 +59,11 @@ public final class PredictionTileService {
 
     /** Re-entry freshness window for corrections; expiry never schedules background polling. */
     public static final long CORRECTION_REUSE_TTL_MS = 30L * 60L * 1_000L;
-    /** About 38 MiB worst case; enough for one ordinary fullscreen viewport plus its next mip. */
+    /**
+     * Construction default only - the client applies the MapQuality tier at startup, so this
+     * survives for tests. On the planar layout 64 tiles cost ~21 MB (a corrected LOD4 tile is
+     * the ~0.83 MB outlier); enough for one ordinary fullscreen viewport plus its next mip.
+     */
     private static final int REUSABLE_TILE_LIMIT = 64;
     private final SessionGuard sessionGuard;
     private final PredictionState state;
@@ -99,6 +103,12 @@ public final class PredictionTileService {
     private final Set<TileKey> requestedTiles = new HashSet<>();
     /** Tracked textures that were last composed under an older view mode. */
     private final Set<TileKey> staleViewModeTiles = new HashSet<>();
+    /**
+     * Tiles this session composed but could not planar-cache (a synced flat baseline declared
+     * biome ids outside a byte). They can never enter the mip cache, so request dedup that
+     * consults the cache must consult this set instead or it re-enqueues them every frame.
+     */
+    private final Set<TileKey> nonCacheableTiles = new HashSet<>();
     /** Tracked textures whose local real-map coverage changed while they were off-screen. */
     private final Set<TileKey> staleRealCoverageTiles = new HashSet<>();
     /** Guarded by {@code this}: output-pixel metadata retained for fullscreen cursor/actions. */
@@ -661,6 +671,7 @@ public final class PredictionTileService {
             urgent.clear();
             requestedTiles.clear();
             staleViewModeTiles.clear();
+            nonCacheableTiles.clear();
             staleRealCoverageTiles.clear();
             metadataTiles.clear();
             mipCache.clear();
@@ -683,6 +694,7 @@ public final class PredictionTileService {
             dirty.clear();
             urgent.clear();
             staleViewModeTiles.clear();
+            nonCacheableTiles.clear();
             staleRealCoverageTiles.clear();
             metadataTiles.clear();
             mipCache.clear();
@@ -848,7 +860,8 @@ public final class PredictionTileService {
                     // recomposed (and re-uploaded) once per frame, which is exactly the kind of
                     // background load that starves the visible tiles.
                     if (dirty.containsKey(key) || inFlight.contains(key)
-                        || mipCache.exact(key, viewMode) != null) {
+                        || mipCache.exact(key, viewMode) != null
+                        || nonCacheableTiles.contains(key)) {
                         continue;
                     }
                     dirty.put(key, session.token());
@@ -1171,10 +1184,12 @@ public final class PredictionTileService {
                     requestedTiles.add(key);
                     metadataTiles.put(metadataKey(key), composition.metadata());
                     // A null tile means "not planar-cacheable" (see planarTile): it still
-                    // composed and uploads, it just never enters the mip cache. Re-putting a
-                    // cache hit refreshes the same tile instance's LRU position.
+                    // composed and uploads, it just never enters the mip cache. Recording the
+                    // key lets per-frame request dedup skip it without a cache to consult.
                     if (composition.tile() != null) {
                         mipCache.put(key, composition.tile());
+                    } else {
+                        nonCacheableTiles.add(key);
                     }
                     staleViewModeTiles.remove(key);
                     staleRealCoverageTiles.remove(key);
@@ -1647,9 +1662,9 @@ public final class PredictionTileService {
     }
 
     /**
-     * Whether the parent can be reconstructed entirely from newer, committed lower-LOD results.
-     * This is also the network-sync admission seam: a true result means the server would only
-     * reproduce data the client already has.
+     * Whether the parent can be reconstructed entirely from newer, committed lower-LOD results
+     * (tests only). The live network-sync admission decision runs through {@code
+     * prepareFreshLowerCoverage}, which also drives the parent patch requests.
      */
     public synchronized boolean hasFreshLowerCoverage(
         final DimensionId dimension,

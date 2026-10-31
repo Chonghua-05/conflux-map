@@ -159,7 +159,7 @@ public final class QuadrantLayout {
                     grid.fluidY[i] = BaselineGrid.NO_FLUID;
                     grid.surfaceFlags[i] = 0;
                     derived.kind[i] = (byte) SurfaceKind.VOID.ordinal();
-                    derived.surfaceY[i] = 0;
+                    derived.surfaceY[i] = BaselineGrid.NO_SURFACE;
                     derived.fluidDepth[i] = 0;
                 } else {
                     applyFlatColumn(grid, derived, i, flat);
