@@ -475,7 +475,8 @@ public final class RegionDiskCache {
             for (final MapLayer.Type type : PERSISTENT_LAYER_TYPES) {
                 final ColumnStore store = world.store(new MapLayer(type, 0));
                 for (final RegionColumns region : store.allRegions()) {
-                    if (writeRegion(region, type) >= 0) {
+                    final FlushResult result = flushIfDirty(region, type);
+                    if (result.written()) {
                         flushed++;
                     }
                 }
@@ -533,7 +534,6 @@ public final class RegionDiskCache {
             try (FileOutputStream fos = new FileOutputStream(tmp.toFile())) {
                 RegionFileCodec.encode(fos, layerOrdinal, data);
                 fos.flush();
-                fos.getChannel().force(true);
             }
             move(tmp, file);
             return true;

@@ -60,6 +60,7 @@ public final class ClientNetworking {
     }
 
     public void register() {
+        session.bindHelloRetrier(this::sendHello);
         PlayNetworking.registerClient(CHANNEL, this::onReceive);
         ClientPlayConnectionEvents.JOIN.register((handler, sender, client) -> sendHello());
         ClientPlayConnectionEvents.DISCONNECT.register(this::onDisconnect);
