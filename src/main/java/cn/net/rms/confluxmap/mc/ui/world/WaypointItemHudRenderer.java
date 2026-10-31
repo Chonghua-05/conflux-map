@@ -202,20 +202,14 @@ public final class WaypointItemHudRenderer {
         final float iconSize = placement.size();
         final float centerX = placement.centerX();
         final float centerY = placement.centerY();
-        final String name = waypoint.name();
-        final String distanceText = Math.round(label.distance3d()) + " m";
         final TextRenderer textRenderer = textRenderer();
-        final int nameWidth = textRenderer.getWidth(name);
-        final int distanceWidth = textRenderer.getWidth(distanceText);
-        final float panelFullWidth = Math.max(nameWidth, distanceWidth)
-            + WaypointLabelStyle.LABEL_PANEL_PADDING * 2f;
-        final float panelReveal = MathHelper.clamp(
-            easedProgress / WaypointLabelStyle.LABEL_TEXT_REVEAL_START, 0f, 1f
+        final WaypointLabelStyle.Panel panel = WaypointLabelStyle.Panel.of(
+            textRenderer, waypoint, label.distance3d(), easedProgress
         );
         // Everything below is label-local (origin at the icon center, GUI units), so plate,
         // icon, portrait and text all ride one float transform instead of stepping whole GUI
         // pixels.
-        final float panelWidth = panelFullWidth * panelReveal;
+        final float panelWidth = panel.width();
         final float innerHalf = iconSize / (2f * unitScale);
         final float gap = WaypointLabelStyle.LABEL_PANEL_GAP;
         final float visibilityAlpha = nearFade * label.visibilityAlpha();
@@ -273,30 +267,21 @@ public final class WaypointItemHudRenderer {
                 }
             }
 
-            final float textReveal = MathHelper.clamp(
-                (easedProgress - WaypointLabelStyle.LABEL_TEXT_REVEAL_START)
-                    / (1f - WaypointLabelStyle.LABEL_TEXT_REVEAL_START),
-                0f,
-                1f
-            );
-            if (textReveal > 0.01f) {
-                final float textX = innerHalf
-                    + gap
-                    + WaypointLabelStyle.LABEL_PANEL_PADDING
-                    + (1f - textReveal) * 4f;
-                final float textAlpha = visibilityAlpha * textReveal * labelOpacity;
+            if (panel.textReveal() > 0.01f) {
+                final float textX = panel.textX(innerHalf + gap);
+                final float textAlpha = panel.textAlpha(plateAlpha);
                 draw.drawTextWithShadow(
                     textRenderer,
-                    name,
+                    panel.name(),
                     textX,
-                    -9f,
+                    WaypointLabelStyle.LABEL_NAME_TEXT_Y,
                     WaypointLabelStyle.withAlpha(WaypointLabelStyle.LABEL_NAME_COLOR, textAlpha)
                 );
                 draw.drawTextWithShadow(
                     textRenderer,
-                    distanceText,
+                    panel.distanceText(),
                     textX,
-                    1f,
+                    WaypointLabelStyle.LABEL_DISTANCE_TEXT_Y,
                     WaypointLabelStyle.withAlpha(WaypointLabelStyle.LABEL_DISTANCE_COLOR, textAlpha)
                 );
             }

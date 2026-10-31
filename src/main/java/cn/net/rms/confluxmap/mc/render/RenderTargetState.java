@@ -65,7 +65,7 @@ public final class RenderTargetState {
     //$$ }
     //#endif
 
-//#if MC>=12108
+    //#if MC>=12108
     //$$ /**
     //$$  * Points GUI-space batches at the element list the game is currently collecting. Set once
     //$$  * per {@code GuiDraw}, which is the only way into this mod's screen and HUD drawing.
@@ -84,7 +84,7 @@ public final class RenderTargetState {
     //$$         ? new ScreenRect(guiScissorX, guiScissorY, guiScissorWidth, guiScissorHeight)
     //$$         : null;
     //$$ }
-//#endif
+    //#endif
 
     //#if MC>=260300
     //$$ /**
@@ -139,11 +139,11 @@ public final class RenderTargetState {
         final int height,
         final int targetHeight
     ) {
-        final int scissorY = targetScissorY(targetY, height, targetHeight);
+        final int flippedY = targetScissorY(targetY, height, targetHeight);
         //#if MC>=12105
         //$$ scissorEnabled = true;
         //$$ scissorX = targetX;
-        //$$ RenderTargetState.scissorY = scissorY;
+        //$$ scissorY = flippedY;
         //$$ scissorWidth = width;
         //$$ scissorHeight = height;
         //#if MC>=12108
@@ -153,7 +153,7 @@ public final class RenderTargetState {
         //$$ guiScissorHeight = height;
         //#endif
         //#else
-        RenderSystem.enableScissor(targetX, scissorY, width, height);
+        RenderSystem.enableScissor(targetX, flippedY, width, height);
         //#endif
     }
 

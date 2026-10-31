@@ -111,27 +111,30 @@ public final class WaypointWorldRenderer {
         ) || serverPlayerRadar.highlightedPlayerId().isPresent();
 
         beamPass.beginPass(frame);
-        for (final WaypointRenderEntry waypoint : waypoints) {
-            final double worldX = waypoint.x();
-            final double worldZ = waypoint.z();
-            final double dx = worldX - player.x();
-            final double dz = worldZ - player.z();
-            final double renderDistance = waypointHighlightState.renderDistance(
-                waypoint, currentDimension, player.x(), player.y(), player.z()
-            );
-            if (renderDistance > maxDistance) {
-                continue;
+        try {
+            for (final WaypointRenderEntry waypoint : waypoints) {
+                final double worldX = waypoint.x();
+                final double worldZ = waypoint.z();
+                final double dx = worldX - player.x();
+                final double dz = worldZ - player.z();
+                final double renderDistance = waypointHighlightState.renderDistance(
+                    waypoint, currentDimension, player.x(), player.y(), player.z()
+                );
+                if (renderDistance > maxDistance) {
+                    continue;
+                }
+                final double horizontalDistance = Math.sqrt(dx * dx + dz * dz);
+                final boolean selected = isSelected(waypoint, currentDimension);
+                beamPass.draw(
+                    worldX, worldZ, bottomY, topY,
+                    waypoint.colorArgb(), horizontalDistance, maxDistance,
+                    highlightVisibilityAlpha(selected, hasHighlight)
+                        * playerHighlightAlpha(waypoint, currentDimension)
+                );
             }
-            final double horizontalDistance = Math.sqrt(dx * dx + dz * dz);
-            final boolean selected = isSelected(waypoint, currentDimension);
-            beamPass.draw(
-                worldX, worldZ, bottomY, topY,
-                waypoint.colorArgb(), horizontalDistance, maxDistance,
-                highlightVisibilityAlpha(selected, hasHighlight)
-                    * playerHighlightAlpha(waypoint, currentDimension)
-            );
+        } finally {
+            beamPass.endPass();
         }
-        beamPass.endPass();
     }
 
     void renderHud(final OverlayFrame frame) {

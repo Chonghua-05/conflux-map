@@ -88,7 +88,7 @@ public final class TextureBinds {
     //$$ }
     //#endif
 
-//#if MC>=12108
+    //#if MC>=12108
     //$$ static TextureSetup guiTextureSetup(final boolean textured) {
     //$$     if (!textured || boundTexture == null) {
     //$$         return TextureSetup.empty();
@@ -99,7 +99,7 @@ public final class TextureBinds {
     //$$     return TextureSetup.of(boundTexture);
     //#endif
     //$$ }
-//#endif
+    //#endif
 
     /**
      * Binds an already-vanilla-managed texture (player skin, mob texture, etc.) by identifier.

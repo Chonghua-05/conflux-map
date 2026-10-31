@@ -12,8 +12,10 @@ import java.nio.FloatBuffer;
 //$$ import com.mojang.blaze3d.systems.VertexSorter;
 //#endif
 //#endif
-import net.minecraft.client.MinecraftClient;
-import net.minecraft.client.util.Window;
+//#if MC>=11904 && MC<12109
+//$$ import net.minecraft.client.MinecraftClient;
+//$$ import net.minecraft.client.util.Window;
+//#endif
 import net.minecraft.client.util.math.MatrixStack;
 
 /**
@@ -119,7 +121,6 @@ public final class WorldMatrices {
     //$$     out[15] = matrix.m33();
     //$$ }
     //#endif
-
 
     //#if MC<12109 || MC>=260100 && MC<260200
     /**
@@ -261,21 +262,19 @@ public final class WorldMatrices {
     //$$ }
     //#endif
 
-    /** Saves the world ModelView and normalizes only the legacy LAST-event state. */
-    public static void pushWorldHudModelView() {
-        //#if MC>=12005
-        //$$ RenderSystem.getModelViewStack().pushMatrix();
-        //#else
-        final MatrixStack modelViewStack = RenderSystem.getModelViewStack();
-        modelViewStack.push();
-        modelViewStack.loadIdentity();
-        //#endif
-        //#if MC<12103
-        RenderSystem.applyModelViewMatrix();
-        //#endif
-    }
+    //#if MC>=12109 && MC<260200
+    //$$ /**
+    //$$  * Saves the global ModelView around the in-pass label phase so the billboard keeps
+    //$$  * the world view rotation vanilla installed. The pre-1.21.9 lines never reach this:
+    //$$  * their END pass reinstalls the captured view through {@link #pushWorldViewSnapshot()}
+    //$$  * instead. Pairs with {@link #popModelView()}.
+    //$$  */
+    //$$ public static void pushWorldHudModelView() {
+    //$$     RenderSystem.getModelViewStack().pushMatrix();
+    //$$ }
+    //#endif
 
-    /** Restores the global model-view saved by {@link #pushWorldHudModelView()}. */
+    /** Restores the global model-view saved by the matching push bracket (view snapshot or HUD scope). */
     public static void popModelView() {
         //#if MC>=12005
         //$$ RenderSystem.getModelViewStack().popMatrix();

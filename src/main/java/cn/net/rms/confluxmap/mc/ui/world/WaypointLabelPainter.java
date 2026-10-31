@@ -83,12 +83,9 @@ final class WaypointLabelPainter {
             * scaleMult * config.waypointLabelScalePercent / 100f;
 
         final TextRenderer textRenderer = client.textRenderer;
-        final String name = waypoint.name();
-        final String distanceText = Math.round(distance3d) + " m";
-        final int nameWidth = textRenderer.getWidth(name);
-        final int distanceWidth = textRenderer.getWidth(distanceText);
-        final float panelFullWidth = Math.max(nameWidth, distanceWidth)
-            + WaypointLabelStyle.LABEL_PANEL_PADDING * 2f;
+        final WaypointLabelStyle.Panel panel = WaypointLabelStyle.Panel.of(
+            textRenderer, waypoint, distance3d, easedProgress
+        );
         final float iconSize = MathHelper.lerp(
             easedProgress,
             WaypointLabelStyle.LABEL_ICON_COLLAPSED_SIZE,
@@ -96,10 +93,7 @@ final class WaypointLabelPainter {
         );
         final float iconHalfSize = iconSize / 2f;
         final float panelX = iconHalfSize + WaypointLabelStyle.LABEL_PANEL_GAP;
-        final float panelReveal = MathHelper.clamp(
-            easedProgress / WaypointLabelStyle.LABEL_TEXT_REVEAL_START, 0f, 1f
-        );
-        final float panelWidth = panelFullWidth * panelReveal;
+        final float panelWidth = panel.width();
 
         matrices.push();
         matrices.translate(
@@ -125,20 +119,15 @@ final class WaypointLabelPainter {
             selected, sink
         );
 
-        final float textReveal = MathHelper.clamp(
-            (easedProgress - WaypointLabelStyle.LABEL_TEXT_REVEAL_START)
-                / (1f - WaypointLabelStyle.LABEL_TEXT_REVEAL_START),
-            0f, 1f
-        );
-        if (textReveal > 0.01f) {
-            final float textX = panelX + WaypointLabelStyle.LABEL_PANEL_PADDING + (1f - textReveal) * 4f;
-            final float textAlpha = nearFade * textReveal * visibilityAlpha * labelOpacity;
+        if (panel.textReveal() > 0.01f) {
+            final float textX = panel.textX(panelX);
+            final float textAlpha = panel.textAlpha(nearFade * visibilityAlpha * labelOpacity);
             sink.text(
-                matrices, name, textX, -9f,
+                matrices, panel.name(), textX, WaypointLabelStyle.LABEL_NAME_TEXT_Y,
                 WaypointLabelStyle.withAlpha(WaypointLabelStyle.LABEL_NAME_COLOR, textAlpha)
             );
             sink.text(
-                matrices, distanceText, textX, 1f,
+                matrices, panel.distanceText(), textX, WaypointLabelStyle.LABEL_DISTANCE_TEXT_Y,
                 WaypointLabelStyle.withAlpha(WaypointLabelStyle.LABEL_DISTANCE_COLOR, textAlpha)
             );
         }

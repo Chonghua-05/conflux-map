@@ -11,9 +11,9 @@ import org.junit.jupiter.api.Test;
 /**
  * Guards the seam split: {@link WaypointWorldRenderer} is the version-free orchestrator, so
  * every version branch must live in {@link WorldOverlayEvents}, {@link BeamPass}, or
- * {@link LabelPass}. Unlike the other source scans, this reads the version-preprocessed
- * source under {@code src/main} (the preprocessed build output keeps gate lines, so it can
- * never satisfy this assertion). A {@code //#if} here means the per-version extraction
+ * {@link LabelPass}. Unlike the other source scans, this reads the raw source under
+ * {@code src/main} instead of the preprocessed build output, which keeps gate lines and so
+ * could never satisfy this assertion. A {@code //#if} here means the per-version extraction
  * ladder leaked back into the orchestration logic.
  */
 final class WaypointWorldRendererVersionFreeTest {

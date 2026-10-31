@@ -47,7 +47,7 @@ import net.minecraft.client.util.math.MatrixStack;
  * in the AFTER_TERRAIN phase from 26.2 on, where the open translucent pass forbids issuing
  * draws on the spot.
  */
-final class BeamPass implements AutoCloseable, WaypointBeamPainter.Sink {
+final class BeamPass implements WaypointBeamPainter.Sink {
     /** The pass frame, valid between {@link #beginPass} and {@link #endPass}. */
     private OverlayFrame frame;
     //#if MC>=12108 && MC<12109
@@ -329,13 +329,5 @@ final class BeamPass implements AutoCloseable, WaypointBeamPainter.Sink {
         //#else
         mesh.draw();
         //#endif
-    }
-    /**
-     * The pass brackets restore every state they touch inline, so nothing here outlives
-     * {@link #endPass}; close keeps the seam closeable as per-version native state moves
-     * in behind it.
-     */
-    @Override
-    public void close() {
     }
 }

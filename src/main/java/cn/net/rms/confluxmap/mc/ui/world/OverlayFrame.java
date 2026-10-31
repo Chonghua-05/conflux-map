@@ -16,7 +16,7 @@ import net.minecraft.util.math.Matrix4f;
 //#if MC<260200
 import net.minecraft.client.render.VertexConsumerProvider;
 //#endif
-//#if MC>=260100
+//#if MC>=260200
 //$$ import net.minecraft.client.renderer.SubmitNodeCollector;
 //#endif
 //#if MC>=260200
@@ -59,7 +59,7 @@ final class OverlayFrame {
     //#if MC>=12109 && MC<260100
     //$$ final OrderedRenderCommandQueue labelQueue;
     //#endif
-    //#if MC>=260100
+    //#if MC>=260200
     //$$ final SubmitNodeCollector labelSubmits;
     //#endif
     //#if MC>=260200
@@ -89,7 +89,7 @@ final class OverlayFrame {
         //#if MC>=12109 && MC<260100
         //$$ final OrderedRenderCommandQueue labelQueue,
         //#endif
-        //#if MC>=260100
+        //#if MC>=260200
         //$$ final SubmitNodeCollector labelSubmits,
         //#endif
         //#if MC>=260200
@@ -114,7 +114,7 @@ final class OverlayFrame {
         //#if MC>=12109 && MC<260100
         //$$ this.labelQueue = labelQueue;
         //#endif
-        //#if MC>=260100
+        //#if MC>=260200
         //$$ this.labelSubmits = labelSubmits;
         //#endif
         //#if MC>=260200

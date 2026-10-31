@@ -202,7 +202,6 @@ public final class WorldOverlayEvents {
     //$$         camera.position(),
     //$$         immediate(),
     //$$         camera,
-    //$$         null,
     //$$         camera.yRot(),
     //$$         camera.xRot(),
     //$$         tickDelta()
@@ -311,9 +310,8 @@ public final class WorldOverlayEvents {
     //#if MC<260200
     //$$         immediate(),
     //$$         camera,
-    //#endif
+    //#else
     //$$         null,
-    //#if MC>=260200
     //$$         null,
     //#endif
     //#if MC>=260300
@@ -353,7 +351,6 @@ public final class WorldOverlayEvents {
     //$$         camera.position(),
     //$$         immediate(),
     //$$         camera,
-    //$$         context.submitNodeCollector(),
     //$$         camera.yRot(),
     //$$         camera.xRot(),
     //$$         tickDelta()

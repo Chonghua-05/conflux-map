@@ -1,6 +1,8 @@
 package cn.net.rms.confluxmap.mc.ui.world;
 
+//#if MC<260200
 import cn.net.rms.confluxmap.mc.render.GuiShapes;
+//#endif
 import cn.net.rms.confluxmap.mc.render.WorldMatrices;
 
 import cn.net.rms.confluxmap.core.config.ConfluxConfig;
@@ -41,7 +43,7 @@ import net.minecraft.client.util.math.MatrixStack;
  * layout itself arrives from {@link WaypointLabelPainter}; this class applies the camera
  * rotation and submits each quad/text run through the version's pipeline.
  */
-final class LabelPass implements AutoCloseable, WaypointLabelPainter.Sink {
+final class LabelPass implements WaypointLabelPainter.Sink {
     private final MinecraftClient client;
     private final WaypointLabelPainter labelPainter;
     /** The pass frame, valid between {@link #beginPass} and {@link #endPass}. */
@@ -79,8 +81,8 @@ final class LabelPass implements AutoCloseable, WaypointLabelPainter.Sink {
         RenderSystem.depthMask(false);
         //#endif
         //#if MC>=260200
-        //$$ // 26.1 collects item submits separately so they render in the current frame;
-        //$$ // plates go into order(0) and text into order(1), matching the painter's layering.
+        //$$ // The collector records instead of drawing: plates go into order(0) and text into
+        //$$ // order(1) so both render this frame, matching the painter's layering.
         //#if MC>=260300
         //$$ plateSubmits = frame.labelSubmits.order(0);
         //$$ textSubmits = frame.labelSubmits.order(1);
@@ -262,12 +264,4 @@ final class LabelPass implements AutoCloseable, WaypointLabelPainter.Sink {
         //#endif
     }
     //#endif
-    /**
-     * The pass brackets restore every state they touch inline, so nothing here outlives
-     * {@link #endPass}; close keeps the seam closeable as per-version native state moves
-     * in behind it.
-     */
-    @Override
-    public void close() {
-    }
 }
