@@ -96,11 +96,17 @@ public final class ConfluxConfig {
      * Scale <= 1.0 is strictly clamped to LOD 0 regardless of setting.
      */
     public enum MapQuality {
+        /*
+         * Tile limits are sized against the planar prediction cache: ~0.33 MB per cached tile
+         * (pure and low-LOD corrected alike), so the 1024-tile top tier pins ~340 MB. The one
+         * exception is a corrected LOD4 tile, whose chunk-granular revision plane grows with LOD
+         * to ~0.83 MB - a session caching nothing but those at ULTRA_QUALITY could reach ~850 MB.
+         */
         ULTRA_PERFORMANCE(1.60, 64),
         PERFORMANCE(1.30, 128),
         BALANCED(1.00, 256),
-        QUALITY(0.75, 384),
-        ULTRA_QUALITY(0.55, 512);
+        QUALITY(0.75, 512),
+        ULTRA_QUALITY(0.55, 1024);
 
         private final double slope;
         private final int predictionTileCacheLimit;

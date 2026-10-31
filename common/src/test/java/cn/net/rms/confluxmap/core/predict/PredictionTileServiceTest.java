@@ -1167,7 +1167,7 @@ class PredictionTileServiceTest {
         predictionTiles.setMapQuality(ConfluxConfig.MapQuality.BALANCED);
         assertEquals(256, predictionTiles.cacheLimitForTest());
         predictionTiles.setMapQuality(ConfluxConfig.MapQuality.ULTRA_QUALITY);
-        assertEquals(512, predictionTiles.cacheLimitForTest());
+        assertEquals(1024, predictionTiles.cacheLimitForTest());
     }
 
     @Test
