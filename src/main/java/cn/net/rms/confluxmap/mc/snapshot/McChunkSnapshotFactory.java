@@ -752,9 +752,12 @@ public final class McChunkSnapshotFactory {
             }
             litColor = applyAmbientLight(base, netherAmbient);
         } else {
-            litColor = applyLight(
-                Argb.multiply(solidBase, solidTint), pos, world, solidBlock, netherAmbient
-            );
+            // Bedrock stays flat outside the ceiling: synced summaries classify all bedrock
+            // alike, so a noised local floor would diverge from the flat authoritative palette.
+            final int base = solidBlock == Blocks.BEDROCK
+                ? Argb.multiply(sampler.baseColorFor(solidState, world, pos), solidTint)
+                : Argb.multiply(solidBase, solidTint);
+            litColor = applyLight(base, pos, world, solidBlock, netherAmbient);
         }
         light[index] = sampleBlockLightAbove(
             world, pos, worldX, solidY, worldZ, worldMaxY
@@ -782,10 +785,26 @@ public final class McChunkSnapshotFactory {
     }
 
     /**
-     * Counts bedrock blocks downward across up to 4 layers below solidY [solidY - 1, solidY - 4].
-     * solidY itself is already confirmed to be bedrock by the caller, so count starts at 1.
-     * Extracts target ChunkSection once to probe via local coordinates, avoiding repeated BlockPos
-     * mutations and letting the JIT compiler unroll the bounded for-loop naturally.
+     * Counts bedrock blocks in the inclusive {@code [minY, solidY]} window downward from solidY.
+     * solidY itself is already confirmed to be bedrock by the caller, so counting starts at one.
+     * Discrete counting rather than run-abort keeps modified sandwich columns (air or netherrack
+     * pockets between bedrock layers) honest.
+     */
+    static int countBedrockThickness(final java.util.function.IntPredicate bedrockAt, final int solidY, final int minY) {
+        int count = 1;
+        for (int y = solidY - 1; y >= minY; y--) {
+            if (bedrockAt.test(y)) {
+                count++;
+            }
+        }
+        return count;
+    }
+
+    /**
+     * Probes the {@code [solidY - 4, solidY]} thickness window through per-y section lookup. A
+     * single-section lookup indexed with {@code y & 15} would wrap to the top of the wrong
+     * section once the window crosses a section boundary, which datapack ceiling dimensions can
+     * place within reach even though vanilla Nether geometry never does.
      */
     static int countBedrockRoofThickness(
         final WorldChunk chunk,
@@ -794,25 +813,34 @@ public final class McChunkSnapshotFactory {
         final int localZ,
         final int worldMinY
     ) {
-        int count = 1;
-        final int minY = Math.max(worldMinY, solidY - 4);
-        final int sectionIndex = chunk.getSectionIndex(solidY);
         final ChunkSection[] sections = chunk.getSectionArray();
-        if (sectionIndex >= 0 && sectionIndex < sections.length) {
-            final ChunkSection section = sections[sectionIndex];
-            //#if MC>=11800
-            //$$ if (!section.isEmpty()) {
-            //#else
-            if (!ChunkSection.isEmpty(section)) {
-            //#endif
-                for (int y = solidY - 1; y >= minY; y--) {
-                    if (section.getBlockState(localX, y & 15, localZ).isOf(Blocks.BEDROCK)) {
-                        count++;
-                    }
-                }
-            }
+        return countBedrockThickness(
+            y -> bedrockAt(sections, chunk.getSectionIndex(y), localX, y, localZ, worldMinY),
+            solidY,
+            Math.max(worldMinY, solidY - 4)
+        );
+    }
+
+    private static boolean bedrockAt(
+        final ChunkSection[] sections,
+        final int sectionIndex,
+        final int localX,
+        final int y,
+        final int localZ,
+        final int worldMinY
+    ) {
+        if (sectionIndex < 0 || sectionIndex >= sections.length) {
+            return false;
         }
-        return count;
+        final ChunkSection section = sections[sectionIndex];
+        //#if MC>=11800
+        //$$ if (section.isEmpty()) {
+        //#else
+        if (ChunkSection.isEmpty(section)) {
+        //#endif
+            return false;
+        }
+        return section.getBlockState(localX, (y - worldMinY) & 15, localZ).isOf(Blocks.BEDROCK);
     }
 
     /** §2.1's pivot-scan open test: non-opaque (§1's opacity test) and not lava. */

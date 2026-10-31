@@ -665,10 +665,10 @@ public final class ConfluxMapClient implements ClientModInitializer {
         ConfluxMapMod.LOGGER.info("Map color style changed to {}", config.mapColorStyle);
     }
 
-    /** Invalidates terrain planes after bedrock roof thickness shading toggle changes. */
-    public void onBedrockRoofThicknessShadingChanged() {
-        predictionTileService.reloadAll();
-        tileService.reloadMapColorStyle();
+    /** Invalidates terrain planes after the Nether ceiling bedrock thickness toggle changes. */
+    public void onNetherCeilingBedrockThicknessChanged() {
+        // Predicted bedrock is flat regardless of this toggle, so only captured planes reload.
+        tileService.invalidateCompositions();
         gameBridge.runOnRenderThread(tileTextureManager::releaseAll);
         if (chunkCapture != null) {
             chunkCapture.recaptureCurrentView();

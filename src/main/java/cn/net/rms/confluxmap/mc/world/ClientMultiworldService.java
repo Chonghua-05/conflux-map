@@ -183,21 +183,7 @@ public final class ClientMultiworldService {
     /** Applies the profile state machine without triggering UI or terrain fallback side effects. */
     ClientWorldResolution resolveProfile(final String currentAddress) {
         observeAddress(currentAddress);
-        if (velocityQuery.blocksFallback() && supportsVelocityServerQuery()) {
-            resolution = ClientWorldResolution.collecting();
-            return resolution;
-        }
-        if (lockedProfileId != null && resolution.state() != ClientWorldResolution.State.RESOLVED) {
-            resolution = resolver.select(serverId, lockedProfileId, observation());
-        } else if (resolution.state() != ClientWorldResolution.State.RESOLVED) {
-            resolution = proxyWorldJoin
-                ? resolver.resolveAfterProxyWorldJoin(serverId, previousSeedHash, observation())
-                : resolver.resolve(serverId, observation());
-        }
-        if (resolution.state() == ClientWorldResolution.State.RESOLVED) {
-            lockProfile(resolution.profile());
-        }
-        return resolution;
+        return advanceResolution(false);
     }
 
     public boolean canManageProfiles() {
@@ -506,24 +492,43 @@ public final class ClientMultiworldService {
         signals = observed;
         terrainAttempted = false;
         observationGeneration++;
+        if (serverId == null || companionWorldIdentityAuthoritative()) {
+            return;
+        }
+        advanceResolution(true);
+        notifyAmbiguity();
+        tryTerrainMatch();
+    }
+
+    /**
+     * Single driver of the client fallback machine, shared by the tracker resolve and the
+     * signal refresh. The companion owning the storage identity is decided here once, so no
+     * entry can resolve, select, or create profiles beside the server's worlds. A stable-seed
+     * lock is only re-selected to learn new signals when {@code refreshStableLock} is set;
+     * the per-tick tracker path must skip that to avoid saving on every call.
+     */
+    private ClientWorldResolution advanceResolution(final boolean refreshStableLock) {
+        if (companionWorldIdentityAuthoritative()) {
+            return resolution;
+        }
+        if (velocityQuery.blocksFallback() && supportsVelocityServerQuery()) {
+            return resolution = ClientWorldResolution.collecting();
+        }
         if (serverId != null) {
-            if (velocityQuery.blocksFallback() && supportsVelocityServerQuery()) {
-                resolution = ClientWorldResolution.collecting();
-                return;
-            }
-            if (lockedProfileId != null && lockedSeedHash.equals(seedHash)) {
+            if (lockedProfileId != null && (refreshStableLock
+                ? lockedSeedHash.equals(seedHash)
+                : resolution.state() != ClientWorldResolution.State.RESOLVED)) {
                 resolution = resolver.select(serverId, lockedProfileId, observation());
-            } else {
+            } else if (resolution.state() != ClientWorldResolution.State.RESOLVED) {
                 resolution = proxyWorldJoin
                     ? resolver.resolveAfterProxyWorldJoin(serverId, previousSeedHash, observation())
                     : resolver.resolve(serverId, observation());
-                if (resolution.state() == ClientWorldResolution.State.RESOLVED) {
-                    lockProfile(resolution.profile());
-                }
             }
-            notifyAmbiguity();
-            tryTerrainMatch();
+            if (resolution.state() == ClientWorldResolution.State.RESOLVED) {
+                lockProfile(resolution.profile());
+            }
         }
+        return resolution;
     }
 
     /** Consumes only the response sequence from the currently pending client-issued query. */
@@ -536,7 +541,7 @@ public final class ClientMultiworldService {
             currentServerNotice
         );
         response.match().ifPresent(match -> {
-            if (serverId == null) {
+            if (serverId == null || companionWorldIdentityAuthoritative()) {
                 return;
             }
             resolution = resolver.resolveVelocityServer(
@@ -757,7 +762,7 @@ public final class ClientMultiworldService {
         lockedSeedHash = OptionalLong.empty();
     }
 
-    private void observeAddress(final String currentAddress) {
+    void observeAddress(final String currentAddress) {
         if (currentAddress.equals(address)) {
             return;
         }

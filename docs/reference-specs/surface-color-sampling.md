@@ -599,6 +599,10 @@ bedrock (`Blocks.BEDROCK`), the top-down bedrock thickness (1–5 layers in the
 `1.0 + (3 - count) * 0.075` (1 layer = 1.15, 2 layers = 1.075, 3 layers = 1.00,
 4 layers = 0.925, 5 layers = 0.85). If the roof is broken or covered by another
 block, ordinary floor-scan penetration applies without forced bedrock shading.
+Bedrock sampled without the thickness window — Nether floor views, the toggle-off
+ceiling, synced authoritative tiles, and the predicted roof — renders with its
+flat base color: the position-hash detail noise is dropped everywhere because
+the summaries and the predictor have no per-column thickness to show instead.
 
 ## Confidence notes
 
