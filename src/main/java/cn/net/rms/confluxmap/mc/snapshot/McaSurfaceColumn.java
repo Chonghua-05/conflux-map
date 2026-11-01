@@ -163,7 +163,13 @@ final class McaSurfaceColumn implements SurfaceColumn {
      * resolves - {@link McaTintResolver} then falls back per category.
      */
     private Biome biomeAt(final int localX, final int surfaceY, final int localZ) {
-        final String name = source.biomeNameAt(localX, surfaceY, localZ);
+        String name = source.biomeNameAt(localX, surfaceY, localZ);
+        if (name == null) {
+            // Legacy (pre-1.18) chunks store raw registry ids with no names; without this
+            // fallback every column tints white on 1.17 saves, which reads as desaturated
+            // grass and dark water next to captured terrain.
+            name = legacyBiomeName(source.biomeIdAt(localX, surfaceY, localZ));
+        }
         if (name == null) {
             return null;
         }

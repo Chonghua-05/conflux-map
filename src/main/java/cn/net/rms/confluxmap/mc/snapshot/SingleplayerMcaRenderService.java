@@ -320,6 +320,8 @@ public final class SingleplayerMcaRenderService {
             final int[] imported = {0};
             final int[] exploredSkip = {0};
             final int[] notGenerated = {0};
+            /** First resolved biome id among this file's imports; proves tint resolution in the log. */
+            final String[] biomeSample = {null};
             scanner.forEachChunkNbt(task.path, task.mcaX(), task.mcaZ(), (chunkX, chunkZ, nbt) -> {
                 try {
                     final NbtChunkColumnSource source = new NbtChunkColumnSource(nbt);
@@ -354,6 +356,14 @@ public final class SingleplayerMcaRenderService {
                     if (world.put(MapLayer.SURFACE, snapshot, SampleSource.IMPORTED)) {
                         imported[0]++;
                         chunksImported.incrementAndGet();
+                        if (biomeSample[0] == null) {
+                            for (final String biomeId : snapshot.biomeId) {
+                                if (biomeId != null) {
+                                    biomeSample[0] = biomeId;
+                                    break;
+                                }
+                            }
+                        }
                         byRegion.computeIfAbsent(pack(chunkX >> 4, chunkZ >> 4), ignored -> new ArrayList<>())
                             .add(snapshot);
                     }
@@ -366,15 +376,15 @@ public final class SingleplayerMcaRenderService {
             });
             filesDone.incrementAndGet();
             ConfluxMapMod.LOGGER.debug(
-                "MCA import r.{}.{}.mca: {} chunks imported, {} real-skip, {} not-generated",
-                task.mcaX(), task.mcaZ(), imported[0], exploredSkip[0], notGenerated[0]);
+                "MCA import r.{}.{}.mca: {} chunks imported, {} real-skip, {} not-generated, biome sample {}",
+                task.mcaX(), task.mcaZ(), imported[0], exploredSkip[0], notGenerated[0], biomeSample[0]);
             if (filesDone.get() % LOG_FILE_INTERVAL == 0) {
                 ConfluxMapMod.LOGGER.info(
                     "[confluxmap] MCA render progress: {} files done ({} chunks imported, "
                         + "{} real-skip, {} not-generated stubs, {} chunk failures), "
-                        + "{} files queued",
+                        + "{} files queued, biome sample {}",
                     filesDone.get(), chunksImported.get(), chunksRealSkip.get(),
-                    chunksNotGenerated.get(), chunksFailed.get(), pendingSize());
+                    chunksNotGenerated.get(), chunksFailed.get(), pendingSize(), biomeSample[0]);
             }
             for (final Map.Entry<Long, List<ChunkSnapshot>> entry : byRegion.entrySet()) {
                 final List<TileService.RegionUnit> units = new ArrayList<>(entry.getValue().size());
