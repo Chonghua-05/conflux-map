@@ -16,6 +16,11 @@ public final class PredictorVersion {
 
     /**
      * Bumped whenever baseline sampling or derivation (LOD expansion, canopy, kind rules) changes.
+     * 23: the coarse LODs dropped the 2x2 biome sub-sample sweep; LOD3-4 Overworld biomes are
+     * now answered by the LOD2 per-pixel anchor-lattice cell sweep at the coarse stride (the
+     * LOD2-4 overview lattice itself is unchanged, and Nether roof and End were never
+     * sub-sampled), so LOD3-4 predicted pixels change and the per-pixel sub-sample planes are
+     * gone.
      * 22: 1.18+ LOD2-4 coarse-LOD sampling: anchor-lattice overview solves skip terrain-noise
      * octaves shorter than half the anchor stride and the jaggedness term where the jaggedness
      * spline is zero; the waterline band resolves after the sub-biome anchors and leaves
@@ -39,7 +44,7 @@ public final class PredictorVersion {
      * 18: dappled forest and sulfur caves gained real BiomeTable entries instead of the neutral
      * land fallback, changing predicted pixels for 26.2+ worlds.
      */
-    public static final int BASELINE_ALGO = 22;
+    public static final int BASELINE_ALGO = 23;
 
     private PredictorVersion() {
     }

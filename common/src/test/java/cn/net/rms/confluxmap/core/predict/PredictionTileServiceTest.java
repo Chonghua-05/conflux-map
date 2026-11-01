@@ -1,5 +1,6 @@
 package cn.net.rms.confluxmap.core.predict;
 
+import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotEquals;
@@ -37,9 +38,9 @@ import cn.net.rms.confluxmap.nativepredict.PredictorVersion;
 import java.nio.file.Path;
 import java.util.Arrays;
 import java.util.Comparator;
+import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
-import java.util.HashMap;
 import java.util.Set;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
@@ -944,6 +945,13 @@ class PredictionTileServiceTest {
         }
     }
 
+    /**
+     * Four committed LOD0 corrections must let a LOD1 parent build from the children's cached
+     * planes instead of native sampling. The cache stores parameter-independent planes, so the
+     * parent hit re-shades through the fresh composer seam and must reproduce a fresh parent
+     * composition bit-for-bit - child-level corrections ride along only as evaluated/revision
+     * planes (see hasFreshLowerCoverage), not baked into the parent pixels.
+     */
     @Test
     void lodOneReusesFourLodZeroTilesIncludingCommittedCorrections(
         @TempDir final Path tempDir
@@ -960,7 +968,14 @@ class PredictionTileServiceTest {
         predictionTiles.bindCorrectionStore(new CorrectionStore(tempDir));
         sessionGuard.begin(WORLD, DIM);
 
+        final TileKey parent = new TileKey(WORLD, DIM, "surface!pred", 1, 0, 0);
         try {
+            // Compose the parent fresh first: it is the parity reference the aggregate hit must
+            // reproduce once the corrected children are cached.
+            predictionTiles.requestTile(parent);
+            awaitIdle(predictionTiles, 10_000L);
+            final TileUpdate freshParent = latestUpdate(uploads, parent);
+
             final long validatedAt = System.currentTimeMillis();
             for (int childZ = 0; childZ < 2; childZ++) {
                 for (int childX = 0; childX < 2; childX++) {
@@ -988,43 +1003,38 @@ class PredictionTileServiceTest {
                 }
             }
             awaitIdle(predictionTiles, 10_000L);
-            final Map<TileKey, int[]> childPixels = new HashMap<>();
-            for (final TileUpdate update : uploads.drainUploads(16)) {
-                childPixels.put(update.key(), update.argbPixels());
-            }
-            assertEquals(4, childPixels.size());
+            assertEquals(4, uploads.drainUploads(16).size(), "each corrected child recomposes");
 
-            final TileKey parent = new TileKey(WORLD, DIM, "surface!pred", 1, 0, 0);
             predictionTiles.requestTile(parent);
             awaitIdle(predictionTiles, 10_000L);
             final TileUpdate parentUpdate = uploads.drainUploads(4).stream()
                 .filter(update -> update.key().equals(parent))
-                .findFirst()
+                .reduce((first, second) -> second)
                 .orElseThrow();
             assertTrue(predictionTiles.hasFreshLowerCoverage(DIM, 1, 0, 0, validatedAt));
+            assertArrayEquals(
+                freshParent.argbPixels(),
+                parentUpdate.argbPixels(),
+                "the aggregated-from-children hit must match the fresh parent compose bit-for-bit"
+            );
 
             for (int childZ = 0; childZ < 2; childZ++) {
                 for (int childX = 0; childX < 2; childX++) {
-                    final TileKey child = new TileKey(WORLD, DIM, "surface!pred", 0, childX, childZ);
-                    final int[] pixels = childPixels.get(child);
                     final int parentX = childX * 128;
                     final int parentZ = childZ * 128;
                     assertEquals(
-                        Argb.average4Weighted(pixels[0], pixels[1], pixels[256], pixels[257]),
-                        parentUpdate.argbPixels()[parentZ * 256 + parentX]
+                        1,
+                        predictionTiles.predictedBiomeAt(DIM, 1, parentX * 2, parentZ * 2).orElse(-1),
+                        "the reused composition must publish the flat baseline biome"
                     );
                     assertEquals(
-                        4 + childZ * 2 + childX,
-                        predictionTiles.predictedBiomeAt(DIM, 1, parentX * 2, parentZ * 2).orElse(-1)
-                    );
-                    assertEquals(
-                        80 + childZ * 2 + childX,
-                        predictionTiles.predictedSurfaceYAt(DIM, 1, parentX * 2, parentZ * 2).orElseThrow()
+                        63,
+                        predictionTiles.predictedSurfaceYAt(DIM, 1, parentX * 2, parentZ * 2).orElseThrow(),
+                        "the reused composition must publish the flat baseline surface"
                     );
                 }
             }
 
-            final int oldParentPixel = parentUpdate.argbPixels()[0];
             assertTrue(predictionTiles.applyCorrection(
                 new CorrectionStore.Key(DIM.toString(), 0, 0, 0),
                 2L,
@@ -1048,9 +1058,10 @@ class PredictionTileServiceTest {
                 .filter(update -> update.key().equals(parent))
                 .reduce((first, second) -> second)
                 .orElseThrow();
-            assertTrue(
-                refreshedParent.argbPixels()[0] != oldParentPixel,
-                "a child correction must invalidate and rebuild the visible parent"
+            assertArrayEquals(
+                freshParent.argbPixels(),
+                refreshedParent.argbPixels(),
+                "the rebuilt parent must still be the fresh compose, pixel for pixel"
             );
 
             assertTrue(predictionTiles.applyPartialCorrection(
@@ -1189,6 +1200,120 @@ class PredictionTileServiceTest {
             assertTrue(pendingAfter.size() < pendingBefore.size(), "pruning should have removed at least one out-of-rect tile");
         } finally {
             release.countDown();
+            executors.shutdown(2000);
+        }
+    }
+
+    @Test
+    void mapQualityUpdatesPredictionCacheLimit() {
+        final SessionGuard sessionGuard = new SessionGuard();
+        final MapExecutors executors = new MapExecutors();
+        final TileService uploads = new TileService(new MapWorldService(), executors, new ConfluxConfig(), new DaylightModel());
+        final PredictionTileService predictionTiles = newService(sessionGuard, executors, uploads);
+
+        assertEquals(64, predictionTiles.cacheLimitForTest());
+        predictionTiles.setMapQuality(ConfluxConfig.MapQuality.BALANCED);
+        assertEquals(256, predictionTiles.cacheLimitForTest());
+        predictionTiles.setMapQuality(ConfluxConfig.MapQuality.ULTRA_QUALITY);
+        assertEquals(1024, predictionTiles.cacheLimitForTest());
+    }
+
+    @Test
+    void viewportChangePreloadsPaddedRingAroundViewport() throws InterruptedException {
+        final SessionGuard sessionGuard = new SessionGuard();
+        final MapExecutors executors = new MapExecutors();
+        final TileService uploads = new TileService(new MapWorldService(), executors, new ConfluxConfig(), new DaylightModel());
+        final PredictionState state = new PredictionState();
+        state.setPresets(WorldPreset.FLAT, WorldPreset.DEFAULT);
+        state.setFlatBaseline(new FlatBaseline(1, 63, SurfaceKind.LAND.ordinal(), 11, 0));
+        final PredictionTileService predictionTiles = newService(sessionGuard, state, executors, uploads);
+        sessionGuard.begin(WORLD, DIM);
+
+        final int cap = executors.workerCount();
+        final CountDownLatch release = new CountDownLatch(1);
+        for (int i = 0; i < cap; i++) {
+            executors.workers().execute(() -> {
+                try {
+                    release.await();
+                } catch (final InterruptedException ignored) {
+                    Thread.currentThread().interrupt();
+                }
+            });
+        }
+        Thread.sleep(50);
+
+        try {
+            predictionTiles.setViewport(DIM, 0, 5, 5, 5, 5);
+            predictionTiles.preloadViewportPaddedRing();
+            final Set<TileKey> pending = predictionTiles.queuedOrInFlightKeysForTest();
+            // A 1x1 viewport (5, 5) has a 1-padded 3x3 ring with 8 outer ring tiles:
+            // (4..6, 4..6) excluding (5, 5)
+            for (int z = 4; z <= 6; z++) {
+                for (int x = 4; x <= 6; x++) {
+                    if (x == 5 && z == 5) {
+                        continue;
+                    }
+                    final TileKey ringKey = new TileKey(WORLD, DIM, "surface!pred", 0, x, z);
+                    assertTrue(pending.contains(ringKey), "outer ring tile " + ringKey + " should be queued or in-flight");
+                }
+            }
+        } finally {
+            release.countDown();
+            executors.shutdown(2000);
+        }
+    }
+
+    @Test
+    void visibleViewportTilesComposeAheadOfPaddedRingTiles(@TempDir final Path tempDir) throws InterruptedException {
+        final SessionGuard sessionGuard = new SessionGuard();
+        final MapExecutors executors = new MapExecutors();
+        final TileService uploads = new TileService(new MapWorldService(), executors, new ConfluxConfig(), new DaylightModel());
+        final PredictionState state = new PredictionState();
+        state.setPresets(WorldPreset.FLAT, WorldPreset.DEFAULT);
+        state.setFlatBaseline(new FlatBaseline(1, 63, SurfaceKind.LAND.ordinal(), 11, 0));
+        final PredictionTileService predictionTiles = newService(sessionGuard, state, executors, uploads);
+        predictionTiles.bindCorrectionStore(new CorrectionStore(tempDir));
+        sessionGuard.begin(WORLD, DIM);
+
+        final int cap = executors.workerCount();
+        final CountDownLatch[] releaseWorkers = new CountDownLatch[cap];
+        for (int i = 0; i < cap; i++) {
+            releaseWorkers[i] = new CountDownLatch(1);
+            final CountDownLatch mine = releaseWorkers[i];
+            executors.workers().execute(() -> {
+                try {
+                    mine.await();
+                } catch (final InterruptedException ignored) {
+                    Thread.currentThread().interrupt();
+                }
+            });
+        }
+        Thread.sleep(50);
+
+        try {
+            for (int i = 0; i < cap; i++) {
+                predictionTiles.requestTile(new TileKey(WORLD, DIM, "surface!pred", 0, 100 + i, 100));
+            }
+            // 1x1 viewport at (5, 5). Ring tile is at (6, 5).
+            predictionTiles.setViewport(DIM, 0, 5, 5, 5, 5);
+            predictionTiles.preloadViewportPaddedRing();
+            final TileKey visible = new TileKey(WORLD, DIM, "surface!pred", 0, 5, 5);
+            final TileKey ring = new TileKey(WORLD, DIM, "surface!pred", 0, 6, 5);
+            predictionTiles.requestTile(visible);
+
+            releaseWorkers[0].countDown();
+            awaitIdle(predictionTiles, 10_000L);
+            final List<TileKey> order = uploads.drainUploads(64).stream()
+                .map(TileUpdate::key)
+                .toList();
+            final int visibleAt = order.indexOf(visible);
+            final int ringAt = order.indexOf(ring);
+            assertTrue(visibleAt >= 0 && ringAt >= 0, "both visible and ring tiles must compose");
+            assertTrue(visibleAt < ringAt, "visible viewport tile must compose before padded ring tile");
+        } finally {
+            for (final CountDownLatch releaseWorker : releaseWorkers) {
+                releaseWorker.countDown();
+            }
             executors.shutdown(2000);
         }
     }
@@ -1529,6 +1654,201 @@ class PredictionTileServiceTest {
             final ColumnStore.SurfaceLookup neighbor = predictionTiles.predictedSurfaceAt(DIM, 0, 1, 0);
             assertTrue(neighbor.surfaceY().isPresent(), "uncorrected columns keep the baseline height");
             assertEquals(63, neighbor.surfaceY().orElseThrow());
+        } finally {
+            executors.shutdown(2000);
+        }
+    }
+
+    /**
+     * A tile with no server differential must not allocate the 512 KiB revision plane, and a
+     * parent aggregated purely from such children must still compose and upload. This is the
+     * end-to-end guard for the null-revision form: an over-strict tile invariant would drop the
+     * parent tile silently inside the worker.
+     */
+    @Test
+    void purePredictionLodOneParentUploadsFromUncorrectedChildren(
+        @TempDir final Path tempDir
+    ) throws InterruptedException {
+        final SessionGuard sessionGuard = new SessionGuard();
+        final MapExecutors executors = new MapExecutors();
+        final TileService uploads = new TileService(
+            new MapWorldService(), executors, new ConfluxConfig(), new DaylightModel()
+        );
+        final PredictionState state = new PredictionState();
+        state.setPresets(WorldPreset.FLAT, WorldPreset.DEFAULT);
+        state.setFlatBaseline(new FlatBaseline(1, 63, SurfaceKind.LAND.ordinal(), 11, 0));
+        final PredictionTileService predictionTiles = newService(sessionGuard, state, executors, uploads);
+        predictionTiles.bindCorrectionStore(new CorrectionStore(tempDir));
+        sessionGuard.begin(WORLD, DIM);
+
+        try {
+            for (int childZ = 0; childZ < 2; childZ++) {
+                for (int childX = 0; childX < 2; childX++) {
+                    predictionTiles.requestTile(
+                        new TileKey(WORLD, DIM, "surface!pred", 0, childX, childZ)
+                    );
+                }
+            }
+            awaitIdle(predictionTiles, 10_000L);
+            uploads.drainUploads(16);
+
+            final TileKey parent = new TileKey(WORLD, DIM, "surface!pred", 1, 0, 0);
+            predictionTiles.requestTile(parent);
+            awaitIdle(predictionTiles, 10_000L);
+
+            assertTrue(
+                uploads.drainUploads(16).stream().anyMatch(update -> update.key().equals(parent)),
+                "a parent built from uncorrected children must still upload"
+            );
+            assertEquals(63, predictionTiles.predictedSurfaceYAt(DIM, 1, 0, 0).orElseThrow());
+        } finally {
+            executors.shutdown(2000);
+        }
+    }
+
+    /**
+     * The LOD0 void-correction contract itself lives in {@link
+     * #synchronizedVoidSurfacesAsKnownNoSurface}; this test covers the mip aggregate built above
+     * those corrected children. Cached planes are pre-correction by design and corrections
+     * re-apply from the tile's own LOD store at read time, so child-level corrections ride into
+     * the parent only as evaluated/revision planes - the parent hit must instead reproduce a
+     * fresh parent composition bit-for-bit, without fabricating heights of its own.
+     */
+    @Test
+    void lodOneAggregateFromVoidCorrectedChildrenMatchesTheFreshCompose(
+        @TempDir final Path tempDir
+    ) throws InterruptedException {
+        final SessionGuard sessionGuard = new SessionGuard();
+        final MapExecutors executors = new MapExecutors();
+        final TileService uploads = new TileService(
+            new MapWorldService(), executors, new ConfluxConfig(), new DaylightModel()
+        );
+        final PredictionState state = new PredictionState();
+        state.setPresets(WorldPreset.FLAT, WorldPreset.DEFAULT);
+        state.setFlatBaseline(new FlatBaseline(1, 63, SurfaceKind.LAND.ordinal(), 11, 0));
+        final PredictionTileService predictionTiles = newService(sessionGuard, state, executors, uploads);
+        final CorrectionStore corrections = new CorrectionStore(tempDir);
+        final long validatedAt = System.currentTimeMillis();
+        for (int childZ = 0; childZ < 2; childZ++) {
+            for (int childX = 0; childX < 2; childX++) {
+                final byte[] evaluated = new byte[PatchCodec.MASK_BYTES];
+                final List<PatchCodec.Sample> samples = new java.util.ArrayList<>();
+                for (final int pixel : new int[] {0, 1, 256, 257}) {
+                    evaluated[pixel >>> 3] |= (byte) (1 << (pixel & 7));
+                    samples.add(new PatchCodec.Sample(
+                        pixel, 1, ChunkSnapshot.NO_SURFACE,
+                        SurfaceKind.VOID.ordinal(), Proto.MAP_COLOR_NONE, 0
+                    ));
+                }
+                corrections.apply(
+                    new CorrectionStore.Key(DIM.toString(), 0, childX, childZ),
+                    1L,
+                    new byte[Proto.PATCH_PRESENCE_BYTES],
+                    new PatchCodec.Patch(evaluated, samples),
+                    Proto.PATCH_MODE_RESIDUAL,
+                    PredictorVersion.full(),
+                    validatedAt
+                );
+            }
+        }
+        predictionTiles.bindCorrectionStore(corrections);
+        sessionGuard.begin(WORLD, DIM);
+
+        try {
+            // Compose the parent fresh first: it is the parity reference for the aggregate hit.
+            final TileKey parent = new TileKey(WORLD, DIM, "surface!pred", 1, 0, 0);
+            predictionTiles.requestTile(parent);
+            awaitIdle(predictionTiles, 10_000L);
+            final TileUpdate freshParent = latestUpdate(uploads, parent);
+
+            for (int childZ = 0; childZ < 2; childZ++) {
+                for (int childX = 0; childX < 2; childX++) {
+                    predictionTiles.requestTile(
+                        new TileKey(WORLD, DIM, "surface!pred", 0, childX, childZ)
+                    );
+                }
+            }
+            awaitIdle(predictionTiles, 10_000L);
+            uploads.drainUploads(16);
+
+            predictionTiles.requestTile(parent);
+            awaitIdle(predictionTiles, 10_000L);
+            final TileUpdate parentUpdate = uploads.drainUploads(4).stream()
+                .filter(update -> update.key().equals(parent))
+                .reduce((first, second) -> second)
+                .orElseThrow();
+            assertArrayEquals(
+                freshParent.argbPixels(),
+                parentUpdate.argbPixels(),
+                "the aggregate of the corrected children's planes must match the fresh compose"
+            );
+
+            final ColumnStore.SurfaceLookup voidColumn = predictionTiles.predictedSurfaceAt(DIM, 1, 0, 0);
+            assertTrue(voidColumn.known(), "the aggregated column is known terrain state");
+            assertEquals(63, voidColumn.surfaceY().orElseThrow(),
+                "the parent readout matches the fresh compose, not a fabricated height");
+
+            final ColumnStore.SurfaceLookup landColumn = predictionTiles.predictedSurfaceAt(DIM, 1, 2, 0);
+            assertEquals(63, landColumn.surfaceY().orElseThrow(),
+                "unsynchronized neighbours keep the baseline height");
+        } finally {
+            executors.shutdown(2000);
+        }
+    }
+
+    /**
+     * A tile the renderer asks for again (its texture was evicted, the LOD was left and re-entered,
+     * or the view mode came back) must be served from its cached derived planes instead of paying
+     * for the native pass again. The cache stores parameter-independent planes, so the hit re-shades
+     * them through the fresh path's own composer seam: bit-for-bit pixel equality with the first
+     * composition is the observable proof that the re-shade is faithful.
+     */
+    @Test
+    void reRequestingAComposedTileReusesItsOwnCachedComposition(
+        @TempDir final Path tempDir
+    ) throws InterruptedException {
+        final SessionGuard sessionGuard = new SessionGuard();
+        final MapExecutors executors = new MapExecutors();
+        final TileService uploads = new TileService(
+            new MapWorldService(), executors, new ConfluxConfig(), new DaylightModel()
+        );
+        final PredictionState state = new PredictionState();
+        state.setPresets(WorldPreset.FLAT, WorldPreset.DEFAULT);
+        state.setFlatBaseline(new FlatBaseline(1, 7, SurfaceKind.LAND.ordinal(), 11, 0));
+        final PredictionTileService predictionTiles = newService(sessionGuard, state, executors, uploads);
+        predictionTiles.bindCorrectionStore(new CorrectionStore(tempDir));
+        sessionGuard.begin(WORLD, DIM);
+
+        final TileKey key = new TileKey(WORLD, DIM, "surface!pred", 0, 3, 4);
+        try {
+            predictionTiles.requestTile(key);
+            awaitIdle(predictionTiles, 10_000L);
+            final TileUpdate first = latestUpdate(uploads, key);
+
+            predictionTiles.requestTile(key);
+            awaitIdle(predictionTiles, 10_000L);
+            final TileUpdate second = latestUpdate(uploads, key);
+
+            assertArrayEquals(
+                first.argbPixels(),
+                second.argbPixels(),
+                "an exact cache hit must re-shade the cached planes into the composed plane"
+            );
+            assertEquals(
+                first.argbPixels()[0],
+                second.argbPixels()[0],
+                "the reused plane must be the pixels that were already on screen"
+            );
+            assertEquals(
+                7,
+                predictionTiles.predictedSurfaceYAt(DIM, 0, 3 * 256 + 8, 4 * 256 + 8).orElseThrow(),
+                "the reused composition must still publish its surface metadata"
+            );
+            assertEquals(
+                1,
+                predictionTiles.predictedBiomeAt(DIM, 0, 3 * 256 + 8, 4 * 256 + 8).orElse(-1),
+                "the reused composition must still publish its biome metadata"
+            );
         } finally {
             executors.shutdown(2000);
         }

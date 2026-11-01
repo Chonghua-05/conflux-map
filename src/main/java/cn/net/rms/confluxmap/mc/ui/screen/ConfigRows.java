@@ -157,6 +157,7 @@ final class ConfigRows {
                 y = addZoomRow(y);
                 y = addToggleRow(y, "confluxmap.config.minimap.show_coordinates", () -> config.showCoordinates, v -> config.showCoordinates = v);
                 y = addToggleRow(y, "confluxmap.config.minimap.show_biome", () -> config.showBiome, v -> config.showBiome = v);
+                y = addToggleRow(y, "confluxmap.config.minimap.show_layer_label", () -> config.showLayerIndicator, v -> config.showLayerIndicator = v);
                 break;
             case MAP:
                 y = addSectionRow(y, "confluxmap.screen.config.section.layers");
@@ -164,7 +165,6 @@ final class ConfigRows {
                     y, "confluxmap.config.layers.override", ConfluxConfig.LayerOverride.values(),
                     () -> config.layerOverride, v -> config.layerOverride = v, ConfigValueLabels::layerOverrideKey
                 );
-                y = addToggleRow(y, "confluxmap.config.layers.show_indicator", () -> config.showLayerIndicator, v -> config.showLayerIndicator = v);
                 y = addIntSliderRow(
                     y, "confluxmap.config.layers.cave_slice_y", 0, 255,
                     () -> config.caveSliceY, v -> config.caveSliceY = v, ConfigValueLabels::plainText
@@ -176,6 +176,14 @@ final class ConfigRows {
                 y = addSectionRow(y, "confluxmap.screen.config.section.map_style");
                 y = addToggleRow(
                     y, "confluxmap.config.map.dynamic_lighting", () -> config.dynamicLighting, v -> config.dynamicLighting = v
+                );
+                y = addToggleRow(
+                    y, "confluxmap.config.map.bedrock_thickness_shading",
+                    () -> config.showNetherCeilingBedrockThickness,
+                    v -> {
+                        config.showNetherCeilingBedrockThickness = v;
+                        ConfluxMapClient.get().onNetherCeilingBedrockThicknessChanged();
+                    }
                 );
                 y = addEnumRow(
                     y, "confluxmap.config.map.color_style", MapColorStyle.values(),
@@ -189,7 +197,13 @@ final class ConfigRows {
                 y = addIntSliderRow(
                     y, "confluxmap.config.map.quality", 0, ConfluxConfig.MapQuality.values().length - 1,
                     () -> config.mapQuality.ordinal(),
-                    v -> config.mapQuality = ConfluxConfig.MapQuality.values()[Math.max(0, Math.min(ConfluxConfig.MapQuality.values().length - 1, v))],
+                    v -> {
+                        config.mapQuality = ConfluxConfig.MapQuality.values()[Math.max(0, Math.min(ConfluxConfig.MapQuality.values().length - 1, v))];
+                        final ConfluxMapClient client = ConfluxMapClient.get();
+                        if (client != null && client.predictionTileService() != null) {
+                            client.predictionTileService().setMapQuality(config.mapQuality);
+                        }
+                    },
                     ConfigValueLabels::mapQualitySliderText
                 );
                 y = addToggleRow(y, "confluxmap.config.fullmap.chunk_grid", () -> config.fullmapChunkGrid, v -> config.fullmapChunkGrid = v);

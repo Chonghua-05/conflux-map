@@ -3,6 +3,7 @@ package cn.net.rms.confluxmap.mc.snapshot;
 import cn.net.rms.confluxmap.compat.Regs;
 import cn.net.rms.confluxmap.core.color.LightTint;
 import cn.net.rms.confluxmap.core.color.OverlayVisibility;
+import cn.net.rms.confluxmap.core.color.ShadingPipeline;
 import cn.net.rms.confluxmap.core.model.ChunkSnapshot;
 import cn.net.rms.confluxmap.core.model.MapLayer;
 import cn.net.rms.confluxmap.core.model.SurfaceKind;
@@ -33,6 +34,7 @@ import net.minecraft.util.math.Direction;
 import net.minecraft.util.math.MathHelper;
 import net.minecraft.world.Heightmap;
 import net.minecraft.world.LightType;
+import net.minecraft.world.chunk.ChunkSection;
 import net.minecraft.world.chunk.ChunkStatus;
 import net.minecraft.world.chunk.WorldChunk;
 
@@ -53,15 +55,26 @@ public final class McChunkSnapshotFactory {
     private final MinecraftClient client;
     private final SpriteColorSampler sampler;
     private final ChunkTintSampler tints;
+    private final java.util.function.BooleanSupplier bedrockThicknessShading;
 
     public McChunkSnapshotFactory(
         final MinecraftClient client,
         final SpriteColorSampler sampler,
         final BiomeTintResolver tintResolver
     ) {
+        this(client, sampler, tintResolver, () -> true);
+    }
+
+    public McChunkSnapshotFactory(
+        final MinecraftClient client,
+        final SpriteColorSampler sampler,
+        final BiomeTintResolver tintResolver,
+        final java.util.function.BooleanSupplier bedrockThicknessShading
+    ) {
         this.client = client;
         this.sampler = sampler;
         this.tints = new ChunkTintSampler(client, tintResolver);
+        this.bedrockThicknessShading = bedrockThicknessShading;
     }
 
     /**
@@ -724,18 +737,31 @@ public final class McChunkSnapshotFactory {
         // synchronized roof pixels use that same representation and calculation.
         final int litColor;
         if (deferBlockLight) {
-            litColor = applyAmbientLight(Argb.multiply(solidBase, solidTint), netherAmbient);
-            light[index] = sampleBlockLightAbove(
-                world, pos, worldX, solidY, worldZ, worldMaxY
-            );
+            final int base;
+            if (solidBlock == Blocks.BEDROCK) {
+                final int pureBedrockBase = sampler.baseColorFor(solidState, world, pos);
+                if (bedrockThicknessShading.getAsBoolean()) {
+                    final int bedrockCount = countBedrockRoofThickness(chunk, localX, solidY, localZ, worldMinY);
+                    final float thicknessMultiplier = ShadingPipeline.bedrockThicknessMultiplier(bedrockCount);
+                    base = ShadingPipeline.applyBrightnessMultiplier(Argb.multiply(pureBedrockBase, solidTint), thicknessMultiplier);
+                } else {
+                    base = Argb.multiply(pureBedrockBase, solidTint);
+                }
+            } else {
+                base = Argb.multiply(solidBase, solidTint);
+            }
+            litColor = applyAmbientLight(base, netherAmbient);
         } else {
-            litColor = applyLight(
-                Argb.multiply(solidBase, solidTint), pos, world, solidBlock, netherAmbient
-            );
-            light[index] = sampleBlockLightAbove(
-                world, pos, worldX, solidY, worldZ, worldMaxY
-            );
+            // Bedrock stays flat outside the ceiling: synced summaries classify all bedrock
+            // alike, so a noised local floor would diverge from the flat authoritative palette.
+            final int base = solidBlock == Blocks.BEDROCK
+                ? Argb.multiply(sampler.baseColorFor(solidState, world, pos), solidTint)
+                : Argb.multiply(solidBase, solidTint);
+            litColor = applyLight(base, pos, world, solidBlock, netherAmbient);
         }
+        light[index] = sampleBlockLightAbove(
+            world, pos, worldX, solidY, worldZ, worldMaxY
+        );
 
         int overlayColor = Argb.TRANSPARENT;
         if (solidY + 1 < worldMaxY) {
@@ -756,6 +782,65 @@ public final class McChunkSnapshotFactory {
         tintArgb[index] = 0xFFFFFFFF;
         overlayArgb[index] = overlayColor;
         fluidDepth[index] = 0;
+    }
+
+    /**
+     * Counts bedrock blocks in the inclusive {@code [minY, solidY]} window downward from solidY.
+     * solidY itself is already confirmed to be bedrock by the caller, so counting starts at one.
+     * Discrete counting rather than run-abort keeps modified sandwich columns (air or netherrack
+     * pockets between bedrock layers) honest.
+     */
+    static int countBedrockThickness(final java.util.function.IntPredicate bedrockAt, final int solidY, final int minY) {
+        int count = 1;
+        for (int y = solidY - 1; y >= minY; y--) {
+            if (bedrockAt.test(y)) {
+                count++;
+            }
+        }
+        return count;
+    }
+
+    /**
+     * Probes the {@code [solidY - 4, solidY]} thickness window through per-y section lookup. A
+     * single-section lookup indexed with {@code y & 15} would wrap to the top of the wrong
+     * section once the window crosses a section boundary, which datapack ceiling dimensions can
+     * place within reach even though vanilla Nether geometry never does.
+     */
+    static int countBedrockRoofThickness(
+        final WorldChunk chunk,
+        final int localX,
+        final int solidY,
+        final int localZ,
+        final int worldMinY
+    ) {
+        final ChunkSection[] sections = chunk.getSectionArray();
+        return countBedrockThickness(
+            y -> bedrockAt(sections, chunk.getSectionIndex(y), localX, y, localZ, worldMinY),
+            solidY,
+            Math.max(worldMinY, solidY - 4)
+        );
+    }
+
+    private static boolean bedrockAt(
+        final ChunkSection[] sections,
+        final int sectionIndex,
+        final int localX,
+        final int y,
+        final int localZ,
+        final int worldMinY
+    ) {
+        if (sectionIndex < 0 || sectionIndex >= sections.length) {
+            return false;
+        }
+        final ChunkSection section = sections[sectionIndex];
+        //#if MC>=11800
+        //$$ if (section.isEmpty()) {
+        //#else
+        if (ChunkSection.isEmpty(section)) {
+        //#endif
+            return false;
+        }
+        return section.getBlockState(localX, (y - worldMinY) & 15, localZ).isOf(Blocks.BEDROCK);
     }
 
     /** §2.1's pivot-scan open test: non-opaque (§1's opacity test) and not lava. */
@@ -800,7 +885,7 @@ public final class McChunkSnapshotFactory {
     }
 
     /** §2/§6 unified block-type classification, shared by the surface scan and the floor scan. */
-    private static SurfaceKind classifySurfaceKind(final Block surfaceBlock) {
+    static SurfaceKind classifySurfaceKind(final Block surfaceBlock) {
         if (surfaceBlock == Blocks.LAVA) {
             return SurfaceKind.LAVA;
         } else if (surfaceBlock == Blocks.WATER) {

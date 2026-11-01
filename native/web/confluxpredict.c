@@ -40,9 +40,6 @@ static int biomeData[CFX_WEB_GRID_CELLS];
 static int heightData[CFX_WEB_GRID_CELLS];
 static int surfaceData[CFX_WEB_GRID_CELLS];
 static int canopyData[CFX_WEB_GRID_CELLS];
-static int subBiomeData[CFX_WEB_GRID_CELLS * 4];
-static int subSurfaceData[CFX_WEB_GRID_CELLS * 4];
-static int subCanopyData[CFX_WEB_GRID_CELLS * 4];
 static uint64_t worldSeed;
 static int ready;
 
@@ -202,41 +199,26 @@ static void cfxWebGenerateCanopy(int blockX, int blockZ, int lod)
         }
 }
 
-static void cfxWebStoreSubBiome(
-    int sub, int row, int col, int z, int x, int biome
-)
-{
-    if (sub == 1)
-    {
-        biomeData[row*CFX_WEB_GRID_SIZE+col] = biome;
-        return;
-    }
-    subBiomeData[row*CFX_WEB_GRID_SIZE*4 + col*4 + (z & 1)*2 + (x & 1)] = biome;
-}
-
 /*
- * Sub-biome cell loop, mirroring LodSampling.runSubBiomeCells: cells of 2x2
- * output pixels partition the whole sweep, corner anchors from the odd-pixel
- * biome lattice. A cell whose four corner biomes agree copies that biome across
- * its sub-samples, but only when none of the cell's own four pixel heights sits
- * in the one-block band where the fluid classification reads the biome id
- * (height == WATER_LEVEL - 1: below it water is height-decided, at/above sea
- * level land is - so shores, shelves and river beds keep exact sub-samples). A
- * deep-water cell - every corner a water biome, every pixel under that band -
- * copies any corner too: all water biomes render with the same tint and the
- * height alone classifies the column. Every other cell solves its sub-samples
- * exactly, each with its own pixel's height - value-for-value what a dense sweep
- * returns. sub==1 (LOD2) fills biomeData; sub==2 (LOD3-4) fills the per-pixel
- * 2x2 subBiomeData slots.
+ * Per-pixel biome cell loop, mirroring LodSampling.runSubBiomeCells with one
+ * sample per pixel: cells of 2x2 output pixels partition the whole sweep, corner
+ * anchors from the odd-pixel biome lattice. A cell whose four corner biomes
+ * agree copies that biome across its pixels, but only when none of the cell's
+ * own four pixel heights sits in the one-block band where the fluid
+ * classification reads the biome id (height == WATER_LEVEL - 1: below it water
+ * is height-decided, at/above sea level land is - so shores, shelves and river
+ * beds keep exact samples). A deep-water cell - every corner a water biome,
+ * every pixel under that band - copies any corner too: all water biomes render
+ * with the same tint and the height alone classifies the column. Every other
+ * cell solves its pixels exactly, each with its own pixel's height -
+ * value-for-value what a dense sweep returns.
  */
 static void cfxWebRunSubBiomeCells(
-    int blockX, int blockZ, int lod, int sub,
+    int blockX, int blockZ, int lod,
     const int *anchorBiomes, int anchorsW
 )
 {
     const int blockStride = 1 << lod;
-    const int subStride = blockStride / sub;
-    const int step = 2 * sub;
     const int originX = blockX - blockStride;
     const int originZ = blockZ - blockStride;
     const int cells = CFX_WEB_GRID_SIZE / 2;
@@ -283,122 +265,31 @@ static void cfxWebRunSubBiomeCells(
             if (copyable)
             {
                 int z, x;
-                for (z = 0; z < step; z++)
-                    for (x = 0; x < step; x++)
-                        cfxWebStoreSubBiome(
-                            sub, (cz*step+z)/sub, (cx*step+x)/sub, z, x, corner
-                        );
+                for (z = 0; z < 2; z++)
+                    for (x = 0; x < 2; x++)
+                        biomeData[(cz*2+z)*CFX_WEB_GRID_SIZE + cx*2+x] = corner;
                 continue;
             }
             {
                 int z, x;
-                for (z = 0; z < step; z++)
-                    for (x = 0; x < step; x++)
+                for (z = 0; z < 2; z++)
+                    for (x = 0; x < 2; x++)
                     {
-                        const int row = (cz*step+z)/sub;
-                        const int col = (cx*step+x)/sub;
-                        const int height = heightData[row*CFX_WEB_GRID_SIZE+col];
+                        const int index = (cz*2+z)*CFX_WEB_GRID_SIZE + cx*2+x;
+                        const int height = heightData[index];
                         const int y = height < CFX_WEB_WATER_LEVEL
                             ? CFX_WEB_WATER_LEVEL : height;
                         int x4, y4, z4;
                         voronoiAccess3D(
-                            generator.sha, originX + (cx*step+x)*subStride,
-                            y, originZ + (cz*step+z)*subStride, &x4, &y4, &z4
+                            generator.sha, originX + (cx*2+x)*blockStride,
+                            y, originZ + (cz*2+z)*blockStride, &x4, &y4, &z4
                         );
-                        cfxWebStoreSubBiome(
-                            sub, row, col, z, x,
-                            sampleBiomeNoise(
-                                &generator.bn, NULL, x4, y4, z4, NULL, 0
-                            )
+                        biomeData[index] = sampleBiomeNoise(
+                            &generator.bn, NULL, x4, y4, z4, NULL, 0
                         );
                     }
             }
         }
-}
-
-static int cfxWebGenerateSubSamples(
-    int blockX, int blockZ, int lod, int *biomeAnchors, int anchorsW
-)
-{
-    memset(subBiomeData, 0, sizeof(subBiomeData));
-    memset(subSurfaceData, 0, sizeof(subSurfaceData));
-    memset(subCanopyData, 0, sizeof(subCanopyData));
-    if (lod < 3 || dimension == DIM_END)
-        return CFX_WEB_OK;
-    const int blockStride = 1 << lod;
-    const int subStride = blockStride / 2;
-    const int originX = blockX - blockStride;
-    const int originZ = blockZ - blockStride;
-
-    if (dimension == DIM_OVERWORLD && mc >= MC_1_18 && biomeAnchors != NULL)
-    {
-        /*
-         * Sparse-lattice sweep over pre-solved anchors (the same grid the band
-         * gate consulted, solved before the waterline rewrite), mirroring
-         * LodSampling.runSubBiomeCells: see cfxWebRunSubBiomeCells.
-         */
-        cfxWebRunSubBiomeCells(blockX, blockZ, lod, 2, biomeAnchors, anchorsW);
-    }
-    else
-    {
-        const int width = CFX_WEB_GRID_SIZE * 2;
-        const int scale = subStride < 4 ? 1 : 4;
-        int *raw = malloc(sizeof(int) * (size_t) width * width);
-        if (raw == NULL)
-            return CFX_WEB_ALLOC;
-        const int err = cfxWebGenerateBiomesStrided(
-            scale, floordiv(originX, scale), floordiv(originZ, scale),
-            width, width, subStride / scale, raw
-        );
-        if (err != CFX_WEB_OK)
-        {
-            free(raw);
-            return err;
-        }
-        int z, x, subZ, subX;
-        for (z = 0; z < CFX_WEB_GRID_SIZE; z++)
-            for (x = 0; x < CFX_WEB_GRID_SIZE; x++)
-            {
-                const int index = z*CFX_WEB_GRID_SIZE+x;
-                for (subZ = 0; subZ < 2; subZ++)
-                    for (subX = 0; subX < 2; subX++)
-                        subBiomeData[index*4+subZ*2+subX] =
-                            raw[(z*2+subZ)*width+x*2+subX];
-            }
-        free(raw);
-    }
-
-    int index, sample;
-    for (index = 0; index < CFX_WEB_GRID_CELLS; index++)
-        for (sample = 0; sample < 4; sample++)
-        {
-            const int output = index*4+sample;
-            const int biome = subBiomeData[output];
-            const int water = dimension == DIM_OVERWORLD
-                && heightData[index] < CFX_WEB_WATER_LEVEL
-                && (heightData[index] < CFX_WEB_WATER_LEVEL - 1
-                    || cfxWebIsWaterBiome(biome));
-            int depth = water ? CFX_WEB_WATER_LEVEL - heightData[index] : 0;
-            if (depth < 0) depth = 0;
-            if (depth > 255) depth = 255;
-            subSurfaceData[output] = (water ? CFX_WEB_SURFACE_WATER : 0)
-                | (depth << 8);
-            const double treeCover = cfxWebTreeCover(biome);
-            if (water || biome == 10 || biome == 11 || biome == 50
-                || treeCover <= 0.0)
-                continue;
-            const int pixelX = index % CFX_WEB_GRID_SIZE;
-            const int pixelZ = index / CFX_WEB_GRID_SIZE;
-            const int subX = sample & 1;
-            const int subZ = sample >> 1;
-            subCanopyData[output] = cfxWebCanopyBump(
-                worldSeed,
-                originX + pixelX*blockStride + subX*subStride,
-                originZ + pixelZ*blockStride + subZ*subStride,
-                lod, treeCover
-            );
-        }
-    return CFX_WEB_OK;
 }
 
 static int cfxWebGenerateBiomesStrided(
@@ -1168,36 +1059,17 @@ static int cfxWebGenerateOverworld(int blockX, int blockZ, int lod, int exact)
         err = cfxWebApplyExactResiduals(
             originX, originZ, lod, blockStride, fluidConfidence
         );
-    if (err == CFX_WEB_OK && lod >= 3)
-    {
-        /*
-         * The 2x2 sub sweep subsumes the centre pass: its first sample sits at the
-         * pixel's own position and height, so the pixel biome is that sample - the
-         * same subsumption LodSampling performs. Runs before the surface
-         * classification below, which reads biomeData.
-         */
-        err = cfxWebGenerateSubSamples(
-            blockX, blockZ, lod, biomeAnchors,
-            biomeAnchors != NULL ? CFX_WEB_GRID_SIZE / 2 + 1 : 0
-        );
-        if (err == CFX_WEB_OK)
-        {
-            int i;
-            for (i = 0; i < CFX_WEB_GRID_CELLS; i++)
-                biomeData[i] = subBiomeData[i*4];
-        }
-    }
-    if (err == CFX_WEB_OK && lod < 3)
+    if (err == CFX_WEB_OK)
     {
         if (mc >= MC_1_18 && biomeAnchors != NULL)
         {
             /*
-             * LOD2: the same cell lattice answers the plain per-pixel biome
-             * table (sub == 1, one sample per pixel), the subsumption the Java
+             * LOD2-4: the cell lattice answers the plain per-pixel biome table
+             * (one sample per pixel, no sub-sampling), the subsumption the Java
              * side performs when it array-copies the sweep into biomeId.
              */
             cfxWebRunSubBiomeCells(
-                blockX, blockZ, lod, 1, biomeAnchors,
+                blockX, blockZ, lod, biomeAnchors,
                 CFX_WEB_GRID_SIZE / 2 + 1
             );
         }
@@ -1506,8 +1378,6 @@ int cfxWebGenerateTile(int blockX, int blockZ, int lod, int exact)
             : cfxWebGenerateFlatDimension(blockX, blockZ, lod);
     else
         result = cfxWebGenerateFlatDimension(blockX, blockZ, lod);
-    if (result == CFX_WEB_OK && !(dimension == DIM_OVERWORLD && lod >= 3))
-        result = cfxWebGenerateSubSamples(blockX, blockZ, lod, NULL, 0);
     if (result == CFX_WEB_OK)
         cfxWebGenerateCanopy(blockX, blockZ, lod);
     return result;
@@ -1535,22 +1405,4 @@ __attribute__((visibility("default")))
 int *cfxWebCanopyData(void)
 {
     return canopyData;
-}
-
-__attribute__((visibility("default")))
-int *cfxWebSubBiomeData(void)
-{
-    return subBiomeData;
-}
-
-__attribute__((visibility("default")))
-int *cfxWebSubSurfaceData(void)
-{
-    return subSurfaceData;
-}
-
-__attribute__((visibility("default")))
-int *cfxWebSubCanopyData(void)
-{
-    return subCanopyData;
 }
