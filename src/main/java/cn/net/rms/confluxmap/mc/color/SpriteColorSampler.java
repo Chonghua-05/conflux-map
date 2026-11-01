@@ -269,6 +269,30 @@ public final class SpriteColorSampler {
         return materialFor(state, world, pos, id).detail();
     }
 
+    /**
+     * Everything the surface scan derives from one state's baked model, sampled in a single
+     * render-thread visit. Off-thread importers (singleplayer MCA) hop once per distinct state
+     * and then reproduce {@link #colorFor}/{@link #xaeroColorFor} bitwise: the detail profile
+     * and pattern salt are state constants, so
+     * {@code detail().apply(baseArgb, x, z, patternSalt())} equals {@code colorFor} at that
+     * position and {@code xaeroBaseArgb} equals {@code xaeroColorFor} exactly.
+     */
+    public SampledColors sampledColorsFor(final BlockState state, final BlockView world, final BlockPos pos) {
+        final int id = Block.getRawIdFromState(state);
+        final SampledMaterial material = materialFor(state, world, pos, id);
+        return new SampledColors(
+            material.argb(), xaeroColorFor(state, world, pos), material.detail(), material.patternSalt()
+        );
+    }
+
+    /** One render-thread sample of a state's colors, detail profile and detail-pattern salt. */
+    public record SampledColors(
+        int baseArgb,
+        int xaeroBaseArgb,
+        MaterialDetailProfile detail,
+        int patternSalt
+    ) {}
+
     private SampledMaterial materialFor(
         final BlockState state,
         final BlockView world,

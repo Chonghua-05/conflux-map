@@ -14,6 +14,8 @@ import cn.net.rms.confluxmap.core.config.ConfigIo;
 import cn.net.rms.confluxmap.core.config.ConfluxConfig;
 import cn.net.rms.confluxmap.core.export.MapExportService;
 import cn.net.rms.confluxmap.core.xaeroimport.XaeroImportService;
+import cn.net.rms.confluxmap.mc.snapshot.McChunkSnapshotFactory;
+import cn.net.rms.confluxmap.mc.snapshot.SingleplayerMcaRenderService;
 import cn.net.rms.confluxmap.mc.snapshot.XaeroSnapshotBaker;
 import cn.net.rms.confluxmap.core.export.ServiceMapExportTileSource;
 import cn.net.rms.confluxmap.core.loadstate.FullscreenDisplayMode;
@@ -131,6 +133,7 @@ public final class ConfluxMapClient implements ClientModInitializer {
     private TileTextureManager tileTextureManager;
     private FullscreenMapBrowseService fullscreenMapBrowseService;
     private ChunkCaptureService chunkCapture;
+    private SingleplayerMcaRenderService mcaRenderService;
     private RadarViewRange radarViewRange;
     private EntityRadarScanner radarScanner;
     private ServerPlayerRadarState serverPlayerRadar;
@@ -312,6 +315,7 @@ public final class ConfluxMapClient implements ClientModInitializer {
             )
         );
         ClientTickEvents.END_CLIENT_TICK.register(ignored -> mapExportService.tick());
+        ClientTickEvents.END_CLIENT_TICK.register(ignored -> mcaRenderService.tick());
         xaeroImportService = new XaeroImportService(
             mapWorlds, regionCache, tileService, cacheRoot, new XaeroSnapshotBaker(client), ConfluxMapMod.LOGGER
         );
@@ -351,6 +355,11 @@ public final class ConfluxMapClient implements ClientModInitializer {
             regionCache, spriteColorSampler, biomeTintResolver, layerSelector
         );
         clientMultiworldService.bindChunkCapture(chunkCapture);
+        mcaRenderService = new SingleplayerMcaRenderService(
+            client, config, sessionGuard, mapWorlds, tileService, regionCache,
+            new McChunkSnapshotFactory(client, spriteColorSampler, biomeTintResolver),
+            spriteColorSampler
+        );
         radarViewRange = new RadarViewRange();
         customMarkerService = new CustomMarkerService(ConfluxMapMod.LOGGER);
         radarScanner = new EntityRadarScanner(
@@ -420,6 +429,7 @@ public final class ConfluxMapClient implements ClientModInitializer {
         // RegionCacheService owns the map-world rotation and final-flush boundary as one transition.
         sessionTracker.addListener(regionCache::onSessionChanged);
         sessionTracker.addListener(chunkCapture::onSessionChanged);
+        sessionTracker.addListener(mcaRenderService::onSessionChanged);
         sessionTracker.addListener(tileService::onSessionChanged);
         sessionTracker.addListener(radarScanner::onSessionChanged);
         sessionTracker.addListener(serverPlayerRadar::onSessionChanged);
@@ -621,6 +631,10 @@ public final class ConfluxMapClient implements ClientModInitializer {
 
     public ChunkCaptureService chunkCapture() {
         return chunkCapture;
+    }
+
+    public SingleplayerMcaRenderService mcaRenderService() {
+        return mcaRenderService;
     }
 
     public EntityRadarScanner radarScanner() {

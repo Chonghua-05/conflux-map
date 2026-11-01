@@ -1947,6 +1947,11 @@ public final class FullscreenMapScreen extends ConfluxScreen {
         final boolean preloadPaddedRing = updateViewport && predictionActive;
         if (updateViewport) {
             viewTiles().setViewport(layer, lod, firstTileX, lastTileX, firstTileZ, lastTileZ);
+            // Viewport-following singleplayer MCA conversion, independent of prediction/sync;
+            // non-current sessions (browse mode) are filtered by the service.
+            ConfluxMapClient.get().mcaRenderService().reportMapViewport(
+                session, ChunkViewport.covering(centerX, centerZ, width, height, scale)
+            );
             if (predictionActive) {
                 if (session.dimension().equals(DimensionId.NETHER)) {
                     predictionTiles.setNetherBiomeY(layerSelector.current().pivotY());

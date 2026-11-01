@@ -19,7 +19,7 @@ import net.minecraft.nbt.NbtCompound;
 import net.minecraft.nbt.NbtIo;
 
 /** Reads one Anvil file once and produces all four 16x16-chunk summary regions it contains. */
-final class AnvilMcaScanner {
+public final class AnvilMcaScanner {
     private static final int CHUNKS_PER_SIDE = AnvilRegionReader.CHUNKS_PER_SIDE;
     private static final int CHUNKS_PER_MCA = CHUNKS_PER_SIDE * CHUNKS_PER_SIDE;
     private static final int SUMMARY_REGIONS_PER_SIDE = 2;
@@ -30,11 +30,11 @@ final class AnvilMcaScanner {
     //#endif
     private final boolean nativeEnabled;
 
-    AnvilMcaScanner() {
+    public AnvilMcaScanner() {
         this(true);
     }
 
-    AnvilMcaScanner(final boolean nativeEnabled) {
+    public AnvilMcaScanner(final boolean nativeEnabled) {
         this.nativeEnabled = nativeEnabled;
     }
 
@@ -63,6 +63,62 @@ final class AnvilMcaScanner {
         final ChunkSummarizer summarizer
     ) {
         return scan(path, mcaX, mcaZ, sourceMcaMtimeMs, lod, null, summarizer);
+    }
+
+    /** Consumer of one stored chunk's raw NBT, in file order. */
+    public interface ChunkNbtVisitor {
+        void chunk(int chunkX, int chunkZ, NbtCompound nbt);
+    }
+
+    /**
+     * Visits every stored chunk's raw NBT without summarizing it. Backs the singleplayer
+     * MCA import, which needs exact block states and biomes rather than the compact
+     * {@link SummaryCodec} summary; the native fast path does not apply there. Corrupt or
+     * concurrently modified Anvil files are routine, so failures stay quiet and skip the chunk.
+     */
+    public void forEachChunkNbt(
+        final Path path,
+        final int mcaX,
+        final int mcaZ,
+        final ChunkNbtVisitor visitor
+    ) {
+        try (FileChannel file = FileChannel.open(path, StandardOpenOption.READ)) {
+            final ByteBuffer locations = AnvilRegionReader.readLocationTable(file);
+            if (locations == null) {
+                return;
+            }
+            final long fileSize = file.size();
+            for (int mcaChunkIndex = 0; mcaChunkIndex < CHUNKS_PER_MCA; mcaChunkIndex++) {
+                final int location = locations.getInt();
+                if (location == 0) {
+                    continue;
+                }
+                final int localX = mcaChunkIndex % CHUNKS_PER_SIDE;
+                final int localZ = mcaChunkIndex / CHUNKS_PER_SIDE;
+                final int chunkX = mcaX * CHUNKS_PER_SIDE + localX;
+                final int chunkZ = mcaZ * CHUNKS_PER_SIDE + localZ;
+                try {
+                    final byte[] rawNbt = AnvilRegionReader.readChunkNbt(
+                        file, fileSize, path.getParent(), chunkX, chunkZ, location, LZ4
+                    );
+                    if (rawNbt == null) {
+                        continue;
+                    }
+                    final NbtCompound nbt = NbtIo.read(new DataInputStream(new ByteArrayInputStream(rawNbt)));
+                    if (nbt != null) {
+                        visitor.chunk(chunkX, chunkZ, nbt);
+                    }
+                } catch (final IOException e) {
+                    // Corrupt or concurrently modified Anvil files are routine; stay quiet and skip.
+                } catch (final RuntimeException e) {
+                    ConfluxMapMod.LOGGER.debug(
+                        "Unexpected Anvil chunk read failure for chunk {},{} in {}",
+                        chunkX, chunkZ, path.getParent(), e);
+                }
+            }
+        } catch (final IOException e) {
+            // Corrupt or concurrently modified Anvil files are routine; stay quiet and skip.
+        }
     }
 
     /** Parses only the requested crop while still reading the MCA location table once. */

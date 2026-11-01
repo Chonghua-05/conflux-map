@@ -65,6 +65,9 @@ public final class ConfluxConfig {
     public static final int MIN_WORKER_THREADS = 1;
     public static final int MAX_WORKER_THREADS = 32;
     public static final int DEFAULT_CUSTOM_WORKER_THREADS = 4;
+    public static final int MIN_SINGLEPLAYER_MCA_RADIUS = 4;
+    public static final int MAX_SINGLEPLAYER_MCA_RADIUS = 256;
+    public static final int DEFAULT_SINGLEPLAYER_MCA_RADIUS = 32;
     public static final int MIN_PORTAL_ICON_OPACITY = 0;
     public static final int MAX_PORTAL_ICON_OPACITY = 100;
     public static final int DEFAULT_PORTAL_ICON_OPACITY = 90;
@@ -371,6 +374,15 @@ public final class ConfluxConfig {
     /** Pan-settle debounce, clamped to 100..2000 ms. */
     public int predictionDebounceMs = 300;
 
+    /**
+     * Singleplayer-only dynamic rendering of the save's MCA region files into map tiles around
+     * the viewport/player; independent of {@link #predictionNetworkSync} and never enables any
+     * network sync.
+     */
+    public boolean singleplayerMcaRender = true;
+    /** Conversion radius in chunks, outward from the center, for player-follow/map-viewport modes. */
+    public int singleplayerMcaRadius = DEFAULT_SINGLEPLAYER_MCA_RADIUS;
+
     /** Startup GitHub release probe; drives the chat notice and the fullscreen-map badge. */
     public boolean updateCheckEnabled = true;
 
@@ -488,6 +500,8 @@ public final class ConfluxConfig {
             ? new ManualSeedConfig()
             : predictionManualSeeds.copy();
         c.predictionDebounceMs = predictionDebounceMs;
+        c.singleplayerMcaRender = singleplayerMcaRender;
+        c.singleplayerMcaRadius = singleplayerMcaRadius;
         c.updateCheckEnabled = updateCheckEnabled;
         c.unsupportedPlatformWarningDismissed = unsupportedPlatformWarningDismissed;
         c.surveyReminderGameOpenMillis = surveyReminderGameOpenMillis;
@@ -766,6 +780,9 @@ public final class ConfluxConfig {
             crossWorldSeedObservations.normalize();
         }
         predictionDebounceMs = clamp(predictionDebounceMs, 100, 2000);
+        singleplayerMcaRadius = clamp(
+            singleplayerMcaRadius, MIN_SINGLEPLAYER_MCA_RADIUS, MAX_SINGLEPLAYER_MCA_RADIUS
+        );
         surveyReminderGameOpenMillis = Math.max(0L, surveyReminderGameOpenMillis);
         if (surveyReminderNextPromptAtMillis <= 0L) {
             surveyReminderNextPromptAtMillis = SurveyReminderSchedule.FIRST_DELAY_MILLIS;

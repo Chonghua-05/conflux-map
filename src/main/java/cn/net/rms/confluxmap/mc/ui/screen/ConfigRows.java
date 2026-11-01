@@ -520,6 +520,17 @@ final class ConfigRows {
                     () -> config.predictionDebounceMs, v -> config.predictionDebounceMs = v,
                     ConfigValueLabels::plainText, underlayReason == null, underlayReason
                 );
+                y = addSectionRow(y, "confluxmap.screen.config.section.singleplayer_mca");
+                y = addToggleRow(
+                    y, "confluxmap.config.singleplayer_mca.render",
+                    () -> config.singleplayerMcaRender, v -> config.singleplayerMcaRender = v
+                );
+                y = addIntSliderRow(
+                    y, "confluxmap.config.singleplayer_mca.radius",
+                    ConfluxConfig.MIN_SINGLEPLAYER_MCA_RADIUS, ConfluxConfig.MAX_SINGLEPLAYER_MCA_RADIUS,
+                    () -> config.singleplayerMcaRadius, v -> config.singleplayerMcaRadius = v,
+                    ConfigValueLabels::plainText
+                );
                 break;
             case GENERAL:
                 y = addIntSliderRow(

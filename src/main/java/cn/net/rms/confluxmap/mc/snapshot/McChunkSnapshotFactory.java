@@ -94,6 +94,61 @@ public final class McChunkSnapshotFactory {
             return null;
         }
 
+        if (layer.type() == MapLayer.Type.SURFACE || layer.type() == MapLayer.Type.END_SURFACE) {
+            tints.beginChunk(world, chunkX, chunkZ);
+            final ChunkSnapshot surface = surfaceScan(
+                chunkX, chunkZ,
+                new LiveSurfaceColumn(chunkX, chunkZ, chunk, world, world.getBottomY(), world.getTopY(), sampler, tints),
+                world, world.getTime(), sessionToken
+            );
+            BiomeIdentityCapture.capture(
+                world, new BlockPos.Mutable(), chunkX << 4, chunkZ << 4,
+                surface.surfaceY, surface.biomeId, tints.biomeIdentityWindow()
+            );
+            return surface;
+        }
+        return snapshotFloor(chunkX, chunkZ, layer, pivotY, sessionToken, chunk, world);
+    }
+
+    /**
+     * Singleplayer MCA import entry: runs the identical surface scan against a column backed
+     * by parsed region-file NBT ({@link SurfaceColumn}), then fills {@link ChunkSnapshot#biomeId}
+     * from the column's stored biome palette. The column resolves models through render-thread
+     * hops, so unlike {@link #snapshot} this may run off the main thread.
+     */
+    public ChunkSnapshot snapshotSurfaceFromColumn(
+        final int chunkX,
+        final int chunkZ,
+        final SurfaceColumn column,
+        final long sourceRevision,
+        final long sessionToken
+    ) {
+        final ClientWorld world = client == null ? null : client.world;
+        if (world == null) {
+            return null;
+        }
+        final ChunkSnapshot snapshot = surfaceScan(chunkX, chunkZ, column, world, sourceRevision, sessionToken);
+        for (int index = 0; index < ChunkSnapshot.COLUMNS; index++) {
+            final int y = snapshot.surfaceY[index];
+            snapshot.biomeId[index] = column.biomeIdAt(
+                index & 15, y == ChunkSnapshot.NO_SURFACE ? column.bottomY() : y, index >> 4
+            );
+        }
+        return snapshot;
+    }
+
+    /**
+     * The one surface-scan implementation. {@code column} supplies per-column world data;
+     * {@code world} remains the color/opacity context exactly as in live capture.
+     */
+    private ChunkSnapshot surfaceScan(
+        final int chunkX,
+        final int chunkZ,
+        final SurfaceColumn column,
+        final ClientWorld world,
+        final long sourceRevision,
+        final long sessionToken
+    ) {
         final short[] surfaceY = new short[ChunkSnapshot.COLUMNS];
         final String[] biomeId = new String[ChunkSnapshot.COLUMNS];
         final byte[] fluidDepth = new byte[ChunkSnapshot.COLUMNS];
@@ -108,38 +163,61 @@ public final class McChunkSnapshotFactory {
         final BlockPos.Mutable pos = new BlockPos.Mutable();
         final int baseX = chunkX << 4;
         final int baseZ = chunkZ << 4;
-        tints.beginChunk(world, chunkX, chunkZ);
-
-        if (layer.type() == MapLayer.Type.SURFACE || layer.type() == MapLayer.Type.END_SURFACE) {
-            final Heightmap heightmap = chunk.getHeightmap(Heightmap.Type.MOTION_BLOCKING);
-            final int bottomY = world.getBottomY();
-            final int topY = world.getTopY();
-            for (int z = 0; z < 16; z++) {
-                for (int x = 0; x < 16; x++) {
-                    sampleColumn(
-                        chunk, world, pos, baseX, baseZ, x, z, bottomY, topY, heightmap, z * 16 + x,
-                        surfaceY, fluidDepth, baseArgb, tintArgb, overlayArgb, kind, light,
-                        xaeroBaseArgb, xaeroOverlayArgb
-                    );
-                }
+        for (int z = 0; z < 16; z++) {
+            for (int x = 0; x < 16; x++) {
+                sampleColumn(
+                    column, world, pos, baseX, baseZ, x, z, z * 16 + x,
+                    surfaceY, fluidDepth, baseArgb, tintArgb, overlayArgb, kind, light,
+                    xaeroBaseArgb, xaeroOverlayArgb
+                );
             }
-        } else {
-            final boolean netherAmbient = isNetherLayer(layer.type());
-            final boolean deferBlockLight = layer.type() == MapLayer.Type.NETHER_CEILING;
-            final int worldMinY = world.getBottomY();
-            final int worldMaxY = world.getTopY();
-            for (int z = 0; z < 16; z++) {
-                for (int x = 0; x < 16; x++) {
-                    sampleFloorColumn(
-                        chunk, world, pos, baseX, baseZ, x, z, pivotY, worldMinY, worldMaxY,
-                        netherAmbient, deferBlockLight, z * 16 + x,
-                        surfaceY, fluidDepth, baseArgb, tintArgb, overlayArgb, kind, light
-                    );
-                }
-            }
-            System.arraycopy(baseArgb, 0, xaeroBaseArgb, 0, ChunkSnapshot.COLUMNS);
-            System.arraycopy(overlayArgb, 0, xaeroOverlayArgb, 0, ChunkSnapshot.COLUMNS);
         }
+        return new ChunkSnapshot(
+            chunkX, chunkZ, sessionToken, sourceRevision, surfaceY, biomeId, fluidDepth,
+            baseArgb, xaeroBaseArgb, tintArgb, overlayArgb, xaeroOverlayArgb, kind, light
+        );
+    }
+
+    /** Floor-scan layers (cave/nether) never read the MCA import, so they stay chunk-bound. */
+    private ChunkSnapshot snapshotFloor(
+        final int chunkX,
+        final int chunkZ,
+        final MapLayer layer,
+        final int pivotY,
+        final long sessionToken,
+        final WorldChunk chunk,
+        final ClientWorld world
+    ) {
+        final short[] surfaceY = new short[ChunkSnapshot.COLUMNS];
+        final String[] biomeId = new String[ChunkSnapshot.COLUMNS];
+        final byte[] fluidDepth = new byte[ChunkSnapshot.COLUMNS];
+        final int[] baseArgb = new int[ChunkSnapshot.COLUMNS];
+        final int[] xaeroBaseArgb = new int[ChunkSnapshot.COLUMNS];
+        final int[] tintArgb = new int[ChunkSnapshot.COLUMNS];
+        final int[] overlayArgb = new int[ChunkSnapshot.COLUMNS];
+        final int[] xaeroOverlayArgb = new int[ChunkSnapshot.COLUMNS];
+        final byte[] kind = new byte[ChunkSnapshot.COLUMNS];
+        final byte[] light = new byte[ChunkSnapshot.COLUMNS];
+
+        final BlockPos.Mutable pos = new BlockPos.Mutable();
+        final int baseX = chunkX << 4;
+        final int baseZ = chunkZ << 4;
+        final boolean netherAmbient = isNetherLayer(layer.type());
+        final boolean deferBlockLight = layer.type() == MapLayer.Type.NETHER_CEILING;
+        final int worldMinY = world.getBottomY();
+        final int worldMaxY = world.getTopY();
+        tints.beginChunk(world, chunkX, chunkZ);
+        for (int z = 0; z < 16; z++) {
+            for (int x = 0; x < 16; x++) {
+                sampleFloorColumn(
+                    chunk, world, pos, baseX, baseZ, x, z, pivotY, worldMinY, worldMaxY,
+                    netherAmbient, deferBlockLight, z * 16 + x,
+                    surfaceY, fluidDepth, baseArgb, tintArgb, overlayArgb, kind, light
+                );
+            }
+        }
+        System.arraycopy(baseArgb, 0, xaeroBaseArgb, 0, ChunkSnapshot.COLUMNS);
+        System.arraycopy(overlayArgb, 0, xaeroOverlayArgb, 0, ChunkSnapshot.COLUMNS);
         BiomeIdentityCapture.capture(
             world, pos, baseX, baseZ, surfaceY, biomeId, tints.biomeIdentityWindow()
         );
@@ -253,16 +331,13 @@ public final class McChunkSnapshotFactory {
     }
 
     private void sampleColumn(
-        final WorldChunk chunk,
+        final SurfaceColumn column,
         final ClientWorld world,
         final BlockPos.Mutable pos,
         final int baseX,
         final int baseZ,
         final int localX,
         final int localZ,
-        final int bottomY,
-        final int topY,
-        final Heightmap heightmap,
         final int index,
         final short[] surfaceY,
         final byte[] fluidDepth,
@@ -276,14 +351,15 @@ public final class McChunkSnapshotFactory {
     ) {
         final int worldX = baseX + localX;
         final int worldZ = baseZ + localZ;
+        final int bottomY = column.bottomY();
 
-        int y = heightmap.get(localX, localZ) - 1;
+        int y = column.motionBlockingTop(localX, localZ) - 1;
         if (y < bottomY) {
             writeVoidColumn(index, surfaceY, kind, baseArgb, tintArgb, overlayArgb, fluidDepth, light);
             return;
         }
         pos.set(worldX, y, worldZ);
-        BlockState state = collapse(chunk.getBlockState(pos));
+        BlockState state = collapse(column.stateAt(localX, y, localZ));
 
         BlockState topOverlay = null;
         int topOverlayY = 0;
@@ -301,7 +377,7 @@ public final class McChunkSnapshotFactory {
             descended = true;
             y--;
             pos.setY(y);
-            state = collapse(chunk.getBlockState(pos));
+            state = collapse(column.stateAt(localX, y, localZ));
         }
         if (!isOpaque(state, world, pos)) {
             // World bottom reached without an opaque block. A glass-family cover that runs out
@@ -310,7 +386,7 @@ public final class McChunkSnapshotFactory {
             // instead of the §1 void fallback, which would render the glass transparent.
             if (isLightPermeableCover(topOverlay)) {
                 writeSurface(
-                    index, worldX, worldZ, topY, pos, world,
+                    index, worldX, worldZ, localX, localZ, column.topY(), pos, world, column,
                     topOverlay, topOverlayY, classifySurfaceKind(topOverlay.getBlock()),
                     null, 0, null, 0, null, 0, false,
                     surfaceY, fluidDepth, baseArgb, tintArgb, overlayArgb, kind, light,
@@ -336,7 +412,7 @@ public final class McChunkSnapshotFactory {
         final OverlaySlotAssignment<BlockState> slots;
         if (!descended) {
             pos.set(worldX, y + 1, worldZ);
-            final BlockState above = collapse(chunk.getBlockState(pos));
+            final BlockState above = collapse(column.stateAt(localX, y + 1, localZ));
             slots = OverlaySlotAssignment.forSurfaceColumn(
                 state, y, above, BlockState::isAir, McChunkSnapshotFactory::isPromotedSurfaceCover
             );
@@ -366,7 +442,7 @@ public final class McChunkSnapshotFactory {
         if (seafloorScan) {
             int scanY = surfaceYVal - 1;
             pos.set(worldX, scanY, worldZ);
-            BlockState scan = collapse(chunk.getBlockState(pos));
+            BlockState scan = collapse(column.stateAt(localX, scanY, localZ));
             while (scanY > bottomY && seafloorContinues(scan, world, pos)) {
                 if (isSeafloorCapturable(scan)) {
                     if (transparentOverlay == null) {
@@ -379,7 +455,7 @@ public final class McChunkSnapshotFactory {
                 }
                 scanY--;
                 pos.setY(scanY);
-                scan = collapse(chunk.getBlockState(pos));
+                scan = collapse(column.stateAt(localX, scanY, localZ));
             }
             if (scanY <= bottomY && seafloorContinues(scan, world, pos)) {
                 bottomless = true;
@@ -390,7 +466,7 @@ public final class McChunkSnapshotFactory {
         }
 
         writeSurface(
-            index, worldX, worldZ, topY, pos, world,
+            index, worldX, worldZ, localX, localZ, column.topY(), pos, world, column,
             surfaceState, surfaceYVal, resolvedKind,
             transparentOverlay, transparentOverlayY, foliageOverlay, foliageOverlayY,
             seafloorState, seafloorY, bottomless,
@@ -403,9 +479,12 @@ public final class McChunkSnapshotFactory {
         final int index,
         final int worldX,
         final int worldZ,
+        final int localX,
+        final int localZ,
         final int topY,
         final BlockPos.Mutable pos,
         final ClientWorld world,
+        final SurfaceColumn column,
         final BlockState surfaceState,
         final int surfaceYVal,
         final SurfaceKind resolvedKind,
@@ -427,17 +506,20 @@ public final class McChunkSnapshotFactory {
         final int[] xaeroOverlayArgb
     ) {
         pos.set(worldX, surfaceYVal, worldZ);
-        final int surfaceBaseColor = sampler.colorFor(surfaceState, world, pos);
-        final int xaeroSurfaceBaseColor = sampler.xaeroColorFor(surfaceState, world, pos);
-        final int surfaceTintColor = tints.resolve(surfaceState, world, worldX, surfaceYVal, worldZ);
-        light[index] = sampleBlockLightAbove(world, pos, worldX, surfaceYVal, worldZ, topY);
+        final SpriteColorSampler.SampledColors surfaceMaterial = column.material(surfaceState);
+        final int surfaceBaseColor = surfaceMaterial.detail().apply(
+            surfaceMaterial.baseArgb(), worldX, worldZ, surfaceMaterial.patternSalt()
+        );
+        final int xaeroSurfaceBaseColor = surfaceMaterial.xaeroBaseArgb();
+        final int surfaceTintColor = column.tint(surfaceState, worldX, surfaceYVal, worldZ);
+        light[index] = blockLightAbove(column, localX, surfaceYVal, localZ, topY);
 
         if (resolvedKind == SurfaceKind.WATER || resolvedKind == SurfaceKind.ICE) {
             // baseArgb/tintArgb hold the water/ice surface's own color; overlayArgb is repurposed to
             // hold the pre-composited floor (seafloor + underwater overlays) beneath it - see §5.
             int waterColor = Argb.multiply(surfaceBaseColor, surfaceTintColor);
             if (transparentOverlay != null) {
-                waterColor = Argb.over(coloredLayer(transparentOverlay, transparentOverlayY, worldX, worldZ, pos, world), waterColor);
+                waterColor = Argb.over(coloredLayer(column, transparentOverlay, transparentOverlayY, worldX, worldZ, pos, world), waterColor);
             }
             baseArgb[index] = waterColor;
             // Mirror the composition above, gated by the same Xaero marker rule as the land
@@ -448,7 +530,7 @@ public final class McChunkSnapshotFactory {
             int xaeroWaterColor = Argb.multiply(xaeroSurfaceBaseColor, surfaceTintColor);
             if (transparentOverlay != null && !isXaeroInvisible(transparentOverlay)) {
                 xaeroWaterColor = Argb.over(
-                    xaeroColoredLayer(transparentOverlay, transparentOverlayY, worldX, worldZ, pos, world),
+                    xaeroColoredLayer(column, transparentOverlay, transparentOverlayY, worldX, worldZ, pos, world),
                     xaeroWaterColor
                 );
             }
@@ -459,17 +541,17 @@ public final class McChunkSnapshotFactory {
             int xaeroFloorComposite = Argb.TRANSPARENT;
             int depth = 0;
             if (!bottomless && seafloorState != null) {
-                floorComposite = coloredLayer(seafloorState, seafloorY, worldX, worldZ, pos, world);
-                xaeroFloorComposite = xaeroColoredLayer(seafloorState, seafloorY, worldX, worldZ, pos, world);
+                floorComposite = coloredLayer(column, seafloorState, seafloorY, worldX, worldZ, pos, world);
+                xaeroFloorComposite = xaeroColoredLayer(column, seafloorState, seafloorY, worldX, worldZ, pos, world);
                 if (foliageOverlay != null) {
                     if (OverlayVisibility.overlayVisible(categorizeOverlay(foliageOverlay), false, false)) {
                         floorComposite = Argb.over(
-                            coloredLayer(foliageOverlay, foliageOverlayY, worldX, worldZ, pos, world), floorComposite
+                            coloredLayer(column, foliageOverlay, foliageOverlayY, worldX, worldZ, pos, world), floorComposite
                         );
                     }
                     if (!isXaeroInvisible(foliageOverlay)) {
                         xaeroFloorComposite = Argb.over(
-                            xaeroColoredLayer(foliageOverlay, foliageOverlayY, worldX, worldZ, pos, world),
+                            xaeroColoredLayer(column, foliageOverlay, foliageOverlayY, worldX, worldZ, pos, world),
                             xaeroFloorComposite
                         );
                     }
@@ -488,20 +570,20 @@ public final class McChunkSnapshotFactory {
             int xaeroOverlayComposite = Argb.TRANSPARENT;
             if (foliageOverlay != null) {
                 if (OverlayVisibility.overlayVisible(categorizeOverlay(foliageOverlay), false, false)) {
-                    overlayComposite = coloredLayer(foliageOverlay, foliageOverlayY, worldX, worldZ, pos, world);
+                    overlayComposite = coloredLayer(column, foliageOverlay, foliageOverlayY, worldX, worldZ, pos, world);
                 }
                 if (!isXaeroInvisible(foliageOverlay)) {
                     xaeroOverlayComposite = xaeroColoredLayer(
-                        foliageOverlay, foliageOverlayY, worldX, worldZ, pos, world
+                        column, foliageOverlay, foliageOverlayY, worldX, worldZ, pos, world
                     );
                 }
             }
             if (transparentOverlay != null) {
-                final int top = coloredLayer(transparentOverlay, transparentOverlayY, worldX, worldZ, pos, world);
+                final int top = coloredLayer(column, transparentOverlay, transparentOverlayY, worldX, worldZ, pos, world);
                 overlayComposite = overlayComposite == Argb.TRANSPARENT ? top : Argb.over(top, overlayComposite);
                 if (!isXaeroInvisible(transparentOverlay)) {
                     final int xaeroTop = xaeroColoredLayer(
-                        transparentOverlay, transparentOverlayY, worldX, worldZ, pos, world
+                        column, transparentOverlay, transparentOverlayY, worldX, worldZ, pos, world
                     );
                     xaeroOverlayComposite = xaeroOverlayComposite == Argb.TRANSPARENT
                         ? xaeroTop
@@ -518,6 +600,7 @@ public final class McChunkSnapshotFactory {
 
     /** Sampled base color x its own tint, already composited, for one overlay/seafloor layer. */
     private int coloredLayer(
+        final SurfaceColumn column,
         final BlockState state,
         final int y,
         final int worldX,
@@ -526,13 +609,15 @@ public final class McChunkSnapshotFactory {
         final ClientWorld world
     ) {
         pos.set(worldX, y, worldZ);
-        final int base = sampler.colorFor(state, world, pos);
-        final int tint = tints.resolve(state, world, worldX, y, worldZ);
+        final SpriteColorSampler.SampledColors material = column.material(state);
+        final int base = material.detail().apply(material.baseArgb(), worldX, worldZ, material.patternSalt());
+        final int tint = column.tint(state, worldX, y, worldZ);
         return Argb.multiply(base, tint);
     }
 
     /** Xaero uses the raw top-quad texture average and its normal biome tint without Conflux detail noise. */
     private int xaeroColoredLayer(
+        final SurfaceColumn column,
         final BlockState state,
         final int y,
         final int worldX,
@@ -541,9 +626,22 @@ public final class McChunkSnapshotFactory {
         final ClientWorld world
     ) {
         pos.set(worldX, y, worldZ);
-        final int base = sampler.xaeroColorFor(state, world, pos);
-        final int tint = tints.resolve(state, world, worldX, y, worldZ);
-        return Argb.multiply(base, tint);
+        return Argb.multiply(column.material(state).xaeroBaseArgb(), column.tint(state, worldX, y, worldZ));
+    }
+
+    /**
+     * {@link ChunkSnapshot#light}: block-light (0-15) one above {@code y} (clamped under the
+     * build limit), the same position whose color was just sampled. The column supplies the
+     * value so the MCA import reads its stored light nibbles instead of the live light engine.
+     */
+    private static byte blockLightAbove(
+        final SurfaceColumn column,
+        final int localX,
+        final int y,
+        final int localZ,
+        final int topY
+    ) {
+        return (byte) MathHelper.clamp(column.blockLightAt(localX, Math.min(y + 1, topY - 1), localZ), 0, 15);
     }
 
     /**
@@ -1075,5 +1173,90 @@ public final class McChunkSnapshotFactory {
         }
         final FluidState fluid = state.getFluidState();
         return fluid.isEmpty() ? state : fluid.getBlockState();
+    }
+
+    /**
+     * The live-chunk {@link SurfaceColumn}: states and light straight off the loaded chunk,
+     * tints through the shared per-chunk {@link ChunkTintSampler}, colors straight from the
+     * sprite sampler on the main thread - exactly the pre-seam behavior of {@link #snapshot}.
+     * {@link #biomeIdAt} stays null because live capture fills biome identity through
+     * {@link BiomeIdentityCapture#capture} after the scan.
+     */
+    private static final class LiveSurfaceColumn implements SurfaceColumn {
+        private final WorldChunk chunk;
+        private final ClientWorld world;
+        private final int bottomY;
+        private final int topY;
+        private final SpriteColorSampler sampler;
+        private final ChunkTintSampler tints;
+        private final int baseX;
+        private final int baseZ;
+        private final BlockPos.Mutable cursor = new BlockPos.Mutable();
+
+        LiveSurfaceColumn(
+            final int chunkX,
+            final int chunkZ,
+            final WorldChunk chunk,
+            final ClientWorld world,
+            final int bottomY,
+            final int topY,
+            final SpriteColorSampler sampler,
+            final ChunkTintSampler tints
+        ) {
+            this.chunk = chunk;
+            this.world = world;
+            this.bottomY = bottomY;
+            this.topY = topY;
+            this.sampler = sampler;
+            this.tints = tints;
+            this.baseX = chunkX << 4;
+            this.baseZ = chunkZ << 4;
+        }
+
+        @Override
+        public int bottomY() {
+            return bottomY;
+        }
+
+        @Override
+        public int topY() {
+            return topY;
+        }
+
+        @Override
+        public int motionBlockingTop(final int localX, final int localZ) {
+            return chunk.getHeightmap(Heightmap.Type.MOTION_BLOCKING).get(localX, localZ);
+        }
+
+        @Override
+        public BlockState stateAt(final int localX, final int y, final int localZ) {
+            return chunk.getBlockState(cursor.set(baseX + localX, y, baseZ + localZ));
+        }
+
+        @Override
+        public int blockLightAt(final int localX, final int y, final int localZ) {
+            cursor.set(baseX + localX, y, baseZ + localZ);
+            //#if MC>=260100
+            //$$ return world.getBrightness(LightLayer.BLOCK, cursor);
+            //#else
+            return world.getLightLevel(LightType.BLOCK, cursor);
+            //#endif
+        }
+
+        @Override
+        public SpriteColorSampler.SampledColors material(final BlockState state) {
+            // Model sampling is main-thread only; live capture already runs there.
+            return sampler.sampledColorsFor(state, world, cursor.set(baseX, bottomY, baseZ));
+        }
+
+        @Override
+        public int tint(final BlockState state, final int worldX, final int y, final int worldZ) {
+            return tints.resolve(state, world, worldX, y, worldZ);
+        }
+
+        @Override
+        public String biomeIdAt(final int localX, final int surfaceY, final int localZ) {
+            return null;
+        }
     }
 }
