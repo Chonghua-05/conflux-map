@@ -3,6 +3,7 @@ package cn.net.rms.confluxmap.mc.ui.world;
 import cn.net.rms.confluxmap.core.config.ConfluxConfig;
 import cn.net.rms.confluxmap.core.util.Argb;
 import cn.net.rms.confluxmap.core.waypoint.WaypointRenderEntry;
+import net.minecraft.client.font.TextRenderer;
 import net.minecraft.util.math.MathHelper;
 
 /**
@@ -26,6 +27,9 @@ final class WaypointLabelStyle {
     static final int LABEL_SHARED_OUTLINE_COLOR = 0xFF55DDE0;
     static final int LABEL_NAME_COLOR = 0xFFFFFFFF;
     static final int LABEL_DISTANCE_COLOR = 0xFFC8C8C8;
+    /** Name/distance text rows inside the panel, shared by both label flavors. */
+    static final float LABEL_NAME_TEXT_Y = -9f;
+    static final float LABEL_DISTANCE_TEXT_Y = 1f;
     /** LightmapTextureManager.pack(15, 15) - always fully lit, like other UI-ish world markers. */
     static final int LABEL_LIGHT = 0xF000F0;
 
@@ -51,5 +55,54 @@ final class WaypointLabelStyle {
             return LABEL_LOCAL_OUTLINE_COLOR;
         }
         return LABEL_SHARED_OUTLINE_COLOR;
+    }
+
+    /**
+     * The panel/text reveal layout both label flavors build from the same inputs, so
+     * their panels cannot drift apart.
+     */
+    record Panel(
+        String name,
+        String distanceText,
+        float fullWidth,
+        float reveal,
+        float textReveal
+    ) {
+        static Panel of(
+            final TextRenderer textRenderer,
+            final WaypointRenderEntry waypoint,
+            final double distance3d,
+            final float easedProgress
+        ) {
+            final String name = waypoint.name();
+            final String distanceText = Math.round(distance3d) + " m";
+            final int nameWidth = textRenderer.getWidth(name);
+            final int distanceWidth = textRenderer.getWidth(distanceText);
+            return new Panel(
+                name,
+                distanceText,
+                Math.max(nameWidth, distanceWidth) + LABEL_PANEL_PADDING * 2f,
+                MathHelper.clamp(easedProgress / LABEL_TEXT_REVEAL_START, 0f, 1f),
+                MathHelper.clamp(
+                    (easedProgress - LABEL_TEXT_REVEAL_START) / (1f - LABEL_TEXT_REVEAL_START),
+                    0f, 1f
+                )
+            );
+        }
+
+        /** The panel width currently revealed; grows with the icon expansion. */
+        float width() {
+            return fullWidth * reveal;
+        }
+
+        /** Left edge of the text runs, {@code panelX} being the panel's left edge. */
+        float textX(final float panelX) {
+            return panelX + LABEL_PANEL_PADDING + (1f - textReveal) * 4f;
+        }
+
+        /** Text alpha: the panel's base alpha scaled by how far the text has revealed. */
+        float textAlpha(final float baseAlpha) {
+            return baseAlpha * textReveal;
+        }
     }
 }
