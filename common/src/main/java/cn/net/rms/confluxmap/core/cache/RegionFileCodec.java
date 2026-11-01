@@ -184,30 +184,42 @@ public final class RegionFileCodec {
         }
         header.flush();
 
-        final Deflater deflater = new Deflater(Deflater.DEFAULT_COMPRESSION);
+        final Deflater deflater = new Deflater(Deflater.BEST_SPEED);
         try {
-            // finish() flushes the compressed tail without closing rawOut, so the caller can
-            // still fsync/close it afterward as part of the atomic-write sequence.
-            final DeflaterOutputStream compressed = new DeflaterOutputStream(rawOut, deflater, 8192);
+            final DeflaterOutputStream compressed = new DeflaterOutputStream(rawOut, deflater, 64 * 1024);
             final DataOutputStream columns = new DataOutputStream(compressed);
             final Map<String, Integer> biomePalette = biomePalette(data.biomeId());
             columns.writeInt(biomePalette.size());
             for (final String biomeId : biomePalette.keySet()) {
                 columns.writeUTF(biomeId);
             }
-            for (int i = 0; i < COLUMN_COUNT; i++) {
-                columns.writeShort(data.surfaceY()[i]);
-                columns.writeByte(data.fluidDepth()[i]);
-                columns.writeByte(data.kind()[i]);
-                columns.writeShort(data.biomeId()[i] == null ? 0 : biomePalette.get(data.biomeId()[i]));
-                columns.writeInt(data.baseArgb()[i]);
-                columns.writeInt(data.xaeroBaseArgb()[i]);
-                columns.writeInt(data.biomeTint()[i]);
-                columns.writeInt(data.overlayArgb()[i]);
-                columns.writeInt(data.xaeroOverlayArgb()[i]);
-                columns.writeByte(data.light()[i]);
-            }
             columns.flush();
+
+            // Direct bulk packing: eliminates 655,360 tiny stream calls and HashMap lookups
+            final int columnBytes = 27;
+            final byte[] rawBuffer = new byte[COLUMN_COUNT * columnBytes];
+            final java.nio.ByteBuffer buf = java.nio.ByteBuffer.wrap(rawBuffer);
+
+            final short[] biomeIndexes = new short[COLUMN_COUNT];
+            for (int i = 0; i < COLUMN_COUNT; i++) {
+                final String b = data.biomeId()[i];
+                biomeIndexes[i] = (short) (b == null ? 0 : biomePalette.getOrDefault(b, 0));
+            }
+
+            for (int i = 0; i < COLUMN_COUNT; i++) {
+                buf.putShort(data.surfaceY()[i]);
+                buf.put(data.fluidDepth()[i]);
+                buf.put(data.kind()[i]);
+                buf.putShort(biomeIndexes[i]);
+                buf.putInt(data.baseArgb()[i]);
+                buf.putInt(data.xaeroBaseArgb()[i]);
+                buf.putInt(data.biomeTint()[i]);
+                buf.putInt(data.overlayArgb()[i]);
+                buf.putInt(data.xaeroOverlayArgb()[i]);
+                buf.put(data.light()[i]);
+            }
+
+            compressed.write(rawBuffer);
             compressed.finish();
         } finally {
             deflater.end();

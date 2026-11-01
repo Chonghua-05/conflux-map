@@ -38,6 +38,7 @@ public final class CorrectionStore {
     }
 
     private final Path root;
+    private final java.util.concurrent.ExecutorService io;
     private WorldIdentity world = new WorldIdentity("local", "world");
     private Path worldRoot;
     private final Map<Key, CorrectionTile> tiles = new HashMap<>();
@@ -46,7 +47,12 @@ public final class CorrectionStore {
     private long lastFlushMillis;
 
     public CorrectionStore(final Path root) {
+        this(root, null);
+    }
+
+    public CorrectionStore(final Path root, final java.util.concurrent.ExecutorService io) {
         this.root = root;
+        this.io = io;
         this.worldRoot = root.resolve(world.serverId()).resolve(world.worldId());
         loadInvalidations();
     }
@@ -407,21 +413,41 @@ public final class CorrectionStore {
     }
 
     public synchronized void flush() {
+        if (dirty.isEmpty()) {
+            return;
+        }
+        final Map<Path, PredictionTileCodec.FileData> toWrite = new HashMap<>();
         for (final Key key : dirty.keySet().toArray(new Key[0])) {
             final CorrectionTile tile = tiles.get(key);
-            try {
-                PredictionTileCodec.writeAtomic(pathFor(key), new PredictionTileCodec.FileData(
+            if (tile != null) {
+                toWrite.put(pathFor(key), new PredictionTileCodec.FileData(
                     key.lod(), key.tileX(), key.tileZ(), tile.storedRevision(), tile.validatedAtMillis(),
                     tile.presence(), tile.copyPatch(), tile.copyGeneratedChunkMask(),
                     tile.copyChunkRevisions(), tile.copyChunkValidatedAtMillis(),
                     tile.patchMode(), tile.baselineProfile(), tile.correctionProfile()
                 ));
-                dirty.remove(key);
-            } catch (final IOException e) {
-                // Keep it dirty; a later session-end flush can retry.
             }
+            dirty.remove(key);
         }
         lastFlushMillis = System.currentTimeMillis();
+
+        if (io != null) {
+            io.execute(() -> {
+                for (final Map.Entry<Path, PredictionTileCodec.FileData> entry : toWrite.entrySet()) {
+                    try {
+                        PredictionTileCodec.writeAtomic(entry.getKey(), entry.getValue());
+                    } catch (final IOException ignored) {
+                    }
+                }
+            });
+        } else {
+            for (final Map.Entry<Path, PredictionTileCodec.FileData> entry : toWrite.entrySet()) {
+                try {
+                    PredictionTileCodec.writeAtomic(entry.getKey(), entry.getValue());
+                } catch (final IOException ignored) {
+                }
+            }
+        }
     }
 
     public synchronized void flushIfDue(final long nowMillis) {
