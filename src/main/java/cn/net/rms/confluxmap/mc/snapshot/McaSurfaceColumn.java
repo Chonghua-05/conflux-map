@@ -1,5 +1,6 @@
 package cn.net.rms.confluxmap.mc.snapshot;
 
+import cn.net.rms.confluxmap.ConfluxMapMod;
 import cn.net.rms.confluxmap.compat.Regs;
 import cn.net.rms.confluxmap.core.color.MaterialDetailProfile;
 import cn.net.rms.confluxmap.mc.color.McaTintResolver;
@@ -13,6 +14,11 @@ import net.minecraft.block.BlockState;
 import net.minecraft.client.MinecraftClient;
 import net.minecraft.client.world.ClientWorld;
 import net.minecraft.util.Identifier;
+//#if MC>=11903
+//$$ import net.minecraft.registry.BuiltinRegistries;
+//#else
+import net.minecraft.util.registry.BuiltinRegistries;
+//#endif
 import net.minecraft.util.math.BlockPos;
 import net.minecraft.world.biome.Biome;
 
@@ -199,7 +205,9 @@ final class McaSurfaceColumn implements SurfaceColumn {
     /**
      * Legacy (pre-1.18) chunks store biomes as a per-chunk raw registry id array with no names,
      * which would leave every imported column tintless (gray grass, dark water). Resolve the id
-     * against the client's biome registry; ids the registry does not know resolve to null, which
+     * against the joined world's biome registry first and the builtin registry second - vanilla
+     * wrote those ids against the builtin registry, and the world-owned copy must agree, but a
+     * disagreement must not blank every color again. Unresolvable ids return null, which
      * {@link McaTintResolver} treats like any other unknown biome.
      */
     private String legacyBiomeName(final int rawId) {
@@ -207,7 +215,15 @@ final class McaSurfaceColumn implements SurfaceColumn {
             return null;
         }
         return legacyBiomeNames.computeIfAbsent(rawId, id -> {
-            final Identifier identifier = Regs.biomeIdByRawId(Regs.biomes(world), id);
+            Identifier identifier = Regs.biomeIdByRawId(Regs.biomes(world), id);
+            String via = "world registry";
+            if (identifier == null) {
+                identifier = Regs.biomeIdByRawId(BuiltinRegistries.BIOME, id);
+                via = "builtin registry";
+            }
+            ConfluxMapMod.LOGGER.info(
+                "[confluxmap] MCA render: legacy biome raw id {} -> {} ({})",
+                id, identifier, via);
             return identifier == null ? null : identifier.toString();
         });
     }

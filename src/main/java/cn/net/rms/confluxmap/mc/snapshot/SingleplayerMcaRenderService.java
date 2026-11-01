@@ -29,6 +29,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ExecutorService;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ThreadFactory;
 import java.util.concurrent.atomic.AtomicInteger;
@@ -72,6 +73,21 @@ public final class SingleplayerMcaRenderService {
     private static final int REPLAN_CENTER_HYSTERESIS = 2;
     /** INFO progress-log cadence, in converted files. */
     private static final int LOG_FILE_INTERVAL = 25;
+    /**
+     * Import startup delay after every session (re)activation. World join floods the IO and
+     * worker pools with vanilla chunk loading and first-tile composition; importing region
+     * files on top of that made joins crawl. The import always starts from a dead stop.
+     */
+    private static final long IMPORT_START_DELAY_MS = 15_000L;
+    /**
+     * Bumped whenever conversion semantics change. Persisted with the per-file index so a
+     * converter fix re-imports exactly once (the stale rows are overwritten), while ordinary
+     * sessions skip already-converted files instead of paying the full rescan every time.
+     */
+    private static final int CONVERTER_VERSION = 2;
+    /** Persisted-index write cadence; the file is tiny, so trailing writes are cheap. */
+    private static final long INDEX_WRITE_DEBOUNCE_MS = 2_000L;
+    private static final com.google.gson.Gson GSON = new com.google.gson.Gson();
 
     private final MinecraftClient client;
     private final ConfluxConfig config;
@@ -89,8 +105,16 @@ public final class SingleplayerMcaRenderService {
     private final Object queueLock = new Object();
     /** Nearest-last ordering: {@link #drain} pops from the tail. */
     private List<PendingFile> pending = List.of();
-    /** Session-scoped mtime index: MCA files already converted this session. */
-    private final Map<Long, Long> scannedMcas = new ConcurrentHashMap<>();
+    /**
+     * MCA file name to last-seen mtime, for files the current converter version has already
+     * imported. Persisted beside the save so sessions after a full import skip the rescan;
+     * a converter version bump invalidates every entry at once.
+     */
+    private final Map<String, Long> importedIndex = new ConcurrentHashMap<>();
+    private volatile Path importIndexPath;
+    private volatile long lastIndexWriteAtMs;
+    private final AtomicBoolean replanInFlight = new AtomicBoolean();
+    private volatile long sessionActivatedAtMs = Long.MIN_VALUE;
     private final AtomicInteger inFlight = new AtomicInteger();
     /** Session-cumulative progress counters, surfaced in throttled INFO logs. */
     private final AtomicInteger filesDone = new AtomicInteger();
@@ -142,14 +166,15 @@ public final class SingleplayerMcaRenderService {
         if (!DimensionId.OVERWORLD.equals(session.dimension()) || client.player == null) {
             return;
         }
+        final long now = System.currentTimeMillis();
+        if (now - sessionActivatedAtMs < IMPORT_START_DELAY_MS) {
+            return;
+        }
         if (regionDirectory == null) {
-            regionDirectory = RegionStoragePaths.regionDirectory(
-                client.getServer().getSavePath(WorldSavePath.ROOT),
-                session.dimension().namespace() + ":" + session.dimension().path()
-            );
+            ensureSessionPaths(session);
         }
 
-        final long now = System.currentTimeMillis();
+
         final int playerChunkX = client.player.getBlockPos().getX() >> 4;
         final int playerChunkZ = client.player.getBlockPos().getZ() >> 4;
         final int centerX;
@@ -174,7 +199,20 @@ public final class SingleplayerMcaRenderService {
         if (!centerMoved && !radiusChanged && now - lastPlanAtMs < REPLAN_INTERVAL_MS) {
             return;
         }
-        replan(session, centerX, centerZ, radius, now);
+        // The plan stats up to a thousand region files; never do that on the render thread.
+        lastPlanAtMs = now;
+        lastPlanCenterX = centerX;
+        lastPlanCenterZ = centerZ;
+        lastPlanRadius = radius;
+        if (replanInFlight.compareAndSet(false, true)) {
+            executor.execute(() -> {
+                try {
+                    replan(session, centerX, centerZ, radius);
+                } finally {
+                    replanInFlight.set(false);
+                }
+            });
+        }
     }
 
     /**
@@ -198,11 +236,15 @@ public final class SingleplayerMcaRenderService {
                 filesDone.get(), chunksImported.get(), chunksRealSkip.get(),
                 chunksNotGenerated.get(), chunksFailed.get(), filesFailed.get());
         }
+        // Every activation (join, dimension switch) restarts the import delay, so the world
+        // gets its IO and worker pools back before any region conversion runs.
+        sessionActivatedAtMs = System.currentTimeMillis();
         synchronized (queueLock) {
             pending = List.of();
         }
-        scannedMcas.clear();
+        persistIndex();
         regionDirectory = null;
+        importIndexPath = null;
         mapViewport = null;
         lastMapViewportAtMs = 0L;
         lastPlanCenterX = Integer.MIN_VALUE;
@@ -218,13 +260,8 @@ public final class SingleplayerMcaRenderService {
         final SessionGuard.Session session,
         final int centerX,
         final int centerZ,
-        final int radius,
-        final long now
+        final int radius
     ) {
-        lastPlanAtMs = now;
-        lastPlanCenterX = centerX;
-        lastPlanCenterZ = centerZ;
-        lastPlanRadius = radius;
         final Path directory = regionDirectory;
         if (directory == null) {
             return;
@@ -236,15 +273,18 @@ public final class SingleplayerMcaRenderService {
         final int maxMcaZ = Math.floorDiv(centerZ + radius, CHUNKS_PER_MCA);
         for (int mcaX = minMcaX; mcaX <= maxMcaX; mcaX++) {
             for (int mcaZ = minMcaZ; mcaZ <= maxMcaZ; mcaZ++) {
-                final long key = pack(mcaX, mcaZ);
-                if (scannedMcas.containsKey(key)) {
+                final String fileName = "r." + mcaX + "." + mcaZ + ".mca";
+                final Path path = directory.resolve(fileName);
+                final long mtime = mtimeOf(path);
+                if (mtime <= 0L) {
                     continue;
                 }
-                final Path path = directory.resolve("r." + mcaX + "." + mcaZ + ".mca");
-                if (!Files.isRegularFile(path)) {
+                final Long importedAt = importedIndex.get(fileName);
+                if (importedAt != null && importedAt == mtime) {
                     continue;
                 }
-                next.add(new PendingFile(mcaX, mcaZ, path, chebyshevToMca(mcaX, mcaZ, centerX, centerZ)));
+                next.add(new PendingFile(mcaX, mcaZ, path, mtime,
+                    chebyshevToMca(mcaX, mcaZ, centerX, centerZ)));
             }
         }
         next.sort(Comparator.comparingInt(PendingFile::distance).reversed());
@@ -303,7 +343,7 @@ public final class SingleplayerMcaRenderService {
         final long token = session.token();
         try {
             final long mtime = Files.getLastModifiedTime(task.path).toMillis();
-            final Long known = scannedMcas.get(task.key());
+            final Long known = importedIndex.get(task.path().getFileName().toString());
             if (known != null && known == mtime) {
                 return;
             }
@@ -322,6 +362,8 @@ public final class SingleplayerMcaRenderService {
             final int[] notGenerated = {0};
             /** First resolved biome id among this file's imports; proves tint resolution in the log. */
             final String[] biomeSample = {null};
+            /** First non-white tint among this file's imports; 0 when every column stayed untinted. */
+            final int[] tintSample = {0};
             scanner.forEachChunkNbt(task.path, task.mcaX(), task.mcaZ(), (chunkX, chunkZ, nbt) -> {
                 try {
                     final NbtChunkColumnSource source = new NbtChunkColumnSource(nbt);
@@ -364,6 +406,14 @@ public final class SingleplayerMcaRenderService {
                                 }
                             }
                         }
+                        if (tintSample[0] == 0) {
+                            for (final int tint : snapshot.tintArgb) {
+                                if (tint != -1 && tint != 0) {
+                                    tintSample[0] = tint;
+                                    break;
+                                }
+                            }
+                        }
                         byRegion.computeIfAbsent(pack(chunkX >> 4, chunkZ >> 4), ignored -> new ArrayList<>())
                             .add(snapshot);
                     }
@@ -376,15 +426,18 @@ public final class SingleplayerMcaRenderService {
             });
             filesDone.incrementAndGet();
             ConfluxMapMod.LOGGER.debug(
-                "MCA import r.{}.{}.mca: {} chunks imported, {} real-skip, {} not-generated, biome sample {}",
-                task.mcaX(), task.mcaZ(), imported[0], exploredSkip[0], notGenerated[0], biomeSample[0]);
+                "MCA import r.{}.{}.mca: {} chunks imported, {} real-skip, {} not-generated, "
+                    + "biome sample {}, tint sample {}",
+                task.mcaX(), task.mcaZ(), imported[0], exploredSkip[0], notGenerated[0],
+                biomeSample[0], String.format("0x%08X", tintSample[0]));
             if (filesDone.get() % LOG_FILE_INTERVAL == 0) {
                 ConfluxMapMod.LOGGER.info(
                     "[confluxmap] MCA render progress: {} files done ({} chunks imported, "
                         + "{} real-skip, {} not-generated stubs, {} chunk failures), "
-                        + "{} files queued, biome sample {}",
+                        + "{} files queued, biome sample {}, tint sample {}",
                     filesDone.get(), chunksImported.get(), chunksRealSkip.get(),
-                    chunksNotGenerated.get(), chunksFailed.get(), pendingSize(), biomeSample[0]);
+                    chunksNotGenerated.get(), chunksFailed.get(), pendingSize(),
+                    biomeSample[0], String.format("0x%08X", tintSample[0]));
             }
             for (final Map.Entry<Long, List<ChunkSnapshot>> entry : byRegion.entrySet()) {
                 final List<TileService.RegionUnit> units = new ArrayList<>(entry.getValue().size());
@@ -401,7 +454,8 @@ public final class SingleplayerMcaRenderService {
                     );
                 }
             }
-            scannedMcas.put(task.key(), mtime);
+            importedIndex.put(task.path().getFileName().toString(), mtime);
+            persistIndex();
         } catch (final IOException | RuntimeException e) {
             filesFailed.incrementAndGet();
             ConfluxMapMod.LOGGER.warn(
@@ -435,9 +489,93 @@ public final class SingleplayerMcaRenderService {
     }
 
     /** One queued {@code .mca} file with its distance ranking from the current plan center. */
-    private record PendingFile(int mcaX, int mcaZ, Path path, int distance) {
-        long key() {
-            return pack(mcaX, mcaZ);
+    private record PendingFile(int mcaX, int mcaZ, Path path, long mtime, int distance) {
+    }
+
+    /** Resolves the session's region directory, save-root index path, and persisted index. */
+    private void ensureSessionPaths(final SessionGuard.Session session) {
+        final Path saveRoot = client.getServer().getSavePath(WorldSavePath.ROOT);
+        final String dimension = session.dimension().namespace() + "." + session.dimension().path();
+        regionDirectory = RegionStoragePaths.regionDirectory(
+            saveRoot, session.dimension().namespace() + ":" + session.dimension().path()
+        );
+        importIndexPath = saveRoot.resolve(ConfluxMapMod.ID)
+            .resolve("mca-import-index-" + dimension + ".json");
+        loadIndex();
+    }
+
+    /** Reads the persisted import index; a converter version bump discards every entry once. */
+    private void loadIndex() {
+        final Path path = importIndexPath;
+        if (path == null || !Files.isRegularFile(path)) {
+            return;
+        }
+        try {
+            final IndexFile file = GSON.fromJson(
+                Files.readString(path), IndexFile.class
+            );
+            if (file == null || file.version != CONVERTER_VERSION || file.files == null) {
+                ConfluxMapMod.LOGGER.info(
+                    "[confluxmap] MCA render: import index written by converter v{} is obsolete "
+                        + "(current v{}); already-converted files will be re-imported once",
+                    file == null ? "?" : file.version, CONVERTER_VERSION);
+                importedIndex.clear();
+                return;
+            }
+            importedIndex.clear();
+            importedIndex.putAll(file.files);
+        } catch (final IOException | RuntimeException e) {
+            ConfluxMapMod.LOGGER.warn(
+                "[confluxmap] MCA render: unreadable import index at {}, starting fresh", path, e);
+            importedIndex.clear();
+        }
+    }
+
+    /** Debounced index write; tiny (hundreds of entries), so a trailing write is cheap. */
+    private void persistIndex() {
+        final Path path = importIndexPath;
+        if (path == null) {
+            return;
+        }
+        final long now = System.currentTimeMillis();
+        final long last = lastIndexWriteAtMs;
+        if (now - last < INDEX_WRITE_DEBOUNCE_MS) {
+            return;
+        }
+        lastIndexWriteAtMs = now;
+        try {
+            Files.createDirectories(path.getParent());
+            final Path tmp = path.resolveSibling(path.getFileName() + ".tmp");
+            Files.writeString(tmp, GSON.toJson(new IndexFile(CONVERTER_VERSION, importedIndex)));
+            Files.move(tmp, path, java.nio.file.StandardCopyOption.REPLACE_EXISTING);
+        } catch (final IOException e) {
+            ConfluxMapMod.LOGGER.warn(
+                "[confluxmap] MCA render: failed to persist import index at {}", path, e);
+        }
+    }
+
+    private static long mtimeOf(final Path path) {
+        try {
+            return Files.getLastModifiedTime(path).toMillis();
+        } catch (final IOException e) {
+            return 0L;
+        }
+    }
+
+    /** Persisted shape of the import index; {@link #version} gates stale-converter entries. */
+    private static final class IndexFile {
+        final int version;
+        final Map<String, Long> files;
+
+        @SuppressWarnings("unused")
+        IndexFile() {
+            version = 0;
+            files = new java.util.HashMap<>();
+        }
+
+        IndexFile(final int version, final Map<String, Long> files) {
+            this.version = version;
+            this.files = files;
         }
     }
 }
