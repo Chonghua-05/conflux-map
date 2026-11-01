@@ -15,6 +15,9 @@ import net.minecraft.client.gui.screen.Screen;
 //$$ import net.minecraft.client.gui.DrawContext;
 //$$ import net.minecraft.client.font.TextRenderer.TextLayerType;
 //#endif
+//#if MC>=12000 && MC<12108
+//$$ import net.minecraft.client.render.RenderLayer;
+//#endif
 import net.minecraft.client.util.math.MatrixStack;
 import net.minecraft.item.ItemStack;
 import net.minecraft.text.OrderedText;
@@ -196,6 +199,29 @@ public final class GuiDraw {
         //#if MC>=12000
         //$$ context.fill(x1, y1, x2, y2, color);
         //#else
+        GuiShapes.fillRect(matrices(), x1, y1, x2 - x1, y2 - y1, color);
+        //#endif
+    }
+
+    /**
+     * Fills one rect of a popup (dropdown backdrop, option row, selection stripe, its
+     * scrollbar) that must fully cover earlier screen content.
+     *
+     * <p>The main glyph pass of any text drawn earlier in the frame writes depth at
+     * {@code TextRenderer.FORWARD_SHIFT} (z + 0.03, nearer than z=0 fills) while sharing the
+     * GUI layer's LEQUAL depth test, so a plain {@link #fill} is depth-rejected at those
+     * pixels and the earlier text bleeds through the popup.
+     */
+    public void fillPopup(final int x1, final int y1, final int x2, final int y2, final int color) {
+        //#if MC>=12108
+        //$$ // Overlap with an earlier element already starts a nearer recorded layer.
+        //$$ context.fill(x1, y1, x2, y2, color);
+        //#elseif MC>=12000
+        //$$ // Vanilla's own tooltip path: depth test ALWAYS, no depth write.
+        //$$ context.fill(RenderLayer.getGuiOverlay(), x1, y1, x2, y2, color);
+        //#else
+        // No gui_overlay layer before 1.20; releasing the glyph depth is the only way through.
+        GuiShapes.clearGuiDepth();
         GuiShapes.fillRect(matrices(), x1, y1, x2 - x1, y2 - y1, color);
         //#endif
     }

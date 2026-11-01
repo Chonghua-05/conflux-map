@@ -194,16 +194,21 @@ final class FullscreenMapLocationMenu {
         };
     }
 
+    /**
+     * The panel floats over the map's already-drawn waypoint and info text; popup fills keep
+     * that text's glyph depth from bleeding it through the opaque background (issue #128's
+     * family).
+     */
     static void drawPanel(final GuiDraw draw, final Bounds bounds) {
         final int x = bounds.x();
         final int y = bounds.y();
         final int right = x + bounds.width();
         final int bottom = y + bounds.height();
-        draw.fill(x, y, right, bottom, PANEL_BACKGROUND);
-        draw.fill(x, y, right, y + 1, PANEL_BORDER);
-        draw.fill(x, bottom - 1, right, bottom, PANEL_BORDER);
-        draw.fill(x, y, x + 1, bottom, PANEL_BORDER);
-        draw.fill(right - 1, y, right, bottom, PANEL_BORDER);
+        draw.fillPopup(x, y, right, bottom, PANEL_BACKGROUND);
+        draw.fillPopup(x, y, right, y + 1, PANEL_BORDER);
+        draw.fillPopup(x, bottom - 1, right, bottom, PANEL_BORDER);
+        draw.fillPopup(x, y, x + 1, bottom, PANEL_BORDER);
+        draw.fillPopup(right - 1, y, right, bottom, PANEL_BORDER);
     }
 
     /**

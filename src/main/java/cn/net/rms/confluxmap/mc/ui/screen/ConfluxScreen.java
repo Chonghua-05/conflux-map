@@ -274,6 +274,36 @@ public abstract class ConfluxScreen extends Screen {
         final int visibleRows,
         final int offset
     ) {
+        drawScrollbar(draw, x, top, height, totalRows, visibleRows, offset, false);
+    }
+
+    /**
+     * The same scrollbar for a popup that floats over earlier GUI text (a dropdown): the
+     * fills go through {@link GuiDraw#fillPopup} so glyph depth left by that text cannot
+     * punch holes in the track or thumb.
+     */
+    protected final void drawPopupScrollbar(
+        final GuiDraw draw,
+        final int x,
+        final int top,
+        final int height,
+        final int totalRows,
+        final int visibleRows,
+        final int offset
+    ) {
+        drawScrollbar(draw, x, top, height, totalRows, visibleRows, offset, true);
+    }
+
+    private static void drawScrollbar(
+        final GuiDraw draw,
+        final int x,
+        final int top,
+        final int height,
+        final int totalRows,
+        final int visibleRows,
+        final int offset,
+        final boolean popup
+    ) {
         if (totalRows <= visibleRows || visibleRows <= 0 || height <= 0) {
             return;
         }
@@ -281,8 +311,13 @@ public abstract class ConfluxScreen extends Screen {
         final int maxOffset = totalRows - visibleRows;
         final int travel = Math.max(1, height - thumbHeight);
         final int thumbY = top + Math.round(travel * (offset / (float) maxOffset));
-        draw.fill(x, top, x + 2, top + height, 0xFF3A3A3A);
-        draw.fill(x, thumbY, x + 2, thumbY + thumbHeight, 0xFFFFFFFF);
+        if (popup) {
+            draw.fillPopup(x, top, x + 2, top + height, 0xFF3A3A3A);
+            draw.fillPopup(x, thumbY, x + 2, thumbY + thumbHeight, 0xFFFFFFFF);
+        } else {
+            draw.fill(x, top, x + 2, top + height, 0xFF3A3A3A);
+            draw.fill(x, thumbY, x + 2, thumbY + thumbHeight, 0xFFFFFFFF);
+        }
     }
 
     /** Associates one inactive control with the translated reason it cannot be used. */

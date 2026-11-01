@@ -1953,7 +1953,7 @@ public final class WaypointListScreen extends ConfluxScreen {
         final int textRightPadding = hasScrollbar ? DROPDOWN_SCROLLBAR_WIDTH + 5 : 5;
         final DimensionId currentDimension = gameBridge.session().dimension();
 
-        draw.fill(
+        draw.fillPopup(
             dropdown.x() - 1,
             dropdown.popupY() - 1,
             dropdown.x() + dropdown.width() + 1,
@@ -1974,7 +1974,7 @@ public final class WaypointListScreen extends ConfluxScreen {
             final WaypointDimensionFilter option = dimensionDropdownOptions.get(optionIndex);
             final boolean selected = option.equals(dimensionFilter);
             final boolean keyboardFocused = optionIndex == dimensionDropdownKeyboardIndex;
-            draw.fill(
+            draw.fillPopup(
                 dropdown.x(),
                 rowY,
                 dropdown.x() + dropdown.width(),
@@ -1982,7 +1982,7 @@ public final class WaypointListScreen extends ConfluxScreen {
                 hovered || keyboardFocused ? 0xFF6E6E6E : selected ? 0xFF505050 : 0xFF2A2A2A
             );
             if (selected) {
-                draw.fill(
+                draw.fillPopup(
                     dropdown.x(),
                     rowY + 2,
                     dropdown.x() + 2,
@@ -2032,7 +2032,7 @@ public final class WaypointListScreen extends ConfluxScreen {
         final boolean hasScrollbar = options.size() > dropdown.visibleRows();
         final int textRightPadding = hasScrollbar ? DROPDOWN_SCROLLBAR_WIDTH + 5 : 5;
 
-        draw.fill(
+        draw.fillPopup(
             dropdown.x() - 1,
             dropdown.popupY() - 1,
             dropdown.x() + dropdown.width() + 1,
@@ -2055,7 +2055,7 @@ public final class WaypointListScreen extends ConfluxScreen {
                 openGroupDropdown == GroupDropdown.FILTER ? groupFilter() : moveTarget()
             );
             final boolean keyboardFocused = optionIndex == dropdownKeyboardIndex;
-            draw.fill(
+            draw.fillPopup(
                 dropdown.x(),
                 rowY,
                 dropdown.x() + dropdown.width(),
@@ -2063,7 +2063,8 @@ public final class WaypointListScreen extends ConfluxScreen {
                 hovered || keyboardFocused ? 0xFF6E6E6E : selected ? 0xFF505050 : 0xFF2A2A2A
             );
             if (selected) {
-                draw.fill(dropdown.x(), rowY + 2, dropdown.x() + 2, rowY + DROPDOWN_ROW_HEIGHT - 2, 0xFFFFFFFF);
+                draw.fillPopup(
+                    dropdown.x(), rowY + 2, dropdown.x() + 2, rowY + DROPDOWN_ROW_HEIGHT - 2, 0xFFFFFFFF);
             }
             final String count = Integer.toString(option == null
                 ? activeModel().waypoints().size()
@@ -2111,7 +2112,7 @@ public final class WaypointListScreen extends ConfluxScreen {
         final DropdownGeometry dropdown
     ) {
         final int actionY = dropdown.popupY() + dropdown.optionHeight();
-        draw.fill(
+        draw.fillPopup(
             dropdown.x(),
             actionY,
             dropdown.x() + dropdown.width(),
@@ -2127,7 +2128,7 @@ public final class WaypointListScreen extends ConfluxScreen {
                 && mouseX < actionRight
                 && mouseY >= actionY
                 && mouseY < actionY + dropdown.actionHeight();
-            draw.fill(
+            draw.fillPopup(
                 actionLeft,
                 actionY,
                 actionRight,
@@ -2137,7 +2138,8 @@ public final class WaypointListScreen extends ConfluxScreen {
                     : hovered ? 0xFF6E6E6E : active ? 0xFF383838 : 0xFF202020
             );
             if (actionIndex > 0) {
-                draw.fill(actionLeft, actionY + 3, actionLeft + 1, actionY + dropdown.actionHeight() - 3, 0xFF101010);
+                draw.fillPopup(
+                    actionLeft, actionY + 3, actionLeft + 1, actionY + dropdown.actionHeight() - 3, 0xFF101010);
             }
             final String label = this.textRenderer.trimToWidth(
                 groupDropdownActionLabel(actionIndex).getString(), Math.max(8, actionRight - actionLeft - 6)
@@ -2185,14 +2187,14 @@ public final class WaypointListScreen extends ConfluxScreen {
         final int thumbTop = trackTop + (maxOffset == 0
             ? 0
             : Math.round(thumbTravel * (offset / (float) maxOffset)));
-        draw.fill(
+        draw.fillPopup(
             trackX,
             dropdown.popupY(),
             dropdown.x() + dropdown.width(),
             dropdown.popupY() + dropdown.optionHeight(),
             0xFF151515
         );
-        draw.fill(
+        draw.fillPopup(
             trackX + 1,
             thumbTop,
             dropdown.x() + dropdown.width() - 1,

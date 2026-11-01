@@ -442,7 +442,7 @@ final class MapTargetSelectors {
         targetDropdownScrollOffset = DropdownScroll.clamp(
             targetDropdownScrollOffset, options.size(), dropdown.visibleRows()
         );
-        draw.fill(
+        draw.fillPopup(
             dropdown.x() - 1,
             dropdown.y() - 1,
             dropdown.x() + dropdown.width() + 1,
@@ -460,13 +460,13 @@ final class MapTargetSelectors {
                 && mouseX < dropdown.x() + dropdown.width()
                 && mouseY >= rowY && mouseY < rowY + TARGET_DROPDOWN_ROW_HEIGHT;
             final boolean selected = isTargetOptionSelected(option);
-            draw.fill(
+            draw.fillPopup(
                 dropdown.x(), rowY,
                 dropdown.x() + dropdown.width(), rowY + TARGET_DROPDOWN_ROW_HEIGHT,
                 hovered ? 0xFF6E6E6E : selected ? 0xFF505050 : 0xFF2A2A2A
             );
             if (selected) {
-                draw.fill(
+                draw.fillPopup(
                     dropdown.x(), rowY + 2, dropdown.x() + 2,
                     rowY + TARGET_DROPDOWN_ROW_HEIGHT - 2, 0xFFFFFFFF
                 );
@@ -488,7 +488,7 @@ final class MapTargetSelectors {
                 selected ? 0xFFFFFFFF : 0xFFE0E0E0
             );
         }
-        screen.drawListScrollbar(
+        screen.drawPopupScrollbar(
             draw,
             dropdown.x() + dropdown.width() - 3,
             dropdown.y(),
