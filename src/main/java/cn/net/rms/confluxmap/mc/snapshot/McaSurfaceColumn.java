@@ -53,6 +53,7 @@ final class McaSurfaceColumn implements SurfaceColumn {
     private final SpriteColorSampler sampler;
     private final Map<BlockState, SpriteColorSampler.SampledColors> materials = new ConcurrentHashMap<>();
     private final Map<String, Optional<Biome>> biomeCache = new ConcurrentHashMap<>();
+    private final Map<Integer, String> legacyBiomeNames = new ConcurrentHashMap<>();
 
     McaSurfaceColumn(
         final int chunkX,
@@ -182,6 +183,26 @@ final class McaSurfaceColumn implements SurfaceColumn {
 
     @Override
     public String biomeIdAt(final int localX, final int surfaceY, final int localZ) {
-        return source.biomeNameAt(localX, surfaceY, localZ);
+        final String name = source.biomeNameAt(localX, surfaceY, localZ);
+        if (name != null) {
+            return name;
+        }
+        return legacyBiomeName(source.biomeIdAt(localX, surfaceY, localZ));
+    }
+
+    /**
+     * Legacy (pre-1.18) chunks store biomes as a per-chunk raw registry id array with no names,
+     * which would leave every imported column tintless (gray grass, dark water). Resolve the id
+     * against the client's biome registry; ids the registry does not know resolve to null, which
+     * {@link McaTintResolver} treats like any other unknown biome.
+     */
+    private String legacyBiomeName(final int rawId) {
+        if (world == null || rawId < 0) {
+            return null;
+        }
+        return legacyBiomeNames.computeIfAbsent(rawId, id -> {
+            final Identifier identifier = Regs.biomeIdByRawId(Regs.biomes(world), id);
+            return identifier == null ? null : identifier.toString();
+        });
     }
 }

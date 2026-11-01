@@ -70,6 +70,8 @@ public final class SingleplayerMcaRenderService {
     private static final long MAP_VIEWPORT_TTL_MS = 2_000L;
     /** Plan-center hysteresis: panning by less than this does not restart the plan. */
     private static final int REPLAN_CENTER_HYSTERESIS = 2;
+    /** INFO progress-log cadence, in converted files. */
+    private static final int LOG_FILE_INTERVAL = 25;
 
     private final MinecraftClient client;
     private final ConfluxConfig config;
@@ -90,6 +92,13 @@ public final class SingleplayerMcaRenderService {
     /** Session-scoped mtime index: MCA files already converted this session. */
     private final Map<Long, Long> scannedMcas = new ConcurrentHashMap<>();
     private final AtomicInteger inFlight = new AtomicInteger();
+    /** Session-cumulative progress counters, surfaced in throttled INFO logs. */
+    private final AtomicInteger filesDone = new AtomicInteger();
+    private final AtomicInteger chunksImported = new AtomicInteger();
+    private final AtomicInteger chunksExploredSkip = new AtomicInteger();
+    private final AtomicInteger chunksNotGenerated = new AtomicInteger();
+    private final AtomicInteger chunksFailed = new AtomicInteger();
+    private final AtomicInteger filesFailed = new AtomicInteger();
 
     private volatile Path regionDirectory;
     private ChunkViewport mapViewport;
@@ -182,6 +191,13 @@ public final class SingleplayerMcaRenderService {
     }
 
     public void onSessionChanged(final SessionGuard.Session session) {
+        if (filesDone.get() > 0) {
+            ConfluxMapMod.LOGGER.info(
+                "[confluxmap] MCA render session summary: {} files done ({} chunks imported, "
+                    + "{} explored-skip, {} not-generated stubs, {} chunk failures, {} file failures)",
+                filesDone.get(), chunksImported.get(), chunksExploredSkip.get(),
+                chunksNotGenerated.get(), chunksFailed.get(), filesFailed.get());
+        }
         synchronized (queueLock) {
             pending = List.of();
         }
@@ -234,6 +250,13 @@ public final class SingleplayerMcaRenderService {
         next.sort(Comparator.comparingInt(PendingFile::distance).reversed());
         synchronized (queueLock) {
             pending = next;
+        }
+        if (!next.isEmpty() && filesDone.get() % LOG_FILE_INTERVAL == 0) {
+            ConfluxMapMod.LOGGER.info(
+                "[confluxmap] MCA render: queued {} region files (center {},{} radius {} chunks; "
+                    + "{} files done, {} chunks imported, {} not-generated stubs skipped so far)",
+                next.size(), centerX, centerZ, radius,
+                filesDone.get(), chunksImported.get(), chunksNotGenerated.get());
         }
         drain(session);
     }
@@ -294,18 +317,26 @@ public final class SingleplayerMcaRenderService {
             }
             final ColumnStore store = world.store(MapLayer.SURFACE);
             final Map<Long, List<ChunkSnapshot>> byRegion = new LinkedHashMap<>();
+            final int[] imported = {0};
+            final int[] exploredSkip = {0};
+            final int[] notGenerated = {0};
             scanner.forEachChunkNbt(task.path, task.mcaX(), task.mcaZ(), (chunkX, chunkZ, nbt) -> {
                 try {
                     final NbtChunkColumnSource source = new NbtChunkColumnSource(nbt);
                     // Not-fully-generated chunks stay unknown so the tile shows the map
                     // background (or the prediction underlay) instead of a gray placeholder -
-                    // this is the pregenerator border-ring guard.
+                    // this is the pregenerator border-ring guard. Chunky rim files are full of
+                    // structure_starts stubs that carry no terrain at all.
                     if (!source.generated()) {
+                        notGenerated[0]++;
+                        chunksNotGenerated.incrementAndGet();
                         return;
                     }
                     // Captured/cached data is strictly better than the file's snapshot; the
                     // store gate would reject it anyway, this just skips the sampling work.
                     if (store.hasRealChunk(chunkX, chunkZ)) {
+                        exploredSkip[0]++;
+                        chunksExploredSkip.incrementAndGet();
                         return;
                     }
                     final ChunkSnapshot snapshot = factory.snapshotSurfaceFromColumn(
@@ -317,15 +348,30 @@ public final class SingleplayerMcaRenderService {
                         return;
                     }
                     if (world.put(MapLayer.SURFACE, snapshot, SampleSource.IMPORTED)) {
+                        imported[0]++;
+                        chunksImported.incrementAndGet();
                         byRegion.computeIfAbsent(pack(chunkX >> 4, chunkZ >> 4), ignored -> new ArrayList<>())
                             .add(snapshot);
                     }
                 } catch (final RuntimeException e) {
                     // One broken chunk must not abort the file; log and keep scanning.
+                    chunksFailed.incrementAndGet();
                     ConfluxMapMod.LOGGER.debug(
                         "MCA import failed for chunk {},{} in {}", chunkX, chunkZ, task.path, e);
                 }
             });
+            filesDone.incrementAndGet();
+            ConfluxMapMod.LOGGER.debug(
+                "MCA import r.{}.{}.mca: {} chunks imported, {} explored-skip, {} not-generated",
+                task.mcaX(), task.mcaZ(), imported[0], exploredSkip[0], notGenerated[0]);
+            if (filesDone.get() % LOG_FILE_INTERVAL == 0) {
+                ConfluxMapMod.LOGGER.info(
+                    "[confluxmap] MCA render progress: {} files done ({} chunks imported, "
+                        + "{} explored-skip, {} not-generated stubs, {} chunk failures), "
+                        + "{} files queued",
+                    filesDone.get(), chunksImported.get(), chunksExploredSkip.get(),
+                    chunksNotGenerated.get(), chunksFailed.get(), pendingSize());
+            }
             for (final Map.Entry<Long, List<ChunkSnapshot>> entry : byRegion.entrySet()) {
                 final List<TileService.RegionUnit> units = new ArrayList<>(entry.getValue().size());
                 for (final ChunkSnapshot snapshot : entry.getValue()) {
@@ -343,8 +389,16 @@ public final class SingleplayerMcaRenderService {
             }
             scannedMcas.put(task.key(), mtime);
         } catch (final IOException | RuntimeException e) {
-            ConfluxMapMod.LOGGER.debug(
-                "MCA import task failed for mca {},{} ({})", task.mcaX(), task.mcaZ(), task.path, e);
+            filesFailed.incrementAndGet();
+            ConfluxMapMod.LOGGER.warn(
+                "[confluxmap] MCA render: file task failed for mca {},{} ({})",
+                task.mcaX(), task.mcaZ(), task.path, e);
+        }
+    }
+
+    private int pendingSize() {
+        synchronized (queueLock) {
+            return pending.size();
         }
     }
 

@@ -176,4 +176,24 @@ public final class Regs {
         return biomes(world).getId(chunk.getBiomeArray().getBiomeForNoiseGen(x >> 2, y >> 2, z >> 2));
         //#endif
     }
+
+    /**
+     * The registry identifier of the biome stored under a raw registry id - the storage form of
+     * the legacy (pre-1.18) chunk {@code Biomes} int array that has no names alongside the ids.
+     * Null when the id is out of range or unknown to this client.
+     */
+    public static Identifier biomeIdByRawId(final Registry<Biome> registry, final int rawId) {
+        //#if MC>=11903
+        //$$ if (rawId < 0 || rawId >= registry.size()) {
+        //$$     return null;
+        //$$ }
+        //$$ final Biome biome = registry.getEntry(rawId).map(entry -> entry.value()).orElse(null);
+        //#else
+        if (rawId < 0) {
+            return null;
+        }
+        final Biome biome = registry.get(rawId);
+        //#endif
+        return biome == null ? null : registry.getId(biome);
+    }
 }
