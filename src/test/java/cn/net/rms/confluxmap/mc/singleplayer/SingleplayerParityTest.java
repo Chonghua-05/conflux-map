@@ -18,6 +18,7 @@ import cn.net.rms.confluxmap.core.store.MapWorldService;
 import cn.net.rms.confluxmap.core.task.MapExecutors;
 import cn.net.rms.confluxmap.core.task.SessionGuard;
 import cn.net.rms.confluxmap.core.tile.TileService;
+import cn.net.rms.confluxmap.core.util.Argb;
 import cn.net.rms.confluxmap.server.AnvilMcaScanner;
 import cn.net.rms.confluxmap.server.ChunkSummarizer;
 import java.io.ByteArrayOutputStream;
@@ -85,6 +86,12 @@ class SingleplayerParityTest {
             assertEquals(256 * 256, pixels.length);
             // 验证像素不是全黑/全透明
             assertTrue(pixels[0] != 0, "Tile pixel must be composed with real landscape color");
+
+            // 验证在有本地真实数据时，预测图层对应位置必须被置为透明，确保底层底图不会溢出污染
+            final int[] predictedPixels = new int[256 * 256];
+            Arrays.fill(predictedPixels, 0xFF112233);
+            tiles.maskKnownRealPixels(key, predictedPixels);
+            assertEquals(Argb.TRANSPARENT, predictedPixels[0], "Predicted pixel must be masked transparent over real data");
         } finally {
             executors.shutdown(1000L);
         }

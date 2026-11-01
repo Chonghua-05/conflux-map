@@ -1969,6 +1969,15 @@ public final class FullscreenMapScreen extends ConfluxScreen {
             }
         }
 
+        // Draw predicted tiles as the underlay first. Real authoritative map tiles then draw on top,
+        // ensuring high-fidelity local captures never get overwritten with color-drifted approximations.
+        if (predictionActive) {
+            drawPredictedTiles(
+                matrices, session, layerId, lod, firstTileX, lastTileX,
+                firstTileZ, lastTileZ, pxPerBlock, blocksPerTile, biomeMode
+            );
+        }
+
         RenderUtil.beginTexturedQuads();
         for (int tileZ = firstTileZ; tileZ <= lastTileZ; tileZ++) {
             for (int tileX = firstTileX; tileX <= lastTileX; tileX++) {
@@ -1983,15 +1992,6 @@ public final class FullscreenMapScreen extends ConfluxScreen {
                     RenderUtil.drawQuad(matrices, screenX, screenY, quadSize, quadSize, 0f, 0f, 1f, 1f);
                 }
             }
-        }
-
-        // The predicted texture is already transparent wherever local real data wins. Drawing it
-        // last lets a newer synchronized chunk cover an older local capture without a third texture.
-        if (predictionActive) {
-            drawPredictedTiles(
-                matrices, session, layerId, lod, firstTileX, lastTileX,
-                firstTileZ, lastTileZ, pxPerBlock, blocksPerTile, biomeMode
-            );
         }
 
         if (preloadPaddedRing) {
@@ -2014,6 +2014,7 @@ public final class FullscreenMapScreen extends ConfluxScreen {
         final double blocksPerTile,
         final boolean biomeMode
     ) {
+        RenderUtil.beginTexturedQuads();
         for (int tileZ = firstTileZ; tileZ <= lastTileZ; tileZ++) {
             for (int tileX = firstTileX; tileX <= lastTileX; tileX++) {
                 final TileKey terrainKey = new TileKey(
