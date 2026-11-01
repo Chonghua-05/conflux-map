@@ -19,7 +19,7 @@ import net.minecraft.nbt.NbtCompound;
 import net.minecraft.nbt.NbtIo;
 
 /** Reads one Anvil file once and produces all four 16x16-chunk summary regions it contains. */
-final class AnvilMcaScanner {
+public final class AnvilMcaScanner {
     private static final int CHUNKS_PER_SIDE = AnvilRegionReader.CHUNKS_PER_SIDE;
     private static final int CHUNKS_PER_MCA = CHUNKS_PER_SIDE * CHUNKS_PER_SIDE;
     private static final int SUMMARY_REGIONS_PER_SIDE = 2;
@@ -30,23 +30,23 @@ final class AnvilMcaScanner {
     //#endif
     private final boolean nativeEnabled;
 
-    AnvilMcaScanner() {
+    public AnvilMcaScanner() {
         this(true);
     }
 
-    AnvilMcaScanner(final boolean nativeEnabled) {
+    public AnvilMcaScanner(final boolean nativeEnabled) {
         this.nativeEnabled = nativeEnabled;
     }
 
-    record Scan(int mcaX, int mcaZ, long sourceMcaMtimeMs, SummaryCodec.SampledRegion[] regions) {
-        Scan {
+    public record Scan(int mcaX, int mcaZ, long sourceMcaMtimeMs, SummaryCodec.SampledRegion[] regions) {
+        public Scan {
             if (regions == null || regions.length != 4) {
                 throw new IllegalArgumentException("Anvil scan must contain four summary regions");
             }
             regions = regions.clone();
         }
 
-        SummaryCodec.SampledRegion region(final int summaryRegionX, final int summaryRegionZ) {
+        public SummaryCodec.SampledRegion region(final int summaryRegionX, final int summaryRegionZ) {
             final int localX = Math.floorMod(summaryRegionX, SUMMARY_REGIONS_PER_SIDE);
             final int localZ = Math.floorMod(summaryRegionZ, SUMMARY_REGIONS_PER_SIDE);
             return regions[localZ * SUMMARY_REGIONS_PER_SIDE + localX];
@@ -54,7 +54,7 @@ final class AnvilMcaScanner {
     }
 
     /** Returns {@code null} only when the file cannot be trusted and vanilla must be used as fallback. */
-    Scan scan(
+    public Scan scan(
         final Path path,
         final int mcaX,
         final int mcaZ,
@@ -66,7 +66,7 @@ final class AnvilMcaScanner {
     }
 
     /** Parses only the requested crop while still reading the MCA location table once. */
-    SummaryCodec.SampledRegion scanRegion(
+    public SummaryCodec.SampledRegion scanRegion(
         final Path path,
         final int mcaX,
         final int mcaZ,

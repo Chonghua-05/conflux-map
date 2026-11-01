@@ -5,13 +5,13 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 
 /** Resolves vanilla Anvil region files without loading or generating chunks. */
-final class RegionStoragePaths {
+public final class RegionStoragePaths {
     private static final int SUMMARY_REGIONS_PER_MCA = 2;
 
     private RegionStoragePaths() {
     }
 
-    static long mcaMtimeMs(
+    public static long mcaMtimeMs(
         final Path worldRoot,
         final String dimension,
         final int summaryRegionX,
@@ -29,7 +29,7 @@ final class RegionStoragePaths {
     }
 
     /** Maps one 16x16-chunk summary region to its containing 32x32-chunk Anvil file. */
-    static Path mcaFile(
+    public static Path mcaFile(
         final Path worldRoot,
         final String dimension,
         final int summaryRegionX,
@@ -40,7 +40,7 @@ final class RegionStoragePaths {
         return regionDirectory(worldRoot, dimension).resolve("r." + mcaX + "." + mcaZ + ".mca");
     }
 
-    static Path regionDirectory(final Path worldRoot, final String dimension) {
+    public static Path regionDirectory(final Path worldRoot, final String dimension) {
         //#if MC<260100
         if ("minecraft:overworld".equals(dimension)) {
             return worldRoot.resolve("region");

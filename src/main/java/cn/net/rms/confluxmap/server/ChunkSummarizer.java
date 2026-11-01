@@ -39,15 +39,15 @@ public final class ChunkSummarizer {
         return columns.summarize(source);
     }
 
-    SummaryCodec.SampledChunk summarizeForLod(final NbtCompound root, final int lod) {
+    public SummaryCodec.SampledChunk summarizeForLod(final NbtCompound root, final int lod) {
         return summarizeForLod(new NbtChunkColumnSource(root), lod);
     }
 
-    SummaryCodec.SampledChunk summarizeForLod(final ChunkColumnSource source, final int lod) {
+    public SummaryCodec.SampledChunk summarizeForLod(final ChunkColumnSource source, final int lod) {
         return columns.summarizeForLod(source, lod);
     }
 
-    SummaryCodec.SampledChunk summarizeNative(final NativeChunkNbtScanner.Chunk chunk) {
+    public SummaryCodec.SampledChunk summarizeNative(final NativeChunkNbtScanner.Chunk chunk) {
         if (chunk == null || !chunk.generated()) {
             return SummaryCodec.SampledChunk.empty(chunk == null ? 16 : chunk.sampleStride());
         }
