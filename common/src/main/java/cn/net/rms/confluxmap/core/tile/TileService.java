@@ -1295,12 +1295,22 @@ public final class TileService {
         final int tintedBase = Argb.multiply(baseArgb[idx], tintArgb[idx]);
         final int composed;
         if (waterOrIce) {
+            // Shoulders whose neighbour region is absent are filled from the axial
+            // opposite (see reliefMultiplier) so the floor keeps its slope light.
+            final Integer north =
+                reliefHeight(x, z - 1, true, surfaceY, fluidDepth, kind, neighborhood);
+            final Integer northWest =
+                reliefHeight(x - 1, z - 1, true, surfaceY, fluidDepth, kind, neighborhood);
+            final Integer south =
+                reliefHeight(x, z + 1, true, surfaceY, fluidDepth, kind, neighborhood);
+            final Integer southEast =
+                reliefHeight(x + 1, z + 1, true, surfaceY, fluidDepth, kind, neighborhood);
             int shadedFloor = overlayArgb[idx] == Argb.TRANSPARENT
                 ? Argb.TRANSPARENT
                 : XaeroMapStyle.applyTerrain(
                     overlayArgb[idx], floor,
-                    reliefHeight(x, z - 1, true, surfaceY, fluidDepth, kind, neighborhood),
-                    reliefHeight(x - 1, z - 1, true, surfaceY, fluidDepth, kind, neighborhood),
+                    ShadingPipeline.filledShoulder(north, south, floor),
+                    ShadingPipeline.filledShoulder(northWest, southEast, floor),
                     1, true, shadow
                 );
             shadedFloor = ShadingPipeline.applyBrightnessMultiplier(
@@ -1308,10 +1318,18 @@ public final class TileService {
             );
             composed = ShadingPipeline.compositeOver(tintedBase, shadedFloor);
         } else {
+            final Integer north =
+                reliefHeight(x, z - 1, false, surfaceY, fluidDepth, kind, neighborhood);
+            final Integer northWest =
+                reliefHeight(x - 1, z - 1, false, surfaceY, fluidDepth, kind, neighborhood);
+            final Integer south =
+                reliefHeight(x, z + 1, false, surfaceY, fluidDepth, kind, neighborhood);
+            final Integer southEast =
+                reliefHeight(x + 1, z + 1, false, surfaceY, fluidDepth, kind, neighborhood);
             final int shadedBase = XaeroMapStyle.applyTerrain(
                 tintedBase, surface,
-                reliefHeight(x, z - 1, false, surfaceY, fluidDepth, kind, neighborhood),
-                reliefHeight(x - 1, z - 1, false, surfaceY, fluidDepth, kind, neighborhood),
+                ShadingPipeline.filledShoulder(north, south, surface),
+                ShadingPipeline.filledShoulder(northWest, southEast, surface),
                 1, true, shadow
             );
             composed = ShadingPipeline.compositeOver(overlayArgb[idx], shadedBase);
@@ -1355,13 +1373,33 @@ public final class TileService {
         final byte[] localKind,
         final RegionNeighborhood neighborhood
     ) {
+        final Integer centerHeight =
+            reliefHeight(x, z, bathymetry, localSurfaceY, localFluidDepth, localKind, neighborhood);
+        if (centerHeight == null) {
+            return 1.0;
+        }
+        // Region-edge columns lose shoulders to absent neighbour regions; filling them from
+        // the axial opposite keeps slope shading alive to the last column instead of
+        // collapsing the whole pixel flat (a one-texel bright band on region borders).
+        final Integer litWest =
+            reliefHeight(x - 1, z, bathymetry, localSurfaceY, localFluidDepth, localKind, neighborhood);
+        final Integer litSouth =
+            reliefHeight(x, z + 1, bathymetry, localSurfaceY, localFluidDepth, localKind, neighborhood);
+        final Integer litDiagonal =
+            reliefHeight(x - 1, z + 1, bathymetry, localSurfaceY, localFluidDepth, localKind, neighborhood);
+        final Integer darkEast =
+            reliefHeight(x + 1, z, bathymetry, localSurfaceY, localFluidDepth, localKind, neighborhood);
+        final Integer darkNorth =
+            reliefHeight(x, z - 1, bathymetry, localSurfaceY, localFluidDepth, localKind, neighborhood);
+        final Integer darkDiagonal =
+            reliefHeight(x + 1, z - 1, bathymetry, localSurfaceY, localFluidDepth, localKind, neighborhood);
         return ShadingPipeline.directionalReliefMultiplier(
-            reliefHeight(x - 1, z, bathymetry, localSurfaceY, localFluidDepth, localKind, neighborhood),
-            reliefHeight(x, z + 1, bathymetry, localSurfaceY, localFluidDepth, localKind, neighborhood),
-            reliefHeight(x - 1, z + 1, bathymetry, localSurfaceY, localFluidDepth, localKind, neighborhood),
-            reliefHeight(x + 1, z, bathymetry, localSurfaceY, localFluidDepth, localKind, neighborhood),
-            reliefHeight(x, z - 1, bathymetry, localSurfaceY, localFluidDepth, localKind, neighborhood),
-            reliefHeight(x + 1, z - 1, bathymetry, localSurfaceY, localFluidDepth, localKind, neighborhood),
+            ShadingPipeline.filledShoulder(litWest, darkEast, centerHeight),
+            ShadingPipeline.filledShoulder(litSouth, darkNorth, centerHeight),
+            ShadingPipeline.filledShoulder(litDiagonal, darkDiagonal, centerHeight),
+            ShadingPipeline.filledShoulder(darkEast, litWest, centerHeight),
+            ShadingPipeline.filledShoulder(darkNorth, litSouth, centerHeight),
+            ShadingPipeline.filledShoulder(darkDiagonal, litDiagonal, centerHeight),
             1
         );
     }

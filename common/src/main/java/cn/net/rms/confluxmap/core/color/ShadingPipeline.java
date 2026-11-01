@@ -93,6 +93,26 @@ public final class ShadingPipeline {
         return 1.0 + RELIEF_CONTRAST * normalized;
     }
 
+    /**
+     * Replaces an absent relief shoulder so columns at a region or grid edge keep their
+     * slope shading: the center column extended by the axial opposite's rise, clamped to
+     * one block so a missing neighbour cannot fabricate a cliff. With the opposite absent
+     * too, the column shades flat for that shoulder.
+     */
+    public static int filledShoulder(
+        final Integer shoulder,
+        final Integer opposite,
+        final int centerHeight
+    ) {
+        if (shoulder != null) {
+            return shoulder;
+        }
+        if (opposite == null) {
+            return centerHeight;
+        }
+        return centerHeight + Math.max(-1, Math.min(1, centerHeight - opposite));
+    }
+
     /** Depth-based readability curve shared by captured and predicted seafloors. */
     public static float seafloorBrightness(final int fluidDepth) {
         return Math.max(SEAFLOOR_MIN_BRIGHTNESS, 1f - Math.max(0, fluidDepth) / SEAFLOOR_DARKEN_RANGE_BLOCKS);
