@@ -162,11 +162,6 @@ public final class ConfluxMapCompanion {
             return;
         }
         activateIfNeeded(server);
-        if (!runtime.isActive()) {
-            ConfluxMapMod.LOGGER.info(
-                "[ConfluxMap] companion inactive in local singleplayer; publishing to LAN will activate it"
-            );
-        }
     }
 
     private void onServerStopping(final MinecraftServer server) {
@@ -431,6 +426,7 @@ public final class ConfluxMapCompanion {
         } else {
             effectiveConfig = config;
         }
+        this.config = effectiveConfig;
         summaries = new RegionSummaryService(effectiveConfig);
         datapackLangs = new DatapackLangService(
             () -> server.getSavePath(WorldSavePath.DATAPACKS), ConfluxMapMod.LOGGER

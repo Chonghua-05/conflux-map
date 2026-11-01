@@ -1,13 +1,14 @@
 package cn.net.rms.confluxmap.server;
 
 /**
- * Detects whether server-only features have a remote audience without linking the client-only
- * IntegratedServer class on dedicated servers. IntegratedServer uses -1 until published to LAN.
+ * Detects whether the companion server endpoint should activate.
+ * Dedicated servers and singleplayer integrated worlds activate when configured.
  */
 final class CompanionActivationPolicy {
     private CompanionActivationPolicy() {
     }
 
+    @SuppressWarnings("unused")
     static boolean shouldActivate(
         final boolean configured,
         final boolean dedicated,
