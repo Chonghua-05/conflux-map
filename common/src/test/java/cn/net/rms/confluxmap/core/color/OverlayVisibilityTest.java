@@ -21,9 +21,8 @@ class OverlayVisibilityTest {
     @Test
     void nameRuleClassifiesMarkersBySuffix() {
         for (final String id : new String[] {
-            "minecraft:torch", "minecraft:soul_torch", "minecraft:redstone_torch",
-            "minecraft:glass", "minecraft:tinted_glass", "minecraft:white_stained_glass",
-            "minecraft:glass_pane", "minecraft:white_stained_glass_pane"
+            "minecraft:torch", "minecraft:wall_torch", "minecraft:soul_torch",
+            "minecraft:redstone_torch"
         }) {
             assertEquals(OverlayVisibility.Category.MARKER, OverlayVisibility.categorize(id), id);
         }
@@ -33,9 +32,12 @@ class OverlayVisibilityTest {
     void nameRuleLeavesPlantsAndEverythingElseUnclassified() {
         // Vegetation is deliberately OTHER here: surface summaries must keep reporting it,
         // and only the client composes floor layers, where block instances classify plants.
+        // Glass is OTHER since the real Xaero mod measurably draws it even in its own style.
         for (final String id : new String[] {
             "minecraft:poppy", "minecraft:brown_mushroom", "minecraft:oak_sapling",
-            "minecraft:rail", "minecraft:snow", "minecraft:moss_carpet", "", null
+            "minecraft:rail", "minecraft:snow", "minecraft:moss_carpet",
+            "minecraft:glass", "minecraft:tinted_glass", "minecraft:white_stained_glass",
+            "minecraft:glass_pane", "minecraft:white_stained_glass_pane", "", null
         }) {
             assertEquals(OverlayVisibility.Category.OTHER, OverlayVisibility.categorize(id), String.valueOf(id));
         }
