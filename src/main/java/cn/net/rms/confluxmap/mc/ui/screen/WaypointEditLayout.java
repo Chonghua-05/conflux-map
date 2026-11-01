@@ -22,8 +22,13 @@ final class WaypointEditLayout {
     static final int FIELD_HEIGHT = 20;
     static final int SWATCH_SIZE = 20;
     static final int SWATCH_GAP = 6;
-    /** Width of the centered form column: name field, set/group cycler, coordinate triple. */
-    static final int FORM_WIDTH = 200;
+    /**
+     * Width of the centered form column. Every row spans exactly this width - the name field,
+     * the set/group cycler, the coordinate triple, the swatch grid, the options row, the marker
+     * row, and both footer layouts - so the form reads as one column. The value is pinned by
+     * {@code everyRowSpansTheSameFormWidth}; change it there too, or the test fails.
+     */
+    static final int FORM_WIDTH = 228;
 
     static final int TITLE_Y = 8;
     /** First caption top: keeps the same clearance below the title as the title has to the edge. */
@@ -32,6 +37,12 @@ final class WaypointEditLayout {
     /** Footer buttons sit at {@code height - 32} and are FIELD_HEIGHT tall. */
     static final int FOOTER_MARGIN = 32;
     static final int FOOTER_CLEARANCE = 8;
+    /** Editing footer: delete / done / cancel (72*3 + 6*2 = FORM_WIDTH). */
+    static final int FOOTER_EDIT_WIDTH = 72;
+    static final int FOOTER_GAP = 6;
+    /** Creating footer: done / cancel, split by a centered 8px gap (110*2 + 8 = FORM_WIDTH). */
+    static final int FOOTER_CREATE_WIDTH = 110;
+    static final int FOOTER_CREATE_GAP = 8;
 
     /** Room reserved between the form and the footer for the validation error line. */
     static final int STATUS_GAP = 2;
@@ -42,8 +53,20 @@ final class WaypointEditLayout {
     static final int MIN_ROW_GAP = 1;
     static final int MAX_ROW_GAP = 12;
 
+    /** Coordinate triple: 72*3 + 6*2 = FORM_WIDTH. */
+    static final int COORD_WIDTH = 72;
+    static final int COORD_GAP = 6;
+
+    /** Marker row: mode cycler on the left half, label field or icon pair on the right. */
+    static final int MARKER_MODE_WIDTH = 94;
+    static final int MARKER_GAP = 4;
+    static final int MARKER_CONTROL_WIDTH = 130;
+    static final int MARKER_ICON_WIDTH = 94;
+    static final int MARKER_CLEAR_WIDTH = 32;
+
     static final int CUSTOM_COLOR_WIDTH = 68;
-    static final int CROSS_DIMENSION_WIDTH = 100;
+    /** Wide enough for "Cross-Dim: On/Off" plus button padding; the long form truncated. */
+    static final int CROSS_DIMENSION_WIDTH = 108;
     static final int CROSS_DIMENSION_Y_WIDTH = 40;
     static final int OPTION_GAP = 6;
 

@@ -401,8 +401,8 @@ public final class WaypointEditScreen extends ConfluxScreen {
             setInitialFocus(nameField);
         }
 
-        final int coordWidth = 62;
-        final int coordGap = 7;
+        final int coordWidth = WaypointEditLayout.COORD_WIDTH;
+        final int coordGap = WaypointEditLayout.COORD_GAP;
         final int coordsLeft = centerX - (coordWidth * 3 + coordGap * 2) / 2;
         xField = numericField(coordsLeft, rows.coordsY(), coordWidth, draftX);
         yField = numericField(coordsLeft + coordWidth + coordGap, rows.coordsY(), coordWidth, draftY);
@@ -496,12 +496,12 @@ public final class WaypointEditScreen extends ConfluxScreen {
                 CROSS_DIMENSION_Y_WIDTH,
                 draftCrossDimensionY
             );
-            crossDimensionYField.visible = crossDimensionVisible;
             addDrawableChild(crossDimensionYField);
             setHoverTooltip(
                 crossDimensionYField,
                 "confluxmap.screen.waypoint.cross_dimension_y"
             );
+            updateCrossDimensionYVisibility();
         } else {
             crossDimensionYField = null;
         }
@@ -509,9 +509,9 @@ public final class WaypointEditScreen extends ConfluxScreen {
         final boolean markerStyleSupported = createTarget == CreateTarget.LOCAL
             || createTarget == CreateTarget.PUBLIC && sharedWaypoints.supportsMarkerStyle();
         markerModeButton = addDrawableChild(Widgets.button(
-            centerX - 100,
+            centerX - WaypointEditLayout.FORM_WIDTH / 2,
             rows.markerY(),
-            80,
+            WaypointEditLayout.MARKER_MODE_WIDTH,
             FIELD_HEIGHT,
             markerModeLabel(),
             ignored -> selectNextMarkerMode()
@@ -520,9 +520,10 @@ public final class WaypointEditScreen extends ConfluxScreen {
         markerModeButton.visible = fullForm;
         markerLabelField = new TextFieldWidget(
             this.textRenderer,
-            centerX - 16,
+            centerX + WaypointEditLayout.MARKER_MODE_WIDTH + WaypointEditLayout.MARKER_GAP
+                - WaypointEditLayout.FORM_WIDTH / 2,
             rows.markerY(),
-            116,
+            WaypointEditLayout.MARKER_CONTROL_WIDTH,
             FIELD_HEIGHT,
             Texts.translatable("confluxmap.screen.waypoint.marker_label")
         );
@@ -538,17 +539,20 @@ public final class WaypointEditScreen extends ConfluxScreen {
         });
         addDrawableChild(markerLabelField);
         iconButton = addDrawableChild(Widgets.button(
-            centerX - 16,
+            centerX + WaypointEditLayout.MARKER_MODE_WIDTH + WaypointEditLayout.MARKER_GAP
+                - WaypointEditLayout.FORM_WIDTH / 2,
             rows.markerY(),
-            78,
+            WaypointEditLayout.MARKER_ICON_WIDTH,
             FIELD_HEIGHT,
             iconButtonMessage(),
             ignored -> openIconPicker()
         ));
         clearIconButton = addDrawableChild(Widgets.button(
-            centerX + 66,
+            centerX + WaypointEditLayout.MARKER_MODE_WIDTH + WaypointEditLayout.MARKER_GAP
+                - WaypointEditLayout.FORM_WIDTH / 2 + WaypointEditLayout.MARKER_ICON_WIDTH
+                + WaypointEditLayout.MARKER_GAP,
             rows.markerY(),
-            34,
+            WaypointEditLayout.MARKER_CLEAR_WIDTH,
             FIELD_HEIGHT,
             Texts.translatable("confluxmap.screen.waypoint.icon_clear"),
             button -> {
@@ -566,8 +570,13 @@ public final class WaypointEditScreen extends ConfluxScreen {
 
         final int footerY = WaypointEditLayout.footerY(height);
         final boolean editing = editingId != null;
-        final int footerLeft = centerX - (editing ? 100 : 104);
-        final int footerButtonWidth = editing ? 64 : 100;
+        final int footerLeft = centerX - WaypointEditLayout.FORM_WIDTH / 2;
+        final int footerButtonWidth = editing
+            ? WaypointEditLayout.FOOTER_EDIT_WIDTH
+            : WaypointEditLayout.FOOTER_CREATE_WIDTH;
+        final int footerGap = editing
+            ? WaypointEditLayout.FOOTER_GAP
+            : WaypointEditLayout.FOOTER_CREATE_GAP;
         if (editing) {
             deleteButton = addDrawableChild(Widgets.button(
                 footerLeft,
@@ -581,7 +590,7 @@ public final class WaypointEditScreen extends ConfluxScreen {
         } else {
             deleteButton = null;
         }
-        final int doneX = editing ? footerLeft + footerButtonWidth + 4 : centerX - 104;
+        final int doneX = editing ? footerLeft + footerButtonWidth + footerGap : footerLeft;
         doneButton = addDrawableChild(Widgets.button(
             doneX, footerY, footerButtonWidth, FIELD_HEIGHT,
             Texts.translatable("confluxmap.screen.waypoint.done"), b -> onDone()
@@ -593,7 +602,7 @@ public final class WaypointEditScreen extends ConfluxScreen {
         } else if (createTarget == CreateTarget.PUBLIC) {
             updatePublicDoneButton();
         }
-        final int cancelX = editing ? doneX + footerButtonWidth + 4 : centerX + 4;
+        final int cancelX = doneX + footerButtonWidth + footerGap;
         addDrawableChild(Widgets.button(
             cancelX, footerY, footerButtonWidth, FIELD_HEIGHT,
             Texts.translatable("confluxmap.screen.waypoint.cancel"), b -> onCancel()
@@ -856,7 +865,11 @@ public final class WaypointEditScreen extends ConfluxScreen {
 
     private void updateCrossDimensionYVisibility() {
         if (crossDimensionYField != null) {
-            crossDimensionYField.visible = crossDimensionVisible;
+            // The field keeps its slot so the options row stays symmetric when the toggle is
+            // off; it just stops being editable. active alone does not stop older
+            // TextFieldWidget input handling - setEditable does (see IntSliderInput.setActive).
+            crossDimensionYField.active = crossDimensionVisible;
+            crossDimensionYField.setEditable(crossDimensionVisible);
         }
     }
 

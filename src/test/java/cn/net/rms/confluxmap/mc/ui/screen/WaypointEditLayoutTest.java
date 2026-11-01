@@ -109,7 +109,7 @@ final class WaypointEditLayoutTest {
     void centeredRowsStayInsideThe320pxMinimumWidth() {
         final int centerX = 160;
         assertEquals(228, WaypointEditLayout.swatchRowWidth(8));
-        assertEquals(220, WaypointEditLayout.optionsRowWidth(true));
+        assertEquals(228, WaypointEditLayout.optionsRowWidth(true));
         assertEquals(68, WaypointEditLayout.optionsRowWidth(false));
         final int[] rowWidths = {
             WaypointEditLayout.FORM_WIDTH,
@@ -122,6 +122,24 @@ final class WaypointEditLayoutTest {
             assertTrue(left > centerX - 160, "row leaves the left edge: " + rowWidth);
             assertTrue(left + rowWidth < centerX + 160, "row leaves the right edge: " + rowWidth);
         }
+    }
+
+    @Test
+    void everyRowSpansTheSameFormWidth() {
+        final int w = WaypointEditLayout.FORM_WIDTH;
+        assertEquals(w, WaypointEditLayout.COORD_WIDTH * 3 + WaypointEditLayout.COORD_GAP * 2,
+            "coordinate triple");
+        assertEquals(w, WaypointEditLayout.swatchRowWidth(8), "swatch grid");
+        assertEquals(w, WaypointEditLayout.optionsRowWidth(true), "options row");
+        assertEquals(w, WaypointEditLayout.MARKER_MODE_WIDTH + WaypointEditLayout.MARKER_GAP
+                + WaypointEditLayout.MARKER_CONTROL_WIDTH, "marker row");
+        assertEquals(WaypointEditLayout.MARKER_CONTROL_WIDTH,
+            WaypointEditLayout.MARKER_ICON_WIDTH + WaypointEditLayout.MARKER_GAP
+                + WaypointEditLayout.MARKER_CLEAR_WIDTH, "marker icon pair fills the control slot");
+        assertEquals(w, WaypointEditLayout.FOOTER_EDIT_WIDTH * 3 + WaypointEditLayout.FOOTER_GAP * 2,
+            "editing footer");
+        assertEquals(w, WaypointEditLayout.FOOTER_CREATE_WIDTH * 2 + WaypointEditLayout.FOOTER_CREATE_GAP,
+            "creating footer");
     }
 
     @Test
