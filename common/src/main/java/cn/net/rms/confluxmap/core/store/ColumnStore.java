@@ -66,6 +66,17 @@ public final class ColumnStore {
         return region != null && region.chunkSource(chunkX & 15, chunkZ & 15).isExplored();
     }
 
+    /**
+     * The provenance of this chunk's in-memory map data, or {@link SampleSource#UNKNOWN} when
+     * nothing is stored. Callers that must distinguish "captured" from merely "observed" - such
+     * as re-importable external sources - compare the priority directly instead of using
+     * {@link #hasRealChunk}, which also covers imported data.
+     */
+    public SampleSource chunkSource(final int chunkX, final int chunkZ) {
+        final RegionColumns region = region(chunkX >> 4, chunkZ >> 4);
+        return region == null ? SampleSource.UNKNOWN : region.chunkSource(chunkX & 15, chunkZ & 15);
+    }
+
     /** Comparable Minecraft world revision, or {@link Long#MIN_VALUE} for legacy cached chunks. */
     public long realChunkSourceRevision(final int chunkX, final int chunkZ) {
         final RegionColumns region = region(chunkX >> 4, chunkZ >> 4);

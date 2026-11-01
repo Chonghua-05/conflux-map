@@ -95,7 +95,7 @@ public final class SingleplayerMcaRenderService {
     /** Session-cumulative progress counters, surfaced in throttled INFO logs. */
     private final AtomicInteger filesDone = new AtomicInteger();
     private final AtomicInteger chunksImported = new AtomicInteger();
-    private final AtomicInteger chunksExploredSkip = new AtomicInteger();
+    private final AtomicInteger chunksRealSkip = new AtomicInteger();
     private final AtomicInteger chunksNotGenerated = new AtomicInteger();
     private final AtomicInteger chunksFailed = new AtomicInteger();
     private final AtomicInteger filesFailed = new AtomicInteger();
@@ -194,8 +194,8 @@ public final class SingleplayerMcaRenderService {
         if (filesDone.get() > 0) {
             ConfluxMapMod.LOGGER.info(
                 "[confluxmap] MCA render session summary: {} files done ({} chunks imported, "
-                    + "{} explored-skip, {} not-generated stubs, {} chunk failures, {} file failures)",
-                filesDone.get(), chunksImported.get(), chunksExploredSkip.get(),
+                    + "{} real-skip, {} not-generated stubs, {} chunk failures, {} file failures)",
+                filesDone.get(), chunksImported.get(), chunksRealSkip.get(),
                 chunksNotGenerated.get(), chunksFailed.get(), filesFailed.get());
         }
         synchronized (queueLock) {
@@ -332,11 +332,15 @@ public final class SingleplayerMcaRenderService {
                         chunksNotGenerated.incrementAndGet();
                         return;
                     }
-                    // Captured/cached data is strictly better than the file's snapshot; the
-                    // store gate would reject it anyway, this just skips the sampling work.
-                    if (store.hasRealChunk(chunkX, chunkZ)) {
+                    // Captured data is strictly better than the file's snapshot; the store gate
+                    // would reject it anyway, this just skips the sampling work. Imported chunks
+                    // deliberately fall through: they must be re-imported so conversion fixes
+                    // reach data cached by an older converter - stale tintless or gray rows from
+                    // previous versions would otherwise outlive the fix.
+                    if (store.chunkSource(chunkX, chunkZ).priority()
+                        >= SampleSource.REAL_CACHED.priority()) {
                         exploredSkip[0]++;
-                        chunksExploredSkip.incrementAndGet();
+                        chunksRealSkip.incrementAndGet();
                         return;
                     }
                     final ChunkSnapshot snapshot = factory.snapshotSurfaceFromColumn(
@@ -362,14 +366,14 @@ public final class SingleplayerMcaRenderService {
             });
             filesDone.incrementAndGet();
             ConfluxMapMod.LOGGER.debug(
-                "MCA import r.{}.{}.mca: {} chunks imported, {} explored-skip, {} not-generated",
+                "MCA import r.{}.{}.mca: {} chunks imported, {} real-skip, {} not-generated",
                 task.mcaX(), task.mcaZ(), imported[0], exploredSkip[0], notGenerated[0]);
             if (filesDone.get() % LOG_FILE_INTERVAL == 0) {
                 ConfluxMapMod.LOGGER.info(
                     "[confluxmap] MCA render progress: {} files done ({} chunks imported, "
-                        + "{} explored-skip, {} not-generated stubs, {} chunk failures), "
+                        + "{} real-skip, {} not-generated stubs, {} chunk failures), "
                         + "{} files queued",
-                    filesDone.get(), chunksImported.get(), chunksExploredSkip.get(),
+                    filesDone.get(), chunksImported.get(), chunksRealSkip.get(),
                     chunksNotGenerated.get(), chunksFailed.get(), pendingSize());
             }
             for (final Map.Entry<Long, List<ChunkSnapshot>> entry : byRegion.entrySet()) {
