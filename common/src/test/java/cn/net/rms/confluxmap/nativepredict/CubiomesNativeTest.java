@@ -167,19 +167,28 @@ class CubiomesNativeTest {
     }
 
     @Test
-    void scaleOneStridedBiomeRowsMatchDenseTileAtReportedStripeCoordinate() {
+    void scaleOneStridedBiomeRowsMatchIsolatedQueriesAtReportedStripeCoordinate() {
         final int w = 3;
         final int h = 3;
         try (CubiomesContext ctx = CubiomesContext.create(mc17(), 6512112982729996127L, OVERWORLD, 0)) {
             assertNotNull(ctx);
-            final int[] dense = new int[w * h];
             final int[] first = new int[w * h];
             final int[] second = new int[w * h];
-            assertEquals(0, ctx.biomes(1, -830, -438, w, h, dense));
             assertEquals(0, ctx.biomesStrided(1, -830, -438, w, h, 1, first));
             assertEquals(0, ctx.biomesStrided(1, -830, -438, w, h, 1, second));
             assertArrayEquals(first, second, "the row-wise result must be deterministic across calls");
-            assertArrayEquals(dense, first, "stride-one sampling must be identical to one dense scale-one query");
+            // The dense batch entry keeps cubiomes' raw query geometry, whose Voronoi
+            // final layer corrupts boundary cells at this 2/3-mod-4 origin; isolated
+            // single-column queries are the shape-independent reference the strided
+            // sampler must reproduce (see PredictionNativeBatchEdgeParityTest).
+            final int[] single = new int[1];
+            for (int z = 0; z < h; z++) {
+                for (int x = 0; x < w; x++) {
+                    assertEquals(0, ctx.biomes(1, -830 + x, -438 + z, 1, 1, single));
+                    assertEquals(single[0], first[z * w + x],
+                        "strided cell (" + x + "," + z + ") must match the isolated query");
+                }
+            }
         }
     }
 

@@ -109,12 +109,22 @@ static int cfxGenerateBiomesStrided(
 
     if (scale == 1)
     {
-        /* The final Voronoi layer is not query-shape invariant for one-row
-         * rectangles, so scale-one sampling must retain the full 2D source. */
-        if (rawWidth64 * rawHeight64 > CFX_MAX_CELLS)
+        /* The final Voronoi layer is not query-shape invariant, so scale-one
+         * sampling must retain the full 2D source. cubiomes derives the
+         * Voronoi source plane with a "-2 then floor" origin, which for
+         * origins at 2 or 3 mod 4 omits the west/north neighbour cells, so
+         * patches of boundary cells resolve to the wrong biome (ocean seams
+         * on 1.17 tile edges). Query a two-cell margin and read only the
+         * interior so every sampled cell matches an isolated single-column
+         * query. */
+        const int margin = 8;
+        const int64_t denseWidth64 = rawWidth64 + 2*margin;
+        const int64_t denseHeight64 = rawHeight64 + 2*margin;
+        if (denseWidth64 * denseHeight64 > CFX_MAX_CELLS)
             return CFX_ERR_BAD_SIZE;
-        const int rawHeight = (int) rawHeight64;
-        const Range r = { scale, x, z, rawWidth, rawHeight, 0, 1 };
+        const int denseWidth = (int) denseWidth64;
+        const int denseHeight = (int) denseHeight64;
+        const Range r = { scale, x - margin, z - margin, denseWidth, denseHeight, 0, 1 };
         int *dense = allocCache(&ctx->g, r);
         if (dense == NULL)
             return CFX_ERR_ALLOC;
@@ -127,7 +137,8 @@ static int cfxGenerateBiomesStrided(
         int j, i;
         for (j = 0; j < h; j++)
             for (i = 0; i < w; i++)
-                sampled[j*w+i] = dense[(j*stride)*rawWidth + i*stride];
+                sampled[j*w+i] =
+                    dense[(j*stride + margin)*denseWidth + (i*stride + margin)];
         free(dense);
         return CFX_OK;
     }

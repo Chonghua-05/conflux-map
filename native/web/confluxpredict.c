@@ -414,10 +414,20 @@ static int cfxWebGenerateBiomesStrided(
 
     if (scale == 1)
     {
-        if (rawWidth64 * rawHeight64 > (1 << 20))
+        /* The final Voronoi layer is not query-shape invariant: cubiomes derives
+         * the Voronoi source plane with a "-2 then floor" origin, which for
+         * origins at 2 or 3 mod 4 omits the west/north neighbour cells, so cells
+         * near a query boundary can resolve to the wrong biome in patches. Query
+         * a two-cell margin on every side and read only the interior (mirrors
+         * the JNI shim's cfxGenerateBiomesStrided). */
+        const int margin = 8;
+        const int64_t denseWidth64 = rawWidth64 + 2*margin;
+        const int64_t denseHeight64 = rawHeight64 + 2*margin;
+        if (denseWidth64 * denseHeight64 > (1 << 20))
             return CFX_WEB_BAD_ARGS;
-        const int rawHeight = (int) rawHeight64;
-        Range range = {scale, x, z, rawWidth, rawHeight, 0, 1};
+        const int denseWidth = (int) denseWidth64;
+        const int denseHeight = (int) denseHeight64;
+        Range range = {scale, x - margin, z - margin, denseWidth, denseHeight, 0, 1};
         int *dense = allocCache(&generator, range);
         if (dense == NULL)
             return CFX_WEB_ALLOC;
@@ -432,7 +442,8 @@ static int cfxWebGenerateBiomesStrided(
         int j, i;
         for (j = 0; j < h; j++)
             for (i = 0; i < w; i++)
-                sampled[j*w+i] = dense[(j*stride)*rawWidth + i*stride];
+                sampled[j*w+i] =
+                    dense[(j*stride + margin)*denseWidth + (i*stride + margin)];
         free(dense);
         return CFX_WEB_OK;
     }
