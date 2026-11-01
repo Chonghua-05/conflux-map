@@ -448,7 +448,19 @@ public final class McChunkSnapshotFactory {
                 waterColor = Argb.over(coloredLayer(transparentOverlay, transparentOverlayY, worldX, worldZ, pos, world), waterColor);
             }
             baseArgb[index] = waterColor;
-            xaeroBaseArgb[index] = Argb.multiply(xaeroSurfaceBaseColor, surfaceTintColor);
+            // Mirror the composition above, gated by the same Xaero marker rule as the land
+            // branch: measured against the real Xaero mod, it draws a transparent cover (glass)
+            // on water both flush and with an air gap above, but the transparent slot carries
+            // the top-most crossed block - a torch standing on a glass bridge over water must
+            // stay hidden exactly like a torch over land.
+            int xaeroWaterColor = Argb.multiply(xaeroSurfaceBaseColor, surfaceTintColor);
+            if (transparentOverlay != null && !isXaeroInvisible(transparentOverlay)) {
+                xaeroWaterColor = Argb.over(
+                    xaeroColoredLayer(transparentOverlay, transparentOverlayY, worldX, worldZ, pos, world),
+                    xaeroWaterColor
+                );
+            }
+            xaeroBaseArgb[index] = xaeroWaterColor;
             tintArgb[index] = 0xFFFFFFFF;
 
             int floorComposite = Argb.TRANSPARENT;
@@ -545,8 +557,8 @@ public final class McChunkSnapshotFactory {
     /**
      * Whether the Xaero-styled arrays must drop this decoration: the shared
      * {@link OverlayVisibility} policy in Xaero style, mirroring Xaero's own scan exclusions
-     * (the torch/glass marker family and bulk foliage vanish so that style shows the surface
-     * beneath them).
+     * (the torch marker family and bulk foliage vanish so that style shows the surface
+     * beneath them; glass is drawn, as measured against the real mod).
      */
     private static boolean isXaeroInvisible(final BlockState state) {
         return !OverlayVisibility.overlayVisible(categorizeOverlay(state), false, true);

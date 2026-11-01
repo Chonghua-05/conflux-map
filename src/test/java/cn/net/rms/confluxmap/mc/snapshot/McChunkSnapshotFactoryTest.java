@@ -20,7 +20,7 @@ import org.junit.jupiter.api.Test;
 class McChunkSnapshotFactoryTest {
     /**
      * Blocks whose registry name the shared name rule classifies (contains grass/fern, or the
-     * torch/glass suffixes) but whose block instance legitimately lands elsewhere. Each entry
+     * torch suffix) but whose block instance legitimately lands elsewhere. Each entry
      * documents why the block can never reach an overlay slot, so the sweep still fails when a
      * NEW name/instance disagreement appears.
      */
@@ -78,7 +78,7 @@ class McChunkSnapshotFactoryTest {
         assertEquals(OverlayVisibility.Category.VEGETATION, categorize(Blocks.BIG_DRIPLEAF));
         assertEquals(OverlayVisibility.Category.MARKER, categorize(Blocks.TORCH));
         assertEquals(OverlayVisibility.Category.MARKER, categorize(Blocks.SOUL_TORCH));
-        assertEquals(OverlayVisibility.Category.MARKER, categorize(Blocks.GLASS));
+        assertEquals(OverlayVisibility.Category.OTHER, categorize(Blocks.GLASS));
         assertEquals(OverlayVisibility.Category.OTHER, categorize(Blocks.RAIL));
         assertEquals(OverlayVisibility.Category.OTHER, categorize(Blocks.SNOW));
         assertEquals(OverlayVisibility.Category.OTHER, categorize(Blocks.MOSS_CARPET));

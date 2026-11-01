@@ -16,10 +16,12 @@ package cn.net.rms.confluxmap.core.color;
  *   <li>{@link Category#VEGETATION} - flowers, mushrooms, saplings, vines, and other small
  *       plants. Rendered on top-down surface layers; hidden on floor-scan (cave/nether)
  *       layers, where vegetation dots on a uniform stone floor read as noise.</li>
- *   <li>{@link Category#MARKER} - the torch/glass family. Rendered like any other decoration,
+ *   <li>{@link Category#MARKER} - the torch family. Rendered like any other decoration,
  *       except in the Xaero style, which mirrors Xaero's own scan by hiding them.</li>
- *   <li>{@link Category#OTHER} - everything else (rails, snow layers, carpets, ...): always
- *       rendered.</li>
+ *   <li>{@link Category#OTHER} - everything else (rails, snow layers, carpets, the glass
+ *       family, ...): always rendered. Glass used to sit in MARKER until measuring the real
+ *       Xaero mod showed it draws glass in its own style (issue #130) - only torches vanish
+ *       from its scan.</li>
  * </ul>
  *
  * <p>Classification has two representations that must stay in agreement. The name-based
@@ -34,8 +36,8 @@ public final class OverlayVisibility {
     /** Substrings identifying the bulk-foliage family in material ids. */
     public static final String[] BULK_FOLIAGE_SUBSTRINGS = {"grass", "fern"};
 
-    /** Suffixes identifying the torch/glass marker family in material ids. */
-    public static final String[] MARKER_SUFFIXES = {"torch", "glass", "glass_pane"};
+    /** Suffixes identifying the torch marker family in material ids. */
+    public static final String[] MARKER_SUFFIXES = {"torch"};
 
     public enum Category {
         BULK_FOLIAGE,

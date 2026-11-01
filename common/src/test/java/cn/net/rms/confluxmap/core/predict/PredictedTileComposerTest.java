@@ -317,11 +317,12 @@ class PredictedTileComposerTest {
     }
 
     @Test
-    void xaeroStyleHidesGlassOverlaysButKeepsDecorations() {
+    void xaeroStyleHidesTorchOverlaysButKeepsGlassAndDecorations() {
         final BaselineGrid grid = flatGrid(1);
         final DerivedGrid derived = flatDerived(ShadingPipeline.REFERENCE_HEIGHT);
         final int glassPixel = 10 * 256 + 10;
         final int rosePixel = 20 * 256 + 20;
+        final int torchPixel = 30 * 256 + 30;
         final CorrectionTile corrections = new CorrectionTile();
         corrections.applyPatch(
             1L,
@@ -334,6 +335,10 @@ class PredictedTileComposerTest {
                 new PatchCodec.Sample(
                     rosePixel, 1, ShadingPipeline.REFERENCE_HEIGHT, SurfaceKind.LAND.ordinal(),
                     4, 0, 255, "minecraft:glowstone", "", "minecraft:wither_rose"
+                ),
+                new PatchCodec.Sample(
+                    torchPixel, 1, ShadingPipeline.REFERENCE_HEIGHT, SurfaceKind.LAND.ordinal(),
+                    4, 0, 255, "minecraft:glowstone", "", "minecraft:torch"
                 )
             )),
             Proto.PATCH_MODE_ABSOLUTE,
@@ -365,6 +370,14 @@ class PredictedTileComposerTest {
             0xFFFFFFFF,
             3
         ));
+        final int sampledTorch = 0xFFC8A030;
+        materials.put("minecraft:torch", new SyncedMaterialPalette.Sample(
+            sampledTorch,
+            MaterialDetailProfile.flat(),
+            SyncedMaterialPalette.Tint.NONE,
+            0xFFFFFFFF,
+            4
+        ));
 
         final int[] composed = PredictedTileComposer.compose(
             derived, grid, PredictionPalette.defaults(), corrections,
@@ -387,6 +400,10 @@ class PredictedTileComposerTest {
                 new PatchCodec.Sample(
                     rosePixel, 1, ShadingPipeline.REFERENCE_HEIGHT, SurfaceKind.LAND.ordinal(),
                     4, 0, 255, "minecraft:glowstone", ""
+                ),
+                new PatchCodec.Sample(
+                    torchPixel, 1, ShadingPipeline.REFERENCE_HEIGHT, SurfaceKind.LAND.ordinal(),
+                    4, 0, 255, "minecraft:glowstone", ""
                 )
             )),
             Proto.PATCH_MODE_ABSOLUTE,
@@ -400,8 +417,90 @@ class PredictedTileComposerTest {
             MapColorStyle.XAERO, XaeroMapStyle.Shadow.OVERWORLD
         );
 
-        assertEquals(bare[glassPixel], composed[glassPixel]);
+        // Measured against the real Xaero mod: glass is drawn even in its style (issue #130),
+        // flowers draw, and only the torch family stays hidden.
+        assertNotEquals(bare[glassPixel], composed[glassPixel]);
         assertNotEquals(bare[rosePixel], composed[rosePixel]);
+        assertEquals(bare[torchPixel], composed[torchPixel]);
+    }
+
+    @Test
+    void xaeroStyleWaterColumnsComposeGlassButHideTorchOverlays() {
+        final BaselineGrid grid = new BaselineGrid();
+        final DerivedGrid derived = new DerivedGrid();
+        Arrays.fill(grid.biomeId, 0);
+        Arrays.fill(derived.kind, (byte) SurfaceKind.WATER.ordinal());
+        Arrays.fill(derived.surfaceY, BaselineDeriver.WATER_LEVEL);
+        Arrays.fill(derived.fluidDepth, 10);
+        final int waterPixel = 40 * 256 + 20;
+        // A torch standing on a glass bridge over water is the one marker shape the water
+        // branch must still hide: the overlay slot carries the top-most crossed block.
+        final int torchWaterPixel = 40 * 256 + 60;
+        final CorrectionTile corrections = new CorrectionTile();
+        corrections.applyPatch(
+            1L,
+            new byte[Proto.PATCH_PRESENCE_BYTES],
+            new PatchCodec.Patch(java.util.List.of(
+                new PatchCodec.Sample(
+                    waterPixel, 0, BaselineDeriver.WATER_LEVEL, SurfaceKind.WATER.ordinal(),
+                    4, 10, 255, "minecraft:water", "", "minecraft:white_stained_glass"
+                ),
+                new PatchCodec.Sample(
+                    torchWaterPixel, 0, BaselineDeriver.WATER_LEVEL, SurfaceKind.WATER.ordinal(),
+                    4, 10, 255, "minecraft:water", "", "minecraft:torch"
+                )
+            )),
+            Proto.PATCH_MODE_ABSOLUTE,
+            "",
+            1_000L
+        );
+        final SyncedMaterialPalette materials = new SyncedMaterialPalette();
+        final int sampledGlass = 0xAAE6E9EC;
+        materials.put("minecraft:white_stained_glass", new SyncedMaterialPalette.Sample(
+            sampledGlass,
+            MaterialDetailProfile.flat(),
+            SyncedMaterialPalette.Tint.NONE,
+            0xFFFFFFFF,
+            2
+        ));
+
+        final int[] composed = PredictedTileComposer.compose(
+            derived, grid, PredictionPalette.defaults(), corrections,
+            PredictionViewMode.EVERYWHERE, 0, Proto.MAP_COLOR_NONE,
+            derived, grid, Proto.MAP_COLOR_NONE, true, 0xFFFFFFFF, materials,
+            MapColorStyle.XAERO, XaeroMapStyle.Shadow.OVERWORLD
+        );
+
+        // The control: the same water column with the overlay material cleared.
+        final CorrectionTile withoutOverlay = new CorrectionTile();
+        withoutOverlay.applyPatch(
+            1L,
+            new byte[Proto.PATCH_PRESENCE_BYTES],
+            new PatchCodec.Patch(java.util.List.of(
+                new PatchCodec.Sample(
+                    waterPixel, 0, BaselineDeriver.WATER_LEVEL, SurfaceKind.WATER.ordinal(),
+                    4, 10, 255, "minecraft:water", ""
+                )
+            )),
+            Proto.PATCH_MODE_ABSOLUTE,
+            "",
+            1_000L
+        );
+        final int[] bare = PredictedTileComposer.compose(
+            derived, grid, PredictionPalette.defaults(), withoutOverlay,
+            PredictionViewMode.EVERYWHERE, 0, Proto.MAP_COLOR_NONE,
+            derived, grid, Proto.MAP_COLOR_NONE, true, 0xFFFFFFFF, materials,
+            MapColorStyle.XAERO, XaeroMapStyle.Shadow.OVERWORLD
+        );
+
+        assertNotEquals(
+            bare[waterPixel], composed[waterPixel],
+            "xaero-style water must compose the glass cover over the water surface"
+        );
+        assertEquals(
+            bare[torchWaterPixel], composed[torchWaterPixel],
+            "xaero-style water must keep hiding the torch marker family"
+        );
     }
 
     @Test

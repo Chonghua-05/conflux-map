@@ -95,7 +95,8 @@ through them; they only appear at all if they end up as the top or bottom of
 the transparent stack per the rule above. Whether a captured overlay actually
 draws is decided by the shared decoration-visibility policy (`OverlayVisibility`
 in common — one table for every rendering path): bulk foliage never draws in
-any style, and the torch/glass marker family is hidden only in the Xaero style.
+any style, glass draws in every style (the real Xaero mod draws it too), and
+only the torch marker family is hidden in the Xaero style.
 
 **Seafloor scan (water/ice columns only):** triggered specifically when the
 resolved surface block is water or ice. Starting one block below that
@@ -473,6 +474,14 @@ below the surface height). Each of those layers already carries its own
 independently-computed biome tint, height/slope shading, and light
 multiplier *before* this final composite — the composite step itself
 performs no additional depth-aware math.
+
+The Xaero-styled arrays mirror this composition exactly: a transparent
+overlay above the water surface (glass flush on the water, or floating with
+an air gap) is composited over the Xaero-sampled water color, because the
+real Xaero mod draws such covers too (measured: flush and air-gap glass
+render identically there). The one gate is the shared Xaero marker rule: the
+transparent slot carries the top-most crossed block, and a torch standing on
+a glass bridge over water hides exactly like a torch over land.
 
 Because of that: the water layer's own alpha — how much of the seafloor
 composite shows through — comes entirely from whatever alpha its sampled

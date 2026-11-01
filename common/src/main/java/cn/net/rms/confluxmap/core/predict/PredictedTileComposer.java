@@ -486,6 +486,12 @@ public final class PredictedTileComposer {
                 slopeSampleHeight(floorSurface, kinds, x - 1, z - 1),
                 blocksPerPixel, true, shadow
             );
+            // Xaero draws a transparent cover (glass) on water in its own style - measured
+            // against the real mod, flush and air-gap covers render identically - so water
+            // columns compose the overlay too, mirroring the capture decision in
+            // McChunkSnapshotFactory's water branch. The overlay slot still carries the
+            // top-most crossed block, which can be a torch standing on a glass bridge, so the
+            // same marker-hiding rule as the land branch below applies.
             final int waterTop = xaeroHidesOverlay(overlayMaterialId)
                 ? water
                 : applyOverlay(
@@ -548,7 +554,7 @@ public final class PredictedTileComposer {
         );
     }
 
-    /** The shared {@link OverlayVisibility} policy in Xaero style: the torch/glass marker
+    /** The shared {@link OverlayVisibility} policy in Xaero style: the torch marker
      *  family vanishes from the Xaero-style overlay, so that style shows the surface beneath
      *  them, matching the client snapshot's own Xaero arrays. */
     private static boolean xaeroHidesOverlay(final String overlayMaterialId) {
