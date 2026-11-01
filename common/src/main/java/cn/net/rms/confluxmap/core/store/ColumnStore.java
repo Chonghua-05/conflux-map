@@ -79,6 +79,11 @@ public final class ColumnStore {
         return region.chunkSourceRevision(chunkX & 15, chunkZ & 15);
     }
 
+    public SampleSource chunkSource(final int chunkX, final int chunkZ) {
+        final RegionColumns region = region(chunkX >> 4, chunkZ >> 4);
+        return region == null ? SampleSource.UNKNOWN : region.chunkSource(chunkX & 15, chunkZ & 15);
+    }
+
     /** Highest sampled surface block at one world column, or empty when that column is unknown. */
     public OptionalInt surfaceYAt(final int blockX, final int blockZ) {
         return surfaceAt(blockX, blockZ).surfaceY();

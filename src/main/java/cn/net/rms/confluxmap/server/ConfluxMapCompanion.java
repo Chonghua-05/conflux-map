@@ -415,7 +415,10 @@ public final class ConfluxMapCompanion {
             effectiveConfig.shareSeed = config.shareSeed;
             effectiveConfig.allowBiomeMap = config.allowBiomeMap;
             effectiveConfig.allowStructureSearch = config.allowStructureSearch;
-            effectiveConfig.shareCorrections = config.shareCorrections;
+            // Local singleplayer renders authoritative full-fidelity tiles directly from
+            // the client world; broadcasting coarse companion sampled patches would overwrite
+            // local high-res tiles with color-drifted sampled corrections.
+            effectiveConfig.shareCorrections = false;
             effectiveConfig.shareChunkLoadState = config.shareChunkLoadState;
             effectiveConfig.allowEntityRadar = config.allowEntityRadar;
             effectiveConfig.shareWaypoints = config.shareWaypoints;
