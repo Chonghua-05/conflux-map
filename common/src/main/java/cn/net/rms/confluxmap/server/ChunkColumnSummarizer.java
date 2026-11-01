@@ -1,5 +1,6 @@
 package cn.net.rms.confluxmap.server;
 
+import cn.net.rms.confluxmap.core.color.OverlaySlotAssignment;
 import cn.net.rms.confluxmap.core.color.OverlayVisibility;
 import cn.net.rms.confluxmap.core.model.ChunkSnapshot;
 import cn.net.rms.confluxmap.core.model.SurfaceKind;
@@ -93,9 +94,10 @@ public final class ChunkColumnSummarizer {
             // The cover descent stops at the first non-cover block, and air is not one: a glass
             // roof or bridge with an air gap above real ground must keep descending through the
             // air like the client's authoritative scan, or the glass would be promoted over
-            // ground the client still renders beneath it.
+            // ground the client still renders beneath it. The air rule itself is the shared
+            // OverlaySlotAssignment one (air is nothing, never a surface or overlay).
             while (surfaceY > source.bottomY()
-                && isAir(source.blockNameAt(x, surfaceY, z))) {
+                && OverlaySlotAssignment.isAirMaterial(source.blockNameAt(x, surfaceY, z))) {
                 surfaceY--;
                 surface = blockAt(source, x, surfaceY, z);
             }
@@ -124,7 +126,7 @@ public final class ChunkColumnSummarizer {
                 fluidSurfaceY = surfaceY;
                 fluidSurface = surface;
                 promotedFluidCover = true;
-            } else if (isSurfaceCover(coverName)) {
+            } else if (OverlaySlotAssignment.isPromotedCoverMaterial(coverName)) {
                 surfaceY++;
                 surface = classify(coverName, mapColors);
             } else if (isOverlayDecoration(source, x, groundY + 1, z, coverName)) {
@@ -292,11 +294,6 @@ public final class ChunkColumnSummarizer {
         return "minecraft:kelp".equals(name) || "minecraft:kelp_plant".equals(name);
     }
 
-    private static boolean isSurfaceCover(final String name) {
-        return "minecraft:snow".equals(name) || "minecraft:powder_snow".equals(name)
-            || name != null && name.endsWith("_carpet");
-    }
-
     /**
      * Motion-blocking blocks that do not stop light, so the surface a viewer actually sees is
      * the one beneath them. Deliberately the glass family only: tinted glass blocks light
@@ -310,15 +307,6 @@ public final class ChunkColumnSummarizer {
         }
         return "minecraft:glass".equals(name) || name.endsWith("_stained_glass")
             || "minecraft:glass_pane".equals(name) || name.endsWith("_stained_glass_pane");
-    }
-
-    /**
-     * Air never stops the authoritative scan, so the name-based scan must cross it too. Exact
-     * names only: a suffix match would swallow unrelated blocks whose id merely ends in "air".
-     */
-    private static boolean isAir(final String name) {
-        return "minecraft:air".equals(name) || "minecraft:cave_air".equals(name)
-            || "minecraft:void_air".equals(name);
     }
 
     /**

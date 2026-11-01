@@ -46,13 +46,13 @@ class OverlayVisibilitySourceParityTest {
         );
     }
 
-    private static String read(final Path path) throws Exception {
+    static String read(final Path path) throws Exception {
         final String content = Files.readString(path, java.nio.charset.StandardCharsets.UTF_8);
         assertTrue(content.length() > 0, path + " is empty");
         return content;
     }
 
-    private static Path repoFile(final String relative) {
+    static Path repoFile(final String relative) {
         Path dir = Paths.get("").toAbsolutePath();
         while (dir != null) {
             final Path candidate = dir.resolve(relative);

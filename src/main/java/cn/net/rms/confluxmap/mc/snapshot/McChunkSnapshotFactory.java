@@ -2,6 +2,7 @@ package cn.net.rms.confluxmap.mc.snapshot;
 
 import cn.net.rms.confluxmap.compat.Regs;
 import cn.net.rms.confluxmap.core.color.LightTint;
+import cn.net.rms.confluxmap.core.color.OverlaySlotAssignment;
 import cn.net.rms.confluxmap.core.color.OverlayVisibility;
 import cn.net.rms.confluxmap.core.color.ShadingPipeline;
 import cn.net.rms.confluxmap.core.model.ChunkSnapshot;
@@ -329,39 +330,30 @@ public final class McChunkSnapshotFactory {
             return;
         }
 
-        BlockState surfaceState = state;
-        int surfaceYVal = y;
-        BlockState transparentOverlay = null;
-        int transparentOverlayY = 0;
-        BlockState foliageOverlay = null;
-        int foliageOverlayY = 0;
-
+        // Both branches interpret the column through the shared OverlaySlotAssignment seam: the
+        // slot rules (air never fills a slot, thin-cover promotion, transparent/foliage split)
+        // live exactly once there instead of being re-derived per branch here.
+        final OverlaySlotAssignment<BlockState> slots;
         if (!descended) {
-            pos.set(worldX, surfaceYVal + 1, worldZ);
+            pos.set(worldX, y + 1, worldZ);
             final BlockState above = collapse(chunk.getBlockState(pos));
-            if (isPromotedSurfaceCover(above)) {
-                surfaceState = above;
-                surfaceYVal++;
-            } else if (!above.isAir()) {
-                foliageOverlay = above;
-                foliageOverlayY = surfaceYVal + 1;
-            }
-        } else if (isPromotedSurfaceCover(bottomOverlay)) {
-            // Thin surface-cover promotion: the foliage candidate becomes the surface itself.
-            surfaceState = bottomOverlay;
-            surfaceYVal = bottomOverlayY;
-            if (topOverlayY != bottomOverlayY) {
-                transparentOverlay = topOverlay;
-                transparentOverlayY = topOverlayY;
-            }
+            slots = OverlaySlotAssignment.forSurfaceColumn(
+                state, y, above, BlockState::isAir, McChunkSnapshotFactory::isPromotedSurfaceCover
+            );
         } else {
-            transparentOverlay = topOverlay;
-            transparentOverlayY = topOverlayY;
-            if (topOverlayY != bottomOverlayY) {
-                foliageOverlay = bottomOverlay;
-                foliageOverlayY = bottomOverlayY;
-            }
+            slots = OverlaySlotAssignment.forDescent(
+                state, y, topOverlay, topOverlayY, bottomOverlay, bottomOverlayY,
+                BlockState::isAir, McChunkSnapshotFactory::isPromotedSurfaceCover
+            );
         }
+        final BlockState surfaceState = slots.surface();
+        final int surfaceYVal = slots.surfaceY();
+        // Mutable copies: the seafloor scan below fills still-empty overlay slots with
+        // capturable underwater layers (coral, submerged decoration) beneath the fluid.
+        BlockState transparentOverlay = slots.transparentOverlay();
+        int transparentOverlayY = slots.transparentOverlayY();
+        BlockState foliageOverlay = slots.foliageOverlay();
+        int foliageOverlayY = slots.foliageOverlayY();
 
         final Block surfaceBlock = surfaceState.getBlock();
         final SurfaceKind resolvedKind = classifySurfaceKind(surfaceBlock);
