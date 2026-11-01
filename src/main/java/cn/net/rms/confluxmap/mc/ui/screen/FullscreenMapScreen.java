@@ -208,6 +208,9 @@ public final class FullscreenMapScreen extends ConfluxScreen {
     private static final Identifier MAP_EXPORT_ICON = Ids.of(
         "confluxmap", "textures/gui/map_export.png"
     );
+    private static final Identifier MAP_IMPORT_ICON = Ids.of(
+        "confluxmap", "textures/gui/map_import.png"
+    );
     private static final Identifier MAP_SETTINGS_ICON = Ids.of(
         "confluxmap", "textures/gui/map_settings.png"
     );
@@ -329,6 +332,7 @@ public final class FullscreenMapScreen extends ConfluxScreen {
     private MapIconButton structureSearchButton;
     private MapIconButton displayModeButton;
     private MapIconButton mapExportButton;
+    private MapIconButton mapImportButton;
     ButtonWidget clientWorldButton;
     private ButtonWidget worldSelectorButton;
     private ButtonWidget dimensionSelectorButton;
@@ -648,6 +652,14 @@ public final class FullscreenMapScreen extends ConfluxScreen {
         ));
         mapExportButton.active = !mapBrowser.browsing();
         annotationTooltips.put(mapExportButton, "confluxmap.screen.map_export.tooltip");
+        y += CONTROL_SIZE + CONTROL_GAP;
+        mapImportButton = addDrawableChild(new MapIconButton(
+            x, y, MAP_IMPORT_ICON, Texts.translatable("confluxmap.screen.map_import.tooltip"),
+            ignored -> MinecraftAccess.setScreen(
+                MinecraftClient.getInstance(), new XaeroImportScreen(this)
+            )
+        ));
+        annotationTooltips.put(mapImportButton, "confluxmap.screen.map_import.tooltip");
         y += CONTROL_SIZE + CONTROL_GAP;
         if (clientMultiworld.canManageProfiles()) {
             clientWorldButton = addDrawableChild(new MapIconButton(
@@ -1929,6 +1941,10 @@ public final class FullscreenMapScreen extends ConfluxScreen {
         final boolean biomeMode = biomeMode();
         final boolean predictionActive = predictionActive(layer, session, biomeMode);
         final boolean syncActive = predictionActive(layer, session, false);
+        // The padded ring is prefetch. It is ordered *after* this frame's visible tiles have been
+        // bound (and therefore requested), so a preload never competes with a tile the user is
+        // already looking at for worker slots or upload slots.
+        final boolean preloadPaddedRing = updateViewport && predictionActive;
         if (updateViewport) {
             viewTiles().setViewport(layer, lod, firstTileX, lastTileX, firstTileZ, lastTileZ);
             if (predictionActive) {
@@ -1990,6 +2006,12 @@ public final class FullscreenMapScreen extends ConfluxScreen {
                 firstTileZ, lastTileZ, pxPerBlock, blocksPerTile, biomeMode
             );
         }
+
+        if (preloadPaddedRing) {
+            // Only now: every visible predicted tile above has been bound, so every one of them is
+            // already queued/in flight ahead of the ring.
+            predictionTiles.preloadViewportPaddedRing(biomeMode ? layerId + "!biome" : layerId);
+        }
     }
 
     private void drawPredictedTiles(
@@ -2011,7 +2033,8 @@ public final class FullscreenMapScreen extends ConfluxScreen {
                     session.world(), session.dimension(), layerId, lod, tileX, tileZ
                 );
                 final TileKey key = biomeMode ? BiomeTileKeys.toBiome(terrainKey) : terrainKey;
-                if (textures.bind(PredictedTileKeys.toPredicted(key))) {
+                final TileKey predictedKey = PredictedTileKeys.toPredicted(key);
+                if (textures.bind(predictedKey)) {
                     final float screenX = (float) (
                         width / 2.0 + (key.originBlockX() - centerX) * pxPerBlock
                     );

@@ -96,20 +96,32 @@ public final class ConfluxConfig {
      * Scale <= 1.0 is strictly clamped to LOD 0 regardless of setting.
      */
     public enum MapQuality {
-        ULTRA_PERFORMANCE(1.60),
-        PERFORMANCE(1.30),
-        BALANCED(1.00),
-        QUALITY(0.75),
-        ULTRA_QUALITY(0.55);
+        /*
+         * Tile limits are sized against the planar prediction cache: ~0.33 MB per cached tile
+         * (pure and low-LOD corrected alike), so the 1024-tile top tier pins ~340 MB. The one
+         * exception is a corrected LOD4 tile, whose chunk-granular revision plane grows with LOD
+         * to ~0.83 MB - a session caching nothing but those at ULTRA_QUALITY could reach ~850 MB.
+         */
+        ULTRA_PERFORMANCE(1.60, 64),
+        PERFORMANCE(1.30, 128),
+        BALANCED(1.00, 256),
+        QUALITY(0.75, 512),
+        ULTRA_QUALITY(0.55, 1024);
 
         private final double slope;
+        private final int predictionTileCacheLimit;
 
-        MapQuality(final double slope) {
+        MapQuality(final double slope, final int predictionTileCacheLimit) {
             this.slope = slope;
+            this.predictionTileCacheLimit = predictionTileCacheLimit;
         }
 
         public double slope() {
             return slope;
+        }
+
+        public int predictionTileCacheLimit() {
+            return predictionTileCacheLimit;
         }
     }
 
@@ -206,6 +218,8 @@ public final class ConfluxConfig {
      * layers always keep their baked light). Off = exactly today's fixed-brightness rendering.
      */
     public boolean dynamicLighting = true;
+    /** Shade Nether ceiling bedrock brightness based on 1–5 layer column thickness. Off = uniform bedrock color. */
+    public boolean showNetherCeilingBedrockThickness = true;
     /** Keeps the historical Conflux renderer by default; XAERO is an explicit presentation choice. */
     public MapColorStyle mapColorStyle = MapColorStyle.CONFLUX;
     /** Map quality level controlling LOD scale transition points. */
@@ -398,6 +412,7 @@ public final class ConfluxConfig {
         c.caveSliceY = caveSliceY;
         c.netherSliceY = netherSliceY;
         c.dynamicLighting = dynamicLighting;
+        c.showNetherCeilingBedrockThickness = showNetherCeilingBedrockThickness;
         c.mapColorStyle = mapColorStyle;
         c.mapQuality = mapQuality;
         c.snapshotBudgetPerTick = snapshotBudgetPerTick;

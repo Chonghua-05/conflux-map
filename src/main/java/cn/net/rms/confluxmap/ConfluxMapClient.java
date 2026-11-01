@@ -13,6 +13,8 @@ import cn.net.rms.confluxmap.core.color.DaylightModel;
 import cn.net.rms.confluxmap.core.config.ConfigIo;
 import cn.net.rms.confluxmap.core.config.ConfluxConfig;
 import cn.net.rms.confluxmap.core.export.MapExportService;
+import cn.net.rms.confluxmap.core.xaeroimport.XaeroImportService;
+import cn.net.rms.confluxmap.mc.snapshot.XaeroSnapshotBaker;
 import cn.net.rms.confluxmap.core.export.ServiceMapExportTileSource;
 import cn.net.rms.confluxmap.core.loadstate.FullscreenDisplayMode;
 import cn.net.rms.confluxmap.core.measure.MeasureState;
@@ -157,6 +159,7 @@ public final class ConfluxMapClient implements ClientModInitializer {
     private PredictionState predictionState;
     private PredictionTileService predictionTileService;
     private MapExportService mapExportService;
+    private XaeroImportService xaeroImportService;
     private PredictionBootstrap predictionBootstrap;
     private ManualSeedService manualSeedService;
     private PredictionPaletteBuilder predictionPaletteBuilder;
@@ -272,6 +275,7 @@ public final class ConfluxMapClient implements ClientModInitializer {
         predictionTileService = new PredictionTileService(sessionGuard, predictionState, executors, tileService);
         predictionTileService.bindDaylightModel(daylightModel);
         predictionTileService.setMapColorStyle(config.mapColorStyle);
+        predictionTileService.setMapQuality(config.mapQuality);
         predictionTileService.setViewMode(config.predictionViewMode);
         correctionStore = new CorrectionStore(
             cacheRoot.resolve("prediction")
@@ -308,6 +312,9 @@ public final class ConfluxMapClient implements ClientModInitializer {
             )
         );
         ClientTickEvents.END_CLIENT_TICK.register(ignored -> mapExportService.tick());
+        xaeroImportService = new XaeroImportService(
+            mapWorlds, regionCache, tileService, cacheRoot, new XaeroSnapshotBaker(client), ConfluxMapMod.LOGGER
+        );
         clientNetworking.bindMapSync(mapSyncClient);
         clientNetworking.bindChunkLoadStates(chunkLoadStateClient);
         clientNetworking.bindPlayerRadar(serverPlayerRadar);
@@ -664,6 +671,17 @@ public final class ConfluxMapClient implements ClientModInitializer {
         ConfluxMapMod.LOGGER.info("Map color style changed to {}", config.mapColorStyle);
     }
 
+    /** Invalidates terrain planes after the Nether ceiling bedrock thickness toggle changes. */
+    public void onNetherCeilingBedrockThicknessChanged() {
+        // Predicted bedrock is flat regardless of this toggle, so only captured planes reload.
+        tileService.invalidateCompositions();
+        gameBridge.runOnRenderThread(tileTextureManager::releaseAll);
+        if (chunkCapture != null) {
+            chunkCapture.recaptureCurrentView();
+        }
+        ConfluxMapMod.LOGGER.info("Nether ceiling bedrock thickness shading toggled to {}", config.showNetherCeilingBedrockThickness);
+    }
+
     /** Re-resolves the active session's seed source after a local seed setting changes. */
     private void refreshPredictionSource() {
         final SessionGuard.Session session = sessionGuard.current();
@@ -728,6 +746,10 @@ public final class ConfluxMapClient implements ClientModInitializer {
 
     public MapExportService mapExportService() {
         return mapExportService;
+    }
+
+    public XaeroImportService xaeroImportService() {
+        return xaeroImportService;
     }
 
     public StructureMarkerService structureMarkerService() {

@@ -24,18 +24,6 @@ const surfaces = new Int32Array(instance.exports.memory.buffer,
   instance.exports.cfxWebSurfaceData(), cells);
 const canopies = new Int32Array(instance.exports.memory.buffer,
   instance.exports.cfxWebCanopyData(), cells);
-const subCells = lod >= 3 && dimension !== 1 ? cells * 4 : 0;
-const subBiomes = new Int32Array(instance.exports.memory.buffer,
-  instance.exports.cfxWebSubBiomeData(), subCells);
-const subSurfaces = new Int32Array(instance.exports.memory.buffer,
-  instance.exports.cfxWebSubSurfaceData(), subCells);
-const subCanopies = new Int32Array(instance.exports.memory.buffer,
-  instance.exports.cfxWebSubCanopyData(), subCells);
 for (let i = 0; i < cells; i++) {
-  const values = [heights[i], biomes[i], surfaces[i] & 3, canopies[i]];
-  for (let sample = 0; sample < (subCells ? 4 : 0); sample++) {
-    const sub = i * 4 + sample;
-    values.push(subBiomes[sub], subSurfaces[sub] & 1, subCanopies[sub]);
-  }
-  console.log(values.join(','));
+  console.log([heights[i], biomes[i], surfaces[i] & 3, canopies[i]].join(','));
 }

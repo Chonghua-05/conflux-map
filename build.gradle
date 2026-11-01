@@ -95,8 +95,6 @@ tasks.register('buildWebPredictor', Exec) {
         '-Wl,--export=cfxWebGenerateTile', '-Wl,--export=cfxWebBiomeData',
         '-Wl,--export=cfxWebHeightData', '-Wl,--export=cfxWebSurfaceData',
         '-Wl,--export=cfxWebCanopyData',
-        '-Wl,--export=cfxWebSubBiomeData', '-Wl,--export=cfxWebSubSurfaceData',
-        '-Wl,--export=cfxWebSubCanopyData',
         '-Wl,--export-memory', '-o', outFile.absolutePath,
     ] + webPredictorSources + ['-lm'])
 }

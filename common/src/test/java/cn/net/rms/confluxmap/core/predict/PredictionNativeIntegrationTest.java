@@ -512,57 +512,16 @@ class PredictionNativeIntegrationTest {
         ) / 3;
     }
 
-    /**
-     * Real-generation guard for biome supersampling. At LOD4 one output pixel spans 16 blocks -
-     * wider than a river - so a single lookup per pixel misses most thin features. The
-     * sub-samples must surface biomes the per-pixel grid never sees; if they ever stop doing so,
-     * meandering rivers and shorelines are back to breaking into straight, gappy lines.
-     */
+    /** No LOD sub-samples biomes any more, so none of them pays the 4x sampling cost. */
     @Test
-    void coarseLodSubSamplesFindThinBiomesThePixelCentresMiss() {
+    void noLodPaysForBiomeSupersampling() {
         final NativeBaselineSampler sampler = new NativeBaselineSampler(mc21(), SEED, 0, 0);
-        final BaselineGrid grid = LodSampling.sample(sampler, false, 4, 0, 0);
-        assertNotNull(grid);
-        assertTrue(grid.supersampled(), "LOD4 must supersample biomes");
-
-        int pixelsWhoseSubSamplesDisagree = 0;
-        int subSamplesUnseenAtTheCentre = 0;
-        for (int z = 0; z < BaselineGrid.PIXELS; z++) {
-            for (int x = 0; x < BaselineGrid.PIXELS; x++) {
-                final int idx = BaselineGrid.index(x, z);
-                boolean disagrees = false;
-                for (int sz = 0; sz < grid.subPerAxis; sz++) {
-                    for (int sx = 0; sx < grid.subPerAxis; sx++) {
-                        if (grid.subBiomeId[grid.subIndex(idx, sx, sz)] != grid.biomeId[idx]) {
-                            disagrees = true;
-                            subSamplesUnseenAtTheCentre++;
-                        }
-                    }
-                }
-                if (disagrees) {
-                    pixelsWhoseSubSamplesDisagree++;
-                }
-            }
-        }
-
-        assertTrue(
-            pixelsWhoseSubSamplesDisagree > BaselineGrid.PIXELS * BaselineGrid.PIXELS / 100,
-            "expected a real share of LOD4 pixels to contain a biome their centre misses, got "
-                + pixelsWhoseSubSamplesDisagree + " of " + (BaselineGrid.PIXELS * BaselineGrid.PIXELS)
-        );
-        assertTrue(subSamplesUnseenAtTheCentre > 0);
-    }
-
-    /** Fine LODs already sample at or below the native biome grid, so they must not pay for 4x. */
-    @Test
-    void fineLodsDoNotPayForBiomeSupersampling() {
-        final NativeBaselineSampler sampler = new NativeBaselineSampler(mc21(), SEED, 0, 0);
-        for (final int lod : new int[] {0, 1, 2}) {
+        for (final int lod : new int[] {0, 1, 2, 3, 4}) {
             final BaselineGrid grid = LodSampling.sample(sampler, false, lod, 0, 0);
             assertNotNull(grid);
             assertEquals(
                 BaselineGrid.NO_SUPERSAMPLING, grid.subPerAxis,
-                "LOD" + lod + " already reaches the native biome grid"
+                "LOD" + lod + " must sample one biome lookup per pixel"
             );
         }
     }
@@ -580,9 +539,6 @@ class PredictionNativeIntegrationTest {
             final NativeBaselineSampler sampler = new NativeBaselineSampler(mc21(), SEED, 0, 0);
             final BaselineGrid full = LodSampling.sample(sampler, false, lod, 4096, -8192);
             assertNotNull(full);
-            if (lod >= 3) {
-                assertEquals(2, full.subPerAxis, "LOD" + lod + " must run the supersampled sweep");
-            }
 
             final int[][] windows = {
                 {0, 0, 1, 1},
@@ -605,14 +561,6 @@ class PredictionNativeIntegrationTest {
                             "biome at lod " + lod + " pixel " + x + "," + z);
                         assertEquals(full.surfaceFlags[index], window.surfaceFlags[index],
                             "surface flags at lod " + lod + " pixel " + x + "," + z);
-                        for (int sz = 0; full.supersampled() && sz < full.subPerAxis; sz++) {
-                            for (int sx = 0; sx < full.subPerAxis; sx++) {
-                                final int sub = full.subIndex(index, sx, sz);
-                                assertEquals(full.subBiomeId[sub], window.subBiomeId[sub],
-                                    "sub-biome at lod " + lod + " pixel " + x + "," + z
-                                        + " sub " + sx + "," + sz);
-                            }
-                        }
                     }
                 }
             }
