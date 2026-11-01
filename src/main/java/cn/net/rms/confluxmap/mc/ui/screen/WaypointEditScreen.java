@@ -56,10 +56,16 @@ public final class WaypointEditScreen extends ConfluxScreen {
         0xFFE74C3C, 0xFFE67E22, 0xFFF1C40F, 0xFF2ECC71,
         0xFF1ABC9C, 0xFF3498DB, 0xFF9B59B6, 0xFFECF0F1
     };
-    private static final int FIELD_HEIGHT = 20;
+    // Geometry constants live in WaypointEditLayout so the spacing invariants are unit-testable.
+    private static final int FIELD_HEIGHT = WaypointEditLayout.FIELD_HEIGHT;
+    // Must stay a same-file literal: ButtonWidgetTextureHeightTest resolves ButtonWidget
+    // heights through same-file constant chains only, so this cannot alias the helper.
     private static final int SWATCH_SIZE = 20;
-    private static final int SWATCH_GAP = 6;
-    private static final int CUSTOM_COLOR_WIDTH = 68;
+    private static final int SWATCH_GAP = WaypointEditLayout.SWATCH_GAP;
+    private static final int CUSTOM_COLOR_WIDTH = WaypointEditLayout.CUSTOM_COLOR_WIDTH;
+    private static final int OPTION_GAP = WaypointEditLayout.OPTION_GAP;
+    private static final int CROSS_DIMENSION_WIDTH = WaypointEditLayout.CROSS_DIMENSION_WIDTH;
+    private static final int CROSS_DIMENSION_Y_WIDTH = WaypointEditLayout.CROSS_DIMENSION_Y_WIDTH;
 
     private final Screen parent;
     private final UUID editingId;
@@ -115,6 +121,8 @@ public final class WaypointEditScreen extends ConfluxScreen {
     private WaypointMarkerMode markerMode = WaypointMarkerMode.TEXT;
     private boolean deleteConfirmationPending;
     private String errorKey;
+    /** Row geometry for the current GUI height; rebuilt by every init(). */
+    private WaypointEditLayout.Rows rowLayout;
 
     private WaypointEditScreen(
         final Screen parent,
@@ -370,9 +378,20 @@ public final class WaypointEditScreen extends ConfluxScreen {
     @Override
     protected void init() {
         final int centerX = width / 2;
-        final int fieldWidth = 200;
+        // The chat target drops the set/group cycler, the cross-dimension controls,
+        // and the marker row; every other mode shares the same full stack.
+        final boolean fullForm = createTarget != CreateTarget.CHAT;
+        rowLayout = WaypointEditLayout.rows(height, fullForm);
+        final WaypointEditLayout.Rows rows = rowLayout;
 
-        nameField = new TextFieldWidget(this.textRenderer, centerX - fieldWidth / 2, 34, fieldWidth, FIELD_HEIGHT, Text.of(""));
+        nameField = new TextFieldWidget(
+            this.textRenderer,
+            centerX - WaypointEditLayout.FORM_WIDTH / 2,
+            rows.nameFieldY(),
+            WaypointEditLayout.FORM_WIDTH,
+            FIELD_HEIGHT,
+            Text.of("")
+        );
         nameField.setMaxLength(64);
         nameField.setText(draftName);
         addDrawableChild(nameField);
@@ -385,9 +404,9 @@ public final class WaypointEditScreen extends ConfluxScreen {
         final int coordWidth = 62;
         final int coordGap = 7;
         final int coordsLeft = centerX - (coordWidth * 3 + coordGap * 2) / 2;
-        xField = numericField(coordsLeft, 68, coordWidth, draftX);
-        yField = numericField(coordsLeft + coordWidth + coordGap, 68, coordWidth, draftY);
-        zField = numericField(coordsLeft + (coordWidth + coordGap) * 2, 68, coordWidth, draftZ);
+        xField = numericField(coordsLeft, rows.coordsY(), coordWidth, draftX);
+        yField = numericField(coordsLeft + coordWidth + coordGap, rows.coordsY(), coordWidth, draftY);
+        zField = numericField(coordsLeft + (coordWidth + coordGap) * 2, rows.coordsY(), coordWidth, draftZ);
         addDrawableChild(xField);
         addDrawableChild(yField);
         addDrawableChild(zField);
@@ -398,9 +417,9 @@ public final class WaypointEditScreen extends ConfluxScreen {
             setNames = localSetNames();
             selectedSetIndex = Math.max(0, setNames.indexOf(draftGroup));
             setButton = addDrawableChild(Widgets.button(
-                centerX - fieldWidth / 2,
-                102,
-                fieldWidth,
+                centerX - WaypointEditLayout.FORM_WIDTH / 2,
+                rows.groupY(),
+                WaypointEditLayout.FORM_WIDTH,
                 FIELD_HEIGHT,
                 selectedSetLabel(),
                 button -> selectNextSet()
@@ -409,9 +428,9 @@ public final class WaypointEditScreen extends ConfluxScreen {
             sharedGroups = sharedModel.groupsForDisplay();
             selectedGroupIndex = Math.max(0, indexOfGroupKey(draftGroup));
             groupButton = addDrawableChild(Widgets.button(
-                centerX - fieldWidth / 2,
-                102,
-                fieldWidth,
+                centerX - WaypointEditLayout.FORM_WIDTH / 2,
+                rows.groupY(),
+                WaypointEditLayout.FORM_WIDTH,
                 FIELD_HEIGHT,
                 selectedGroupLabel(),
                 button -> selectNextSharedGroup()
@@ -423,27 +442,30 @@ public final class WaypointEditScreen extends ConfluxScreen {
             }
         }
 
-        final int totalSwatchWidth = PRESET_COLORS.length * SWATCH_SIZE
-            + (PRESET_COLORS.length - 1) * SWATCH_GAP;
-        final int swatchLeft = centerX - totalSwatchWidth / 2;
+        // The preset swatches and the custom color cell form one centered grid.
+        final int swatchLeft =
+            centerX - WaypointEditLayout.swatchRowWidth(PRESET_COLORS.length) / 2;
         for (int i = 0; i < PRESET_COLORS.length; i++) {
             final int color = PRESET_COLORS[i];
             final int x = swatchLeft + i * (SWATCH_SIZE + SWATCH_GAP);
-            addColorSwatch(x, 128, () -> color, () -> colorSelection.selectPreset(color));
+            addColorSwatch(x, rows.swatchesY(), () -> color, () -> colorSelection.selectPreset(color));
         }
-        final int optionRowLeft = centerX - fieldWidth / 2;
-        final int customButtonLeft = optionRowLeft + SWATCH_SIZE + SWATCH_GAP;
         addColorSwatch(
-            optionRowLeft,
-            150,
+            swatchLeft + PRESET_COLORS.length * (SWATCH_SIZE + SWATCH_GAP),
+            rows.swatchesY(),
             colorSelection::custom,
             colorSelection::selectCustom
         );
+
+        // One options row below the grid: the custom color button, then the cross-dimension
+        // toggle with its Y override beside it. The Y field keeps a fixed slot (hidden while
+        // the toggle is off) so flipping the toggle never reflows the form.
+        final int optionsLeft = centerX - WaypointEditLayout.optionsRowWidth(fullForm) / 2;
         addDrawableChild(Widgets.button(
-            customButtonLeft,
-            150,
+            optionsLeft,
+            rows.optionsY(),
             CUSTOM_COLOR_WIDTH,
-            SWATCH_SIZE,
+            FIELD_HEIGHT,
             Texts.translatable("confluxmap.screen.waypoint.color_custom"),
             button -> MinecraftAccess.setScreen(
                 MinecraftClient.getInstance(),
@@ -455,11 +477,11 @@ public final class WaypointEditScreen extends ConfluxScreen {
             )
         ));
 
-        if (createTarget != CreateTarget.CHAT) {
+        if (fullForm) {
             addDrawableChild(Widgets.button(
-                centerX,
-                150,
-                fieldWidth / 2,
+                optionsLeft + CUSTOM_COLOR_WIDTH + OPTION_GAP,
+                rows.optionsY(),
+                CROSS_DIMENSION_WIDTH,
                 FIELD_HEIGHT,
                 crossDimensionLabel(),
                 button -> {
@@ -468,10 +490,12 @@ public final class WaypointEditScreen extends ConfluxScreen {
                     updateCrossDimensionYVisibility();
                 }
             ));
-            // The toggle text ("Cross-Dimension: ON") already fills the form's right half,
-            // so the optional Y override sits just past the form edge rather than inside it;
-            // it still fits the narrowest 320px GUI layout (field ends at centerX + 144).
-            crossDimensionYField = numericField(centerX + 104, 150, 40, draftCrossDimensionY);
+            crossDimensionYField = numericField(
+                optionsLeft + CUSTOM_COLOR_WIDTH + OPTION_GAP + CROSS_DIMENSION_WIDTH + OPTION_GAP,
+                rows.optionsY(),
+                CROSS_DIMENSION_Y_WIDTH,
+                draftCrossDimensionY
+            );
             crossDimensionYField.visible = crossDimensionVisible;
             addDrawableChild(crossDimensionYField);
             setHoverTooltip(
@@ -482,23 +506,22 @@ public final class WaypointEditScreen extends ConfluxScreen {
             crossDimensionYField = null;
         }
 
-        final boolean showMarkerStyle = createTarget != CreateTarget.CHAT;
         final boolean markerStyleSupported = createTarget == CreateTarget.LOCAL
             || createTarget == CreateTarget.PUBLIC && sharedWaypoints.supportsMarkerStyle();
         markerModeButton = addDrawableChild(Widgets.button(
             centerX - 100,
-            180,
+            rows.markerY(),
             80,
             FIELD_HEIGHT,
             markerModeLabel(),
             ignored -> selectNextMarkerMode()
         ));
         markerModeButton.active = markerStyleSupported;
-        markerModeButton.visible = showMarkerStyle;
+        markerModeButton.visible = fullForm;
         markerLabelField = new TextFieldWidget(
             this.textRenderer,
             centerX - 16,
-            180,
+            rows.markerY(),
             116,
             FIELD_HEIGHT,
             Texts.translatable("confluxmap.screen.waypoint.marker_label")
@@ -516,7 +539,7 @@ public final class WaypointEditScreen extends ConfluxScreen {
         addDrawableChild(markerLabelField);
         iconButton = addDrawableChild(Widgets.button(
             centerX - 16,
-            180,
+            rows.markerY(),
             78,
             FIELD_HEIGHT,
             iconButtonMessage(),
@@ -524,7 +547,7 @@ public final class WaypointEditScreen extends ConfluxScreen {
         ));
         clearIconButton = addDrawableChild(Widgets.button(
             centerX + 66,
-            180,
+            rows.markerY(),
             34,
             FIELD_HEIGHT,
             Texts.translatable("confluxmap.screen.waypoint.icon_clear"),
@@ -533,7 +556,7 @@ public final class WaypointEditScreen extends ConfluxScreen {
                 button.active = false;
             }
         ));
-        updateMarkerControls(showMarkerStyle, markerStyleSupported);
+        updateMarkerControls(fullForm, markerStyleSupported);
         if (!markerStyleSupported) {
             setDisabledTooltip(markerModeButton, "confluxmap.screen.waypoint.marker_style_unsupported");
             setDisabledTooltip(markerLabelField, "confluxmap.screen.waypoint.marker_style_unsupported");
@@ -541,7 +564,7 @@ public final class WaypointEditScreen extends ConfluxScreen {
             setDisabledTooltip(clearIconButton, "confluxmap.screen.waypoint.marker_style_unsupported");
         }
 
-        final int footerY = height - 32;
+        final int footerY = WaypointEditLayout.footerY(height);
         final boolean editing = editingId != null;
         final int footerLeft = centerX - (editing ? 100 : 104);
         final int footerButtonWidth = editing ? 64 : 100;
@@ -1141,24 +1164,41 @@ public final class WaypointEditScreen extends ConfluxScreen {
     @Override
     protected void renderContents(final GuiDraw draw, final int mouseX, final int mouseY, final float tickDelta) {
         draw.renderBackground(this, mouseX, mouseY, tickDelta);
-        drawCenteredLabel(draw, getTitle().getString(), 8);
-        drawCenteredLabel(draw, Texts.translatable("confluxmap.screen.waypoint.name").getString(), 24);
-        drawCenteredLabel(draw, Texts.translatable("confluxmap.screen.waypoint.coords").getString(), 58);
+        drawCenteredLabel(draw, getTitle().getString(), WaypointEditLayout.TITLE_Y);
+        drawCenteredLabel(
+            draw,
+            Texts.translatable("confluxmap.screen.waypoint.name").getString(),
+            WaypointEditLayout.labelY(rowLayout.nameFieldY())
+        );
+        drawCenteredLabel(
+            draw,
+            Texts.translatable("confluxmap.screen.waypoint.coords").getString(),
+            WaypointEditLayout.labelY(rowLayout.coordsY())
+        );
         if (createTarget == CreateTarget.LOCAL) {
-            drawCenteredLabel(draw, Texts.translatable("confluxmap.screen.waypoint.set").getString(), 92);
+            drawCenteredLabel(
+                draw,
+                Texts.translatable("confluxmap.screen.waypoint.set").getString(),
+                WaypointEditLayout.labelY(rowLayout.groupY())
+            );
         } else if (createTarget == CreateTarget.PUBLIC) {
-            drawCenteredLabel(draw, Texts.translatable("confluxmap.screen.waypoint.group").getString(), 92);
+            drawCenteredLabel(
+                draw,
+                Texts.translatable("confluxmap.screen.waypoint.group").getString(),
+                WaypointEditLayout.labelY(rowLayout.groupY())
+            );
         }
-        drawCenteredLabel(draw, Texts.translatable("confluxmap.screen.waypoint.color").getString(), 118);
+        drawCenteredLabel(
+            draw,
+            Texts.translatable("confluxmap.screen.waypoint.color").getString(),
+            WaypointEditLayout.labelY(rowLayout.swatchesY())
+        );
         if (createTarget != CreateTarget.CHAT) {
             drawCenteredLabel(
                 draw,
                 Texts.translatable("confluxmap.screen.waypoint.marker_style").getString(),
-                170
+                WaypointEditLayout.labelY(rowLayout.markerY())
             );
-        }
-        if (errorKey != null) {
-            drawCenteredLabel(draw, Texts.translatable(errorKey).getString(), height - 50);
         }
     }
 
@@ -1169,6 +1209,13 @@ public final class WaypointEditScreen extends ConfluxScreen {
         final int mouseY,
         final float tickDelta
     ) {
+        // Drawn after the widgets so the error is always readable: at the 240px
+        // GUI floor the form leaves no room for the reserved slot and the line
+        // crowds the footer edge instead of hiding behind the last row, which
+        // is where the old pre-widget draw left it.
+        if (errorKey != null) {
+            drawCenteredLabel(draw, Texts.translatable(errorKey).getString(), rowLayout.statusY());
+        }
         drawSelectedItemIcon(draw);
     }
 
