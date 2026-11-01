@@ -14,9 +14,9 @@ import net.minecraft.block.BlockState;
 import net.minecraft.client.MinecraftClient;
 import net.minecraft.client.world.ClientWorld;
 import net.minecraft.util.Identifier;
-//#if MC>=11903
-//$$ import net.minecraft.registry.BuiltinRegistries;
-//#else
+//#if MC<11903
+// Legacy chunk biome ids only exist below 1.18, and so does the builtin registry's
+// util.registry home; 1.19.3+ rehomed it and 1.18+ saves carry biome names anyway.
 import net.minecraft.util.registry.BuiltinRegistries;
 //#endif
 import net.minecraft.util.math.BlockPos;
@@ -217,10 +217,15 @@ final class McaSurfaceColumn implements SurfaceColumn {
         return legacyBiomeNames.computeIfAbsent(rawId, id -> {
             Identifier identifier = Regs.biomeIdByRawId(Regs.biomes(world), id);
             String via = "world registry";
+            //#if MC<11903
+            // The joined world's dynamic registry copy proved unreliable for these raw ids in
+            // the field; vanilla wrote them against the builtin registry, which is the honest
+            // authority for a vanilla-worldgen save.
             if (identifier == null) {
                 identifier = Regs.biomeIdByRawId(BuiltinRegistries.BIOME, id);
                 via = "builtin registry";
             }
+            //#endif
             ConfluxMapMod.LOGGER.info(
                 "[confluxmap] MCA render: legacy biome raw id {} -> {} ({})",
                 id, identifier, via);
