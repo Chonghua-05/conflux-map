@@ -12,15 +12,11 @@ import cn.net.rms.confluxmap.core.model.DimensionId;
  * the Overworld height work via {@link #sampleOverworldBiomes}.
  * <ul>
  *   <li>LOD0-1: final biomes are sampled at block scale, one lookup per output pixel.
- *   <li>LOD2: final biomes are sampled at native scale 4, one lookup per output pixel, solved on
- *       the same anchor-lattice copy/refine sweep the supersampled LODs use.
- *   <li>LOD3-4: scale-4 biomes use a 2-cell or 4-cell stride so every output pixel still maps to
- *       its own world position instead of falling back to a coarser pre-zoom layer. Because a
- *       pixel there spans 8 or 16 blocks - wider than a river - biomes are additionally sampled
- *       2x2 per pixel and box-filtered by the composer, mirroring how the captured map averages
- *       finer pixels into a coarse tile. The 2x2 sweep is also the pixel's own biome source: its
- *       first sample sits exactly at the pixel position, so no separate per-pixel biome pass runs
- *       at those LODs. See {@link #BIOME_SUB_PER_AXIS}.
+ *   <li>LOD2-4: final biomes are sampled once per output pixel on the anchor-lattice
+    *       copy/refine sweep - LOD2 at native scale 4, LOD3-4 at a 2-cell or 4-cell stride so
+    *       every output pixel still maps to its own world position instead of falling back to a
+    *       coarser pre-zoom layer. The former LOD3-4 2x2 sub-sample sweep is switched off (see
+    *       {@link #BIOME_SUB_PER_AXIS}) and its plumbing stays dormant.
  *   <li>Overworld exact corrections use an 8-pixel stride at LOD0 and 16 at LOD1-4. Nearby
  *       views retain more terrain and shoreline precision while distant views do
  *       not pay for details smaller than an output pixel.
@@ -109,13 +105,14 @@ public final class LodSampling {
     private static final int[] BIOME_STRIDE = {1, 2, 1, 2, 4};
     /**
      * Biome sub-samples per axis per output pixel. LOD0-2 already sample at or below the native
-     * 4-block biome grid, so one lookup per pixel loses nothing. LOD3-4 span 8 and 16 blocks, where
-     * a single lookup misses most of a river or shoreline: measured against full 1-block
-     * generation, one sample per pixel retains 69% of thin-feature pixels at LOD3 and 58% at LOD4,
-     * which is what turns a meandering river into a broken, straightened line. 2x2 lifts those to
-     * 88% and 80% for 4x the biome sampling cost; 4x4 would reach 96%/92% at 16x the cost.
+     * 4-block biome grid, so one lookup per pixel loses nothing there. The coarse LODs' 2x2 sweep
+     * was switched off: its measured thin-feature retention (88% versus 69% of river/shoreline
+     * pixels at LOD3, 80% versus 58% at LOD4, against full 1-block generation) did not justify
+     * 4x the biome sampling cost once the composer stopped box-filtering sub-sample colours.
+     * Every LOD currently runs {@link BaselineGrid#NO_SUPERSAMPLING} and the sweep machinery
+     * stays dormant here.
      */
-    private static final int[] BIOME_SUB_PER_AXIS = {1, 1, 1, 2, 2};
+    private static final int[] BIOME_SUB_PER_AXIS = {1, 1, 1, 1, 1};
 
     private LodSampling() {
     }
@@ -179,12 +176,13 @@ public final class LodSampling {
      * land plane, which is all the flat-color biome composer ever needs. The shape follows
      * {@link BaselineSampler#terrainFreeBiomeScale()}:
      * <ul>
-     *   <li>Scale 1 (pre-1.18 layer stacks): the height-aware pipeline's own per-LOD
-     *       {@code BIOME_SCALE}/{@code BIOME_STRIDE} sampling and LOD3-4 raw sub-samples, so
-     *       the biome ids stay bit-identical to the full pipeline - only the height passes drop
-     *       out. The shim's pre-1.18 {@code surfaceBiomes} delegates to the same layer-stack
-     *       queries at the same coordinates, which is what makes the ids provably unchanged.
-     *   <li>Scale 16 (post-1.18 climate model): one dense scale-16 climate grid, each output
+ *   <li>Scale 1 (pre-1.18 layer stacks): the height-aware pipeline's own per-LOD
+    *       {@code BIOME_SCALE}/{@code BIOME_STRIDE} sampling (plus any raw sub-samples the
+    *       per-LOD sub-sampling config calls for), so the biome ids stay bit-identical to the
+    *       full pipeline - only the height passes drop out. The shim's pre-1.18 {@code
+    *       surfaceBiomes} delegates to the same layer-stack queries at the same coordinates,
+    *       which is what makes the ids provably unchanged.
+  *   <li>Scale 16 (post-1.18 climate model): one dense scale-16 climate grid, each output
      *       pixel taking the biome of the climate cell containing its first block. Climate
      *       answers exist at 16-block granularity only, so every LOD shares the same cells and
      *       supersampling is dropped - a sub-sample inside one cell cannot differ from its
@@ -407,12 +405,12 @@ public final class LodSampling {
         final int blockZ = tileOriginZ + minPixelZ * blocksPerPixel;
 
         // The lattice sweep works on whole 2x2-pixel cells, so a window at the lattice LODs
-        // (supersampled LOD3-4, plain LOD2) expands by up to one pixel per side to cell
-        // boundaries. Everything the expansion touches - cell partition, anchors, overview
+        // (LOD2-4: per-pixel biomes, no sub-sampling) expands by up to one pixel per side to
+        // cell boundaries. Everything the expansion touches - cell partition, anchors, overview
         // heights - is absolute to the tile, so the window sees exactly the values the full
-        // tile's sweep produced for the same sub-samples.
+        // tile's sweep produced for the same pixels.
         final boolean lattice = sampler.interpolatableOverviewHeights()
-            && (grid.supersampled() || lod == 2);
+            && lod >= OVERVIEW_ANCHOR_MIN_LOD;
         final int[] terrain = new int[width * height];
         if (lattice) {
             final int sub = grid.subPerAxis;
@@ -524,8 +522,8 @@ public final class LodSampling {
         )) {
             return null;
         }
-        // Same subsumption as the full tile: a successful 2x2 sweep answers the pixel's own
-        // biome from its first sub-sample, so the centre pass never runs separately.
+        // Same subsumption as the full tile: a successful sub-sample sweep answers the pixel's
+        // own biome from its first sub-sample, so the centre pass never runs separately.
         final int[] subRaw = sampleSubBiomeWindowRaw(
             sampler, grid, blockX, blockZ, minPixelX, minPixelZ, width, height,
             blocksPerPixel, terrain
@@ -709,7 +707,7 @@ public final class LodSampling {
         final int[] fluidConfidence = new int[grid.terrainY.length];
         /*
          * Lattice LODs (2-4, opting-in samplers) run the coarse stages in dependency order:
-         * anchor heights, then the sub-biome anchor sweep (it reads only even anchor-pixel
+         * anchor heights, then the biome anchor sweep (it reads only even anchor-pixel
          * heights, so it may run while band pixels still hold reconstruction values), then the
          * waterline band resolution - which consults the biome anchors to skip quads that are
          * provably waterline-irrelevant - and finally the cell copy/refine loop, whose guards
@@ -718,8 +716,7 @@ public final class LodSampling {
          */
         OverviewLattice lattice = null;
         int[] biomeAnchors = null;
-        if (lod >= OVERVIEW_ANCHOR_MIN_LOD && sampler.interpolatableOverviewHeights()
-            && (grid.supersampled() || lod == 2)) {
+        if (lod >= OVERVIEW_ANCHOR_MIN_LOD && sampler.interpolatableOverviewHeights()) {
             lattice = solveOverviewLattice(
                 sampler, lod, tileOriginX, tileOriginZ,
                 P_MIN, P_MIN, BaselineGrid.SIZE, BaselineGrid.SIZE
@@ -758,10 +755,10 @@ public final class LodSampling {
         )) {
             return false;
         }
-        // The supersampled 2x2 sweep subsumes the per-pixel pass: its first sub-sample sits at
-        // the pixel's own position with the pixel's own height, so the pixel biome is that sample
-        // and the centre pass would only repeat it. At LOD2 the same lattice answers the plain
-        // per-pixel table directly. Samplers without the sweep keep the old order.
+        // The lattice cell sweep answers the plain per-pixel table at LOD2-4 directly, so no
+        // separate centre pass runs: cell copies and exact samples reproduce what a dense
+        // per-pixel query returns. A supersampled grid would scatter the sweep into the dormant
+        // sub-sample planes instead. Samplers without the lattice keep the old order.
         final int[] subRaw = biomeAnchors != null
             ? runSubBiomeCells(
                 sampler, lod, tileOriginX, tileOriginZ, grid.subPerAxis,
@@ -1019,10 +1016,10 @@ public final class LodSampling {
      * supersampled or the sampler cannot serve the query.
      *
      * <p>Opting-in samplers first take the sparse-lattice path ({@link
-     * #sampleSubBiomeLatticeRange}) - at LOD3-4 for the supersampled sweep, and at LOD2 where the
-     * same cell lattice covers plain per-pixel biomes with no supersampling at all; the dense
-     * sweep here stays as the fallback and as the value-level contract that path must reproduce
-     * outside its copied cells.
+     * #sampleSubBiomeLatticeRange}) - at LOD2-4, where the cell lattice covers plain per-pixel
+     * biomes; the dense sweep here stays as the fallback and as the value-level contract that
+     * path must reproduce outside its copied cells. A supersampled grid from a re-enabled
+     * sub-sampling config would use it for the 2x2 sweep.
      */
     private static int[] sampleSubBiomeRaw(
         final BaselineSampler sampler,
@@ -1031,8 +1028,7 @@ public final class LodSampling {
         final int tileOriginZ,
         final BaselineGrid grid
     ) {
-        if (sampler.interpolatableOverviewHeights()
-            && (grid.supersampled() || lod == 2)) {
+        if (sampler.interpolatableOverviewHeights() && lod >= OVERVIEW_ANCHOR_MIN_LOD) {
             final int[] fromLattice = sampleSubBiomeLatticeRange(
                 sampler, lod, tileOriginX, tileOriginZ, grid.subPerAxis,
                 0, 0, LATTICE_CELL_COUNT, LATTICE_CELL_COUNT,
@@ -1585,8 +1581,9 @@ public final class LodSampling {
 
     /**
      * Coarse sub-samples straight from the biome source: Nether pixels use raw 3D-biome samples
-     * rather than Overworld surface-biome queries, and the pre-1.18 biome-identity view reuses it
-     * because its layer-stack queries need no heights to sub-sample.
+     * rather than Overworld surface-biome queries, and the pre-1.18 biome-identity view calls it
+     * for any raw sub-samples its per-LOD config requests - its layer-stack queries need no
+     * heights to sub-sample. Dormant while every LOD runs one sample per pixel.
      */
     private static void sampleRawSubBiomes(
         final BaselineSampler sampler,

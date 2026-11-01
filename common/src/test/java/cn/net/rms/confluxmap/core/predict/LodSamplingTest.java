@@ -184,16 +184,6 @@ class LodSamplingTest {
                 assertEquals(fullDerived.surfaceY[pixel], windowDerived.surfaceY[pixel]);
                 assertEquals(fullDerived.kind[pixel], windowDerived.kind[pixel]);
                 assertEquals(fullDerived.fluidDepth[pixel], windowDerived.fluidDepth[pixel]);
-                if (full.supersampled()) {
-                    for (int subZ = 0; subZ < full.subPerAxis; subZ++) {
-                        for (int subX = 0; subX < full.subPerAxis; subX++) {
-                            final int sub = full.subIndex(pixel, subX, subZ);
-                            assertEquals(full.subBiomeId[sub], window.subBiomeId[sub]);
-                            assertEquals(fullDerived.subSurfaceY[sub], windowDerived.subSurfaceY[sub]);
-                            assertEquals(fullDerived.subKind[sub], windowDerived.subKind[sub]);
-                        }
-                    }
-                }
             }
         }
     }
@@ -254,9 +244,9 @@ class LodSamplingTest {
         assertNotNull(grid);
         assertEquals(1, overviewCells[0], "only the requested output pixel may run terrain prediction");
         assertEquals(
-            4, surfaceBiomeCells[0],
-            "the pixel's four samples arrive as one 2x2 sweep; its first entry is the centre "
-                + "biome, so no separate centre query may run"
+            1, surfaceBiomeCells[0],
+            "the pixel's own sample is the whole biome query; no sub-sample sweep and no "
+                + "separate centre query may run"
         );
     }
 
@@ -1154,56 +1144,11 @@ class LodSamplingTest {
         org.junit.jupiter.api.Assertions.assertFalse(grid.supersampled());
     }
 
-    @ParameterizedTest
-    @ValueSource(ints = {3, 4})
-    void coarseLodsSupersampleBiomesSoThinFeaturesSurviveBetweenPixelCentres(final int lod) {
-        final BaselineGrid grid = LodSampling.sample(new RiverStripeFakeSampler(1 << lod), false, lod, 0, 0);
-        assertNotNull(grid);
-        assertEquals(2, grid.subPerAxis);
-        assertEquals(4, grid.subCount());
-
-        final int idx = BaselineGrid.index(0, 0);
-        assertEquals(RiverStripeFakeSampler.PLAINS, grid.biomeId[idx], "the pixel centre must still miss the river");
-        assertEquals(0, grid.surfaceFlags[idx], "so the per-pixel classification stays dry land");
-
-        // The sub-sample half a pixel east lands on the stripe and reclassifies as water.
-        assertEquals(RiverStripeFakeSampler.RIVER, grid.subBiomeId[grid.subIndex(idx, 1, 0)]);
-        assertEquals(
-            BaselineGrid.SURFACE_FLUID, grid.subSurfaceFlags[grid.subIndex(idx, 1, 0)],
-            "a river sub-sample below sea level must resolve to fluid even though its pixel did not"
-        );
-        assertEquals(RiverStripeFakeSampler.PLAINS, grid.subBiomeId[grid.subIndex(idx, 0, 0)]);
-        assertEquals(0, grid.subSurfaceFlags[grid.subIndex(idx, 0, 0)]);
-    }
-
     @org.junit.jupiter.api.Test
     void endTilesAreNeverSupersampledBecauseTheirBiomesDoNotVaryWithinAPixel() {
         final BaselineGrid grid = LodSampling.sample(SAMPLER, true, 4, 0, 0);
         assertNotNull(grid);
         assertEquals(BaselineGrid.NO_SUPERSAMPLING, grid.subPerAxis);
-    }
-
-    @org.junit.jupiter.api.Test
-    void samplersWithoutSurfaceBiomeSupportFallBackToThePixelBiomeInEverySubSample() {
-        // PositionBasedFakeSampler leaves BaselineSampler#surfaceBiomes at its false default, so
-        // the supersampled fetch cannot run and must degrade to the pre-supersampling behaviour
-        // rather than failing the tile.
-        final BaselineGrid grid = LodSampling.sample(SAMPLER, false, 4, 0, 0);
-        assertNotNull(grid);
-        assertTrue(grid.supersampled());
-        for (int z = 0; z < 4; z++) {
-            for (int x = 0; x < 4; x++) {
-                final int idx = BaselineGrid.index(x, z);
-                for (int sz = 0; sz < 2; sz++) {
-                    for (int sx = 0; sx < 2; sx++) {
-                        assertEquals(
-                            grid.biomeId[idx], grid.subBiomeId[grid.subIndex(idx, sx, sz)],
-                            "sub-sample (" + sx + "," + sz + ") of pixel (" + x + "," + z + ")"
-                        );
-                    }
-                }
-            }
-        }
     }
 
     @ParameterizedTest
@@ -1349,11 +1294,6 @@ class LodSamplingTest {
         org.junit.jupiter.api.Assertions.assertArrayEquals(
             heightAware.biomeId, biomeView.biomeId, "LOD" + lod + " pixel biomes"
         );
-        if (heightAware.supersampled()) {
-            org.junit.jupiter.api.Assertions.assertArrayEquals(
-                heightAware.subBiomeId, biomeView.subBiomeId, "LOD" + lod + " sub biomes"
-            );
-        }
     }
 
     @org.junit.jupiter.api.Test

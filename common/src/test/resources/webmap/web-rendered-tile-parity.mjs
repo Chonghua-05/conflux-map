@@ -24,15 +24,11 @@ const cells = 258 * 258;
 const copy = (pointer, length) => new Int32Array(
   new Int32Array(instance.exports.memory.buffer, pointer, length)
 );
-const subCells = lod >= 3 && nativeDimension !== 1 ? cells * 4 : 0;
 const predicted = {
   biomes: copy(instance.exports.cfxWebBiomeData(), cells),
   heights: copy(instance.exports.cfxWebHeightData(), cells),
   surfaces: copy(instance.exports.cfxWebSurfaceData(), cells),
-  canopies: copy(instance.exports.cfxWebCanopyData(), cells),
-  subBiomes: copy(instance.exports.cfxWebSubBiomeData(), subCells),
-  subSurfaces: copy(instance.exports.cfxWebSubSurfaceData(), subCells),
-  subCanopies: copy(instance.exports.cfxWebSubCanopyData(), subCells)
+  canopies: copy(instance.exports.cfxWebCanopyData(), cells)
 };
 const renderer = rendererModule.createMapRenderer(manifest);
 const actual = patchPath
@@ -56,11 +52,7 @@ for (let index = 0; index < actual.length; index++) {
       const x = index & 255, z = index >>> 8, grid = (z + 1) * 258 + x + 1;
       first = `index ${index}: expected ${expected.toString(16)}, got ${(actual[index] >>> 0).toString(16)}`
         + `; biome=${predicted.biomes[grid]} height=${predicted.heights[grid]}`
-        + ` surface=${predicted.surfaces[grid]} canopy=${predicted.canopies[grid]}`
-        + (predicted.subBiomes.length
-          ? ` subBiomes=${[...predicted.subBiomes.slice(grid * 4, grid * 4 + 4)]}`
-            + ` subCanopies=${[...predicted.subCanopies.slice(grid * 4, grid * 4 + 4)]}`
-          : '');
+        + ` surface=${predicted.surfaces[grid]} canopy=${predicted.canopies[grid]}`;
     }
   }
 }
