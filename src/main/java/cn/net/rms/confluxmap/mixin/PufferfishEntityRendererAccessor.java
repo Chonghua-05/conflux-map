@@ -10,8 +10,10 @@ import org.spongepowered.asm.mixin.gen.Accessor;
 public interface PufferfishEntityRendererAccessor {
     @Accessor("small")
     EntityModel<?> confluxmap$getSmallModel();
+
     @Accessor("mid")
     EntityModel<?> confluxmap$getMediumModel();
+
     @Accessor("big")
     EntityModel<?> confluxmap$getLargeModel();
 }

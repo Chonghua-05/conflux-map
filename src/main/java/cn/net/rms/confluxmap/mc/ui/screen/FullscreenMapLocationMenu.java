@@ -1,12 +1,17 @@
 package cn.net.rms.confluxmap.mc.ui.screen;
 
+import cn.net.rms.confluxmap.compat.Keys;
 import cn.net.rms.confluxmap.core.model.MapLayer;
 import cn.net.rms.confluxmap.core.predict.StructureIndex;
+import cn.net.rms.confluxmap.core.store.ColumnStore;
 import cn.net.rms.confluxmap.core.waypoint.WaypointRenderEntry;
+import cn.net.rms.confluxmap.mc.ui.GuiDraw;
 import cn.net.rms.confluxmap.mc.ui.world.WaypointHighlightState;
-import cn.net.rms.confluxmap.mc.world.LayerSelector;
+import cn.net.rms.confluxmap.mc.world.DimensionLayerPolicy;
 import java.util.List;
 import java.util.OptionalInt;
+import java.util.UUID;
+import net.minecraft.client.gui.Font;
 
 /** Layout and captured map target for the fullscreen map's right-click location menu. */
 final class FullscreenMapLocationMenu {
@@ -16,10 +21,21 @@ final class FullscreenMapLocationMenu {
     static final int BUTTON_HEIGHT = 20;
     static final int BUTTON_GAP = 2;
     static final int CURSOR_GAP = 2;
+    private static final int PANEL_BACKGROUND = 0xF0181822;
+    private static final int PANEL_BORDER = 0xFF9A9AA8;
+    private static final int HOTKEY_COLOR = 0xFF55FF55;
+    private static final int HOTKEY_DISABLED_COLOR = 0xFF707070;
+    private static final int HOTKEY_HINT_GAP = 4;
+
+    /** Digit shortcuts for the open menu, one per button in list order. */
+    private static final int[] HOTKEY_KEYS = {
+        Keys.DIGIT_1, Keys.DIGIT_2, Keys.DIGIT_3, Keys.DIGIT_4, Keys.DIGIT_5
+    };
 
     enum Action {
         SET_WAYPOINT("confluxmap.map.location_menu.set_waypoint"),
         EDIT_WAYPOINT("confluxmap.map.location_menu.edit_waypoint"),
+        DELETE_WAYPOINT("confluxmap.map.location_menu.delete_waypoint"),
         SHARE_LOCATION("confluxmap.map.location_menu.share_location"),
         SHARE_WAYPOINT("confluxmap.map.location_menu.share_waypoint"),
         TELEPORT("confluxmap.map.location_menu.teleport"),
@@ -40,26 +56,18 @@ final class FullscreenMapLocationMenu {
         }
     }
 
-    private static final int ACTION_COUNT = 4;
-    private static final int PANEL_HEIGHT = PANEL_PADDING * 2
-        + ACTION_COUNT * BUTTON_HEIGHT
-        + (ACTION_COUNT - 1) * BUTTON_GAP;
-
     private FullscreenMapLocationMenu() {
     }
 
     static List<Action> actions(
-        final boolean teleportCommandAvailable,
         final boolean existingWaypoint,
         final boolean currentTargetHighlighted
     ) {
-        return actions(
-            teleportCommandAvailable, existingWaypoint, currentTargetHighlighted, false
-        );
+        return actions(existingWaypoint, currentTargetHighlighted, false);
     }
 
+    /** Teleport stays first whether or not the command is currently usable: it only greys out in place. */
     static List<Action> actions(
-        final boolean teleportCommandAvailable,
         final boolean existingWaypoint,
         final boolean currentTargetHighlighted,
         final boolean playerTarget
@@ -71,9 +79,20 @@ final class FullscreenMapLocationMenu {
             : currentTargetHighlighted
                 ? Action.CLEAR_HIGHLIGHT
                 : existingWaypoint ? Action.HIGHLIGHT_WAYPOINT : Action.HIGHLIGHT;
-        return teleportCommandAvailable
-            ? List.of(Action.TELEPORT, edit, share, highlight)
-            : List.of(edit, share, Action.TELEPORT, highlight);
+        if (existingWaypoint) {
+            return List.of(Action.TELEPORT, Action.EDIT_WAYPOINT, Action.DELETE_WAYPOINT, share, highlight);
+        }
+        return List.of(Action.TELEPORT, edit, share, highlight);
+    }
+
+    /**
+     * Whether teleport has a usable landing answer: resolved ground, or a live session whose
+     * two-stage teleport resolves the ground (or a void column, landing at the pre-teleport Y)
+     * after the target chunk loads. Only browsing a non-live session needs a known height up
+     * front, because there is no client chunk to resolve it from.
+     */
+    static boolean teleportPositionKnown(final Target target, final boolean viewingLiveSession) {
+        return target.groundKnown() || viewingLiveSession;
     }
 
     static boolean isSavedWaypoint(final WaypointRenderEntry waypoint) {
@@ -84,48 +103,53 @@ final class FullscreenMapLocationMenu {
     static boolean actionEnabled(
         final Action action,
         final boolean playerPresent,
-        final boolean estimatedHeightKnown,
         final boolean teleportCommandAvailable
     ) {
-        if (!playerPresent) {
+        if (!playerPresent || action == Action.DELETE_WAYPOINT) {
             return false;
         }
-        if (action == Action.HIGHLIGHT
-            || action == Action.HIGHLIGHT_WAYPOINT
-            || action == Action.CLEAR_HIGHLIGHT
-            || action == Action.HIGHLIGHT_PLAYER
-            || action == Action.CLEAR_PLAYER_HIGHLIGHT) {
-            return true;
-        }
-        if (action == Action.SHARE_WAYPOINT) {
-            return true;
-        }
-        return action == Action.TELEPORT ? teleportCommandAvailable : estimatedHeightKnown;
+        return action != Action.TELEPORT || teleportCommandAvailable;
     }
 
     static boolean actionEnabled(
         final Action action,
         final boolean playerPresent,
-        final boolean estimatedHeightKnown,
         final boolean teleportCommandAvailable,
         final boolean waypointEditable
     ) {
         if (action == Action.EDIT_WAYPOINT) {
             return playerPresent && waypointEditable;
         }
-        return actionEnabled(action, playerPresent, estimatedHeightKnown, teleportCommandAvailable);
+        return actionEnabled(action, playerPresent, teleportCommandAvailable);
+    }
+
+    static boolean actionEnabled(
+        final Action action,
+        final boolean playerPresent,
+        final boolean teleportCommandAvailable,
+        final boolean waypointEditable,
+        final boolean waypointDeletable
+    ) {
+        if (action == Action.DELETE_WAYPOINT) {
+            return playerPresent && waypointDeletable;
+        }
+        return actionEnabled(action, playerPresent, teleportCommandAvailable, waypointEditable);
     }
 
     static Bounds place(
         final int cursorX,
         final int cursorY,
         final int viewportWidth,
-        final int viewportHeight
+        final int viewportHeight,
+        final int actionCount
     ) {
         final int availableWidth = Math.max(1, viewportWidth - SCREEN_MARGIN * 2);
         final int availableHeight = Math.max(1, viewportHeight - SCREEN_MARGIN * 2);
         final int panelWidth = Math.min(PANEL_WIDTH, availableWidth);
-        final int panelHeight = Math.min(PANEL_HEIGHT, availableHeight);
+        final int desiredHeight = PANEL_PADDING * 2
+            + actionCount * BUTTON_HEIGHT
+            + Math.max(0, actionCount - 1) * BUTTON_GAP;
+        final int panelHeight = Math.min(desiredHeight, availableHeight);
         final int x = placeAxis(cursorX, panelWidth, viewportWidth);
         final int y = placeAxis(cursorY, panelHeight, viewportHeight);
         return new Bounds(x, y, panelWidth, panelHeight);
@@ -139,7 +163,17 @@ final class FullscreenMapLocationMenu {
     }
 
     static Target targetAt(final double worldX, final OptionalInt surfaceY, final double worldZ) {
-        return new Target((int) Math.floor(worldX), surfaceY, (int) Math.floor(worldZ));
+        return targetAt(
+            worldX,
+            surfaceY.isPresent()
+                ? new ColumnStore.SurfaceLookup(true, surfaceY)
+                : ColumnStore.SurfaceLookup.UNKNOWN,
+            worldZ
+        );
+    }
+
+    static Target targetAt(final double worldX, final ColumnStore.SurfaceLookup ground, final double worldZ) {
+        return new Target((int) Math.floor(worldX), ground, (int) Math.floor(worldZ));
     }
 
     static Point pointAt(
@@ -152,12 +186,101 @@ final class FullscreenMapLocationMenu {
             : new Point(structure.blockX(), structure.blockZ());
     }
 
-    static MapLayer topSurfaceLayer(final LayerSelector.DimensionKind dimensionKind) {
+    static MapLayer topSurfaceLayer(final DimensionLayerPolicy.DimensionKind dimensionKind) {
         return switch (dimensionKind) {
             case SKY_LIT -> MapLayer.SURFACE;
             case NO_SKY_NO_CEILING -> MapLayer.END_SURFACE;
             case HAS_CEILING -> MapLayer.NETHER_CEILING;
         };
+    }
+
+    /**
+     * The panel floats over the map's already-drawn waypoint and info text; popup fills keep
+     * that text's glyph depth from bleeding it through the opaque background (issue #128's
+     * family).
+     */
+    static void drawPanel(final GuiDraw draw, final Bounds bounds) {
+        final int x = bounds.x();
+        final int y = bounds.y();
+        final int right = x + bounds.width();
+        final int bottom = y + bounds.height();
+        draw.fillPopup(x, y, right, bottom, PANEL_BACKGROUND);
+        draw.fillPopup(x, y, right, y + 1, PANEL_BORDER);
+        draw.fillPopup(x, bottom - 1, right, bottom, PANEL_BORDER);
+        draw.fillPopup(x, y, x + 1, bottom, PANEL_BORDER);
+        draw.fillPopup(right - 1, y, right, bottom, PANEL_BORDER);
+    }
+
+    /**
+     * Draws each button's digit shortcut at the panel's right edge, on top of the already
+     * rendered buttons: green when the shortcut works, grey when the button is greyed out.
+     */
+    static void drawHotkeyHints(
+        final GuiDraw draw,
+        final Font font,
+        final Bounds bounds,
+        final List<ButtonSpec> specs
+    ) {
+        for (int index = 0; index < specs.size(); index++) {
+            final String label = hotkeyLabel(index);
+            if (label == null) {
+                return;
+            }
+            final ButtonSpec spec = specs.get(index);
+            final int x = bounds.x() + bounds.width() - PANEL_PADDING - HOTKEY_HINT_GAP
+                - font.width(label);
+            final int y = bounds.buttonY(index) + (BUTTON_HEIGHT - font.lineHeight) / 2;
+            draw.drawTextWithShadow(
+                font, label, x, y, spec.active() ? HOTKEY_COLOR : HOTKEY_DISABLED_COLOR
+            );
+        }
+    }
+
+    /**
+     * The action a digit shortcut would trigger, or null when the key is no menu shortcut,
+     * addresses no button in the live list, or that button is greyed out. The live list is
+     * authoritative: sibling waypoints drop entries and the delete confirmation relabels
+     * one, so indexes must never come from the {@link Action} enum.
+     */
+    static Action actionForHotkey(final List<ButtonSpec> specs, final int keyCode) {
+        final int index = hotkeyIndex(keyCode);
+        if (index < 0 || index >= specs.size()) {
+            return null;
+        }
+        final ButtonSpec spec = specs.get(index);
+        return spec.active() ? spec.action() : null;
+    }
+
+    /** Index of the digit shortcut pressed, or -1 when the key is no menu shortcut. */
+    static int hotkeyIndex(final int keyCode) {
+        for (int index = 0; index < HOTKEY_KEYS.length; index++) {
+            if (HOTKEY_KEYS[index] == keyCode) {
+                return index;
+            }
+        }
+        return -1;
+    }
+
+    /** The digit shown for a button index, or null when the menu has no shortcut that deep. */
+    static String hotkeyLabel(final int index) {
+        return index >= 0 && index < HOTKEY_KEYS.length ? Integer.toString(index + 1) : null;
+    }
+
+    /**
+     * One menu placement captured at right-click time: resolved panel geometry, the block
+     * target, and the hovered waypoint/player the actions apply to. Shared by the fullscreen
+     * menu and the embedded split-map menu.
+     */
+    record Capture(
+        Bounds bounds,
+        Target target,
+        WaypointRenderEntry waypoint,
+        UUID playerId
+    ) {
+    }
+
+    /** One menu button's fully resolved presentation, shared by every hosting screen. */
+    record ButtonSpec(Action action, String labelKey, String tooltipKey, boolean active) {
     }
 
     record Bounds(int x, int y, int width, int height) {
@@ -181,13 +304,28 @@ final class FullscreenMapLocationMenu {
     record Point(int blockX, int blockZ) {
     }
 
-    record Target(int blockX, OptionalInt surfaceY, int blockZ) {
+    record Target(int blockX, ColumnStore.SurfaceLookup ground, int blockZ) {
         Target {
-            surfaceY = surfaceY == null ? OptionalInt.empty() : surfaceY;
+            ground = ground == null ? ColumnStore.SurfaceLookup.UNKNOWN : ground;
         }
 
         OptionalInt blockY() {
-            return surfaceY.isPresent() ? OptionalInt.of(surfaceY.getAsInt() + 1) : OptionalInt.empty();
+            return ground.surfaceY().isPresent()
+                ? OptionalInt.of(ground.surfaceY().getAsInt() + 1)
+                : OptionalInt.empty();
+        }
+
+        /** Waypoints and shared locations always need a Y, so a column without ground borrows the player's. */
+        int placementY(final int playerY) {
+            return blockY().orElse(playerY);
+        }
+
+        /**
+         * Whether the ground answer is final: a surface to land on, or a known void column
+         * (which teleports at the player's current Y and must not wait for a prediction).
+         */
+        boolean groundKnown() {
+            return ground.known();
         }
     }
 }

@@ -10,7 +10,9 @@ import cn.net.rms.confluxmap.mixin.AgeableMobEntityRendererAccessor;
 import cn.net.rms.confluxmap.mixin.PufferfishEntityRendererAccessor;
 import cn.net.rms.confluxmap.mixin.TropicalFishEntityRendererAccessor;
 import cn.net.rms.confluxmap.mc.render.OffscreenCanvas;
-import cn.net.rms.confluxmap.mc.render.RenderUtil;
+import cn.net.rms.confluxmap.mc.render.GuiShapes;
+import cn.net.rms.confluxmap.mc.render.RenderTargetState;
+import cn.net.rms.confluxmap.mc.render.TextureBinds;
 import com.mojang.blaze3d.systems.RenderSystem;
 import java.io.IOException;
 import java.io.InputStream;
@@ -212,7 +214,7 @@ public final class EntityIconManager implements AutoCloseable {
         resetDynamic();
     }
 
-    /** World/session change: observed entities and their live references no longer belong here. */
+    /** Level/session change: observed entities and their live references no longer belong here. */
     public void onSessionChanged() {
         assert RenderSystem.isOnRenderThread() : "EntityIconManager.onSessionChanged() must run on render thread";
         resetDynamic();
@@ -372,25 +374,26 @@ public final class EntityIconManager implements AutoCloseable {
         matrices.translate(0f, 0f, OffscreenCanvas.atlasDrawPlaneZ());
         colorAtlas.beginPreserving(ATLAS_PX);
         try {
-            RenderUtil.clearTargetRect(matrices, column * CELL_PX, row * CELL_PX, CELL_PX, CELL_PX);
-            RenderUtil.bindTexture(client, key.texture());
-            RenderUtil.enableTargetScissor(
+            GuiShapes.clearTargetRect(matrices, column * CELL_PX, row * CELL_PX, CELL_PX, CELL_PX);
+            TextureBinds.bindTexture(client, key.texture());
+            RenderTargetState.enableTargetScissor(
                 column * CELL_PX, row * CELL_PX, CELL_PX, CELL_PX, ATLAS_PX
             );
             try {
-                RenderUtil.drawProjectedTexturedQuads(matrices, geometry, key.baseTint());
+                GuiShapes.drawProjectedTexturedQuads(matrices, geometry, key.baseTint());
                 if (key.patternTexture() != null) {
-                    RenderUtil.bindTexture(client, key.patternTexture());
-                    RenderUtil.drawProjectedTexturedQuads(matrices, geometry, key.patternTint());
+                    TextureBinds.bindTexture(client, key.patternTexture());
+                    GuiShapes.drawProjectedTexturedQuads(matrices, geometry, key.patternTint());
                 }
             } finally {
-                RenderUtil.disableScissor();
+                RenderTargetState.disableScissor();
             }
         } finally {
             colorAtlas.end(client);
         }
         return cropped;
     }
+
     private static EntityModel portraitModel(
         final LivingEntityRenderer renderer,
         final LivingEntity entity,
@@ -421,6 +424,7 @@ public final class EntityIconManager implements AutoCloseable {
             ? ageable.confluxmap$getBabyModel()
             : ageable.confluxmap$getAdultModel());
     }
+
 
     private static EntityModel pufferfishModel(
         final PufferfishEntityRendererAccessor renderer,

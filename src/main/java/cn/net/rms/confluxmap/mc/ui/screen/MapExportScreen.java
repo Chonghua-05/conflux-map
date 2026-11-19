@@ -1,7 +1,6 @@
 package cn.net.rms.confluxmap.mc.ui.screen;
 
 import cn.net.rms.confluxmap.ConfluxMapClient;
-import cn.net.rms.confluxmap.compat.MinecraftAccess;
 import cn.net.rms.confluxmap.compat.Texts;
 import cn.net.rms.confluxmap.compat.Widgets;
 import cn.net.rms.confluxmap.core.export.MapExportBounds;
@@ -44,7 +43,6 @@ final class MapExportScreen extends ConfluxScreen {
     private boolean includeDrawings = true;
     private boolean submitted;
     private MapExportStatus.State renderedState;
-    private MapExportRequest submittedRequest;
     private java.nio.file.Path clipboardRequestedOutput;
 
     MapExportScreen(
@@ -222,7 +220,6 @@ final class MapExportScreen extends ConfluxScreen {
         clipboardRequestedOutput = null;
         desktopActions.resetForExport();
         exports.start(request);
-        submittedRequest = request;
         submitted = true;
         rebuild();
     }
@@ -293,12 +290,9 @@ final class MapExportScreen extends ConfluxScreen {
         final MapExportStatus status = exports.status();
         if (status.state() == MapExportStatus.State.COMPLETED
             && status.output() != null
-            && submittedRequest != null
             && !status.output().equals(clipboardRequestedOutput)) {
             clipboardRequestedOutput = status.output();
-            desktopActions.copyImage(
-                status.output(), submittedRequest.pixelWidth(), submittedRequest.pixelHeight()
-            );
+            desktopActions.copyImage(status.output());
         }
         if (renderedState != status.state()) {
             rebuild();
@@ -314,7 +308,7 @@ final class MapExportScreen extends ConfluxScreen {
     }
 
     private void returnToMap() {
-        MinecraftAccess.setScreen(Minecraft.getInstance(), parent);
+        requestClose(parent);
     }
 
     @Override
@@ -324,7 +318,7 @@ final class MapExportScreen extends ConfluxScreen {
         final int mouseY,
         final float tickDelta
     ) {
-        draw.renderBackground(this, mouseX, mouseY, tickDelta);
+        draw.extractBackground(this, mouseX, mouseY, tickDelta);
         drawCentered(draw, getTitle().getString(), 24, 0xFFFFFFFF);
         if (!submitted) {
             drawCentered(draw, Texts.translatable("confluxmap.screen.map_export.first_corner").getString(), 44, 0xFFBBBBBB);
@@ -406,7 +400,6 @@ final class MapExportScreen extends ConfluxScreen {
         final String key = switch (desktopActions.copyState()) {
             case COPYING -> "confluxmap.screen.map_export.clipboard.copying";
             case COPIED -> "confluxmap.screen.map_export.clipboard.copied";
-            case SKIPPED -> "confluxmap.screen.map_export.clipboard.skipped";
             case FAILED -> "confluxmap.screen.map_export.clipboard.failed";
             default -> null;
         };

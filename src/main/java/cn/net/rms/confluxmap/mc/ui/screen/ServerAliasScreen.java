@@ -241,7 +241,7 @@ public final class ServerAliasScreen extends ConfluxScreen {
 
     @Override
     public void onClose() {
-        MinecraftAccess.setScreen(Minecraft.getInstance(), parent);
+        requestClose(parent);
     }
 
     @Override
@@ -251,7 +251,7 @@ public final class ServerAliasScreen extends ConfluxScreen {
         final int mouseY,
         final float tickDelta
     ) {
-        draw.renderBackground(this, mouseX, mouseY, tickDelta);
+        draw.extractBackground(this, mouseX, mouseY, tickDelta);
         drawCentered(draw, getTitle().getString(), 14, 0xFFFFFFFF);
         final String prompt;
         final int promptColor;

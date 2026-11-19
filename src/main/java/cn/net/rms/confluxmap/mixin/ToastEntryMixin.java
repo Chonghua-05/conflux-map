@@ -1,5 +1,6 @@
 package cn.net.rms.confluxmap.mixin;
 
+import cn.net.rms.confluxmap.ConfluxMapMod;
 import cn.net.rms.confluxmap.compat.GuiTransforms;
 import cn.net.rms.confluxmap.core.config.HudAmbient;
 import cn.net.rms.confluxmap.mc.ui.hud.ToastHudBounds;
@@ -7,6 +8,7 @@ import net.minecraft.client.gui.Font;
 import net.minecraft.client.gui.GuiGraphicsExtractor;
 import net.minecraft.client.gui.components.toasts.Toast;
 import org.spongepowered.asm.mixin.Mixin;
+import org.spongepowered.asm.mixin.Unique;
 import org.spongepowered.asm.mixin.injection.At;
 import org.spongepowered.asm.mixin.injection.Redirect;
 
@@ -20,6 +22,10 @@ import org.spongepowered.asm.mixin.injection.Redirect;
  */
 @Mixin(targets = "net.minecraft.client.gui.components.toasts.ToastManager$ToastInstance")
 public abstract class ToastEntryMixin {
+    /** Per-toast and per-frame; the first fault disables bounds capture for the session. */
+    @Unique
+    private static boolean confluxmap$toastCaptureFaulted;
+
     @Redirect(
         method = "extractRenderState",
         at = @At(
@@ -35,7 +41,18 @@ public abstract class ToastEntryMixin {
         final Font font,
         final long time
     ) {
-        ToastHudBounds.include(toast.width(), toast.height(), GuiTransforms.ambient(context));
+        if (!confluxmap$toastCaptureFaulted) {
+            try {
+                ToastHudBounds.include(
+                    toast.width(), toast.height(), GuiTransforms.ambient(context)
+                );
+            } catch (final Throwable fault) {
+                confluxmap$toastCaptureFaulted = true;
+                ConfluxMapMod.LOGGER.error(
+                    "toast bounds capture disabled after a fault", fault
+                );
+            }
+        }
         toast.extractRenderState(context, font, time);
     }
 }

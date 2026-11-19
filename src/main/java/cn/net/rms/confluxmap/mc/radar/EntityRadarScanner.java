@@ -1,5 +1,6 @@
 package cn.net.rms.confluxmap.mc.radar;
 
+import cn.net.rms.confluxmap.compat.Regs;
 import cn.net.rms.confluxmap.core.config.ConfluxConfig;
 import cn.net.rms.confluxmap.core.radar.RadarCategory;
 import cn.net.rms.confluxmap.core.radar.RadarEntry;
@@ -23,7 +24,7 @@ import net.minecraft.world.entity.player.Player;
 /**
  * Periodically classifies the client's already-loaded entities into a {@link RadarEntry}
  * snapshot for {@code MinimapHudRenderer} to draw. Reads only {@link Minecraft#world}'s
- * standard renderable-entity collection ({@code ClientWorld#getEntities()}) — the exact same
+ * standard renderable-entity collection ({@code ClientLevel#getEntities()}) — the exact same
  * pool the game itself iterates to draw entities in the 3D world, matching the anti-cheat
  * boundary from the implementation plan (no packets, no server queries).
  *
@@ -50,7 +51,7 @@ public final class EntityRadarScanner {
     /**
      * Extra horizontal/vertical margin (world blocks) applied only at scan time, so an entity
      * is captured into the tracked list slightly before it visually crosses the render-time
-     * cull boundary in {@code MinimapHudRenderer} — avoids pop-in/out flicker between scans,
+     * cull boundary in {@code MinimapHudRenderer} — avoids popPose-in/out flicker between scans,
      * mirroring the spec's two-tier buffered-scan/unbuffered-refresh design.
      */
     private static final int SCAN_RANGE_BUFFER = 5;
@@ -141,7 +142,7 @@ public final class EntityRadarScanner {
         return serverAllowed ? current : List.of();
     }
 
-    static boolean isRadarCandidate(final Class<? extends Entity> entityClass) {
+    public static boolean isRadarCandidate(final Class<? extends Entity> entityClass) {
         if (HangingEntity.class.isAssignableFrom(entityClass)) {
             return false;
         }
@@ -198,7 +199,8 @@ public final class EntityRadarScanner {
             final String name = category == RadarCategory.PLAYER ? entity.getName().getString() : null;
             raw.add(new RadarEntry(
                 entity.getX(), entity.getZ(), yDelta, category, name, entity.getId(), spectator,
-                category == RadarCategory.PLAYER ? entity.getUUID() : null
+                category == RadarCategory.PLAYER ? entity.getUUID() : null,
+                Regs.entityTypeId(entity.getType()).toString()
             ));
         }
 
@@ -210,16 +212,37 @@ public final class EntityRadarScanner {
     }
 
     private static RadarCategory classify(final Entity entity) {
-        if (entity instanceof Player) {
+        return classifyType(entity.getClass(), entity.getType().getCategory());
+    }
+
+    /**
+     * Registry-level twin of {@link #classify(Entity)}: buckets an entity type the same way a
+     * live scan buckets its instances, so the visibility-management screen can group types by
+     * the exact category toggle that governs them at runtime.
+     */
+    public static RadarCategory classifyType(
+        final Class<? extends Entity> entityClass,
+        final MobCategory group
+    ) {
+        if (Player.class.isAssignableFrom(entityClass)) {
             return RadarCategory.PLAYER;
         }
-        if (!(entity instanceof Mob)) {
+        if (!Mob.class.isAssignableFrom(entityClass)) {
             return RadarCategory.OTHER;
         }
-        final MobCategory group = entity.getType().getCategory();
+        return group == MobCategory.MONSTER ? RadarCategory.HOSTILE : RadarCategory.PASSIVE;
+    }
+
+    /**
+     * Level-free fallback for {@link #classifyType}: with no world to instantiate a probe
+     * in, types bucket by {@link MobCategory} alone. {@link MobCategory#MISC} mixes non-mobs
+     * with a few mob types (iron/snow golem, ender dragon) that live scans bucket as
+     * PASSIVE; this fallback lists those under OTHER.
+     */
+    public static RadarCategory classifySpawnGroup(final MobCategory group) {
         if (group == MobCategory.MONSTER) {
             return RadarCategory.HOSTILE;
         }
-        return RadarCategory.PASSIVE;
+        return group == MobCategory.MISC ? RadarCategory.OTHER : RadarCategory.PASSIVE;
     }
 }

@@ -14,6 +14,7 @@ import net.minecraft.client.gui.GuiGraphicsExtractor;
 public final class GuiTransforms {
     private GuiTransforms() {
     }
+
     public static HudAmbient ambient(final GuiGraphicsExtractor context) {
         final var pose = context.pose();
         return new HudAmbient(pose.m20(), pose.m21(), pose.m00(), pose.m11());

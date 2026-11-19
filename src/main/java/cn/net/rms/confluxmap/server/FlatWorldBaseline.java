@@ -17,8 +17,8 @@ import net.minecraft.world.level.levelgen.FlatLevelSource;
 /**
  * Derives a superflat dimension's uniform {@link FlatBaseline} from its live {@link
  * FlatLevelSource} config. The layer list is indexed from the dimension's own bottom, exactly
- * as {@code FlatChunkGenerator} places it ({@code chunk.getBottomY() + layerIndex}), so the index
- * has to be lifted by {@link net.minecraft.world.level.LevelHeightAccessor#getBottomY()} to become the
+ * as {@code FlatLevelSource} places it ({@code chunk.getMinY() + layerIndex}), so the index
+ * has to be lifted by {@link net.minecraft.world.HeightLimitView#getMinY()} to become the
  * absolute Y that {@link ChunkSummarizer} reports off the {@code MOTION_BLOCKING} heightmap. The
  * two only coincide on 1.17, whose overworld starts at Y=0; from 1.18 on the bottom is -64, and
  * an unlifted index left the predicted underlay height-shaded 64 blocks too high and made every
@@ -70,7 +70,9 @@ public final class FlatWorldBaseline {
         if (info.kind() == SurfaceKind.UNKNOWN) {
             return new FlatBaseline(biomeId, 0, SurfaceKind.VOID.ordinal(), Proto.MAP_COLOR_NONE, 0);
         }
-        return new FlatBaseline(biomeId, surfaceY, info.kind().ordinal(), info.mapColorId(), 0);
+        return new FlatBaseline(
+            biomeId, surfaceY, info.kind().ordinal(), info.mapColorId(), 0, blockName
+        );
     }
 
     /**
@@ -80,13 +82,14 @@ public final class FlatWorldBaseline {
      */
     private static int biomeId(final ServerLevel world, final Biome biome) {
         final var registry = Regs.biomes(world);
-        final var id = registry.getKey(biome);
-        if (id != null) {
-            final var mapped = CubiomesBiomeIds.idForName(id.getPath());
+        final var resourceKey = registry.getResourceKey(biome).orElse(null);
+        if (resourceKey != null) {
+            final var mapped = CubiomesBiomeIds.idForName(resourceKey.identifier().getPath());
             if (mapped.isPresent()) {
                 return mapped.getAsInt();
             }
+            return registry.getId(resourceKey) & 255;
         }
-        return registry.getId(biome) & 255;
+        return 0;
     }
 }

@@ -1,6 +1,7 @@
 package cn.net.rms.confluxmap.mixin;
 
 import cn.net.rms.confluxmap.ConfluxMapClient;
+import cn.net.rms.confluxmap.ConfluxMapMod;
 import cn.net.rms.confluxmap.compat.GuiTransforms;
 import cn.net.rms.confluxmap.compat.MinecraftAccess;
 import cn.net.rms.confluxmap.core.config.ConfluxConfig;
@@ -14,9 +15,7 @@ import cn.net.rms.confluxmap.mc.ui.screen.FullscreenMapScreen;
 import com.llamalad7.mixinextras.injector.wrapmethod.WrapMethod;
 import com.llamalad7.mixinextras.injector.wrapoperation.Operation;
 import net.minecraft.client.Minecraft;
-import net.minecraft.client.gui.Gui;
-import net.minecraft.client.gui.GuiGraphicsExtractor;
-import net.minecraft.client.DeltaTracker;
+import net.minecraft.client.gui.Hud;
 import net.minecraft.client.gui.GuiGraphicsExtractor;
 import net.minecraft.client.DeltaTracker;
 import net.minecraft.world.effect.MobEffectInstance;
@@ -24,8 +23,12 @@ import org.spongepowered.asm.mixin.Mixin;
 import org.spongepowered.asm.mixin.Unique;
 
 /** Moves vanilla status-effect icons while leaving the configured minimap position untouched. */
-@Mixin(Gui.class)
+@Mixin(Hud.class)
 public abstract class StatusEffectHudMixin {
+    /** Per-frame while effects show; the first fault disables the shift for the session. */
+    @Unique
+    private static boolean confluxmap$statusEffectShiftFaulted;
+
     @WrapMethod(
         method = "extractEffects"
     )
@@ -34,9 +37,21 @@ public abstract class StatusEffectHudMixin {
         final DeltaTracker tickCounter,
         final Operation<Void> original
     ) {
-        final float shift = confluxmap$horizontalPush(
-            GuiTransforms.ambient(context), context.guiWidth(), context.guiHeight()
-        );
+        if (confluxmap$statusEffectShiftFaulted) {
+            original.call(context, tickCounter);
+            return;
+        }
+        float shift = 0f;
+        try {
+            shift = confluxmap$horizontalPush(
+                GuiTransforms.ambient(context), context.guiWidth(), context.guiHeight()
+            );
+        } catch (final Throwable fault) {
+            confluxmap$statusEffectShiftFaulted = true;
+            ConfluxMapMod.LOGGER.error(
+                "status effect HUD shift disabled after a fault", fault
+            );
+        }
         if (shift == 0f) {
             original.call(context, tickCounter);
             return;
@@ -51,7 +66,7 @@ public abstract class StatusEffectHudMixin {
     }
 
     /**
-     * Returns the translation to push, in the coordinates of the matrix {@code ambient} sits on.
+     * Returns the translation to pushPose, in the coordinates of the matrix {@code ambient} sits on.
      *
      * <p>The row rectangles are mapped through {@code ambient} first, so an overlay another mod
      * rescaled is compared against the minimap at its rendered size, and the resulting shift is
@@ -74,7 +89,7 @@ public abstract class StatusEffectHudMixin {
         }
         final var screen = MinecraftAccess.screen(client);
         if (!MinimapHudVisibility.shouldRender(
-            config.minimapEnabled,
+            config.minimapEnabled && app.companionSession().minimapAllowed(),
             app.gameBridge().session().active(),
             screen instanceof FullscreenMapScreen,
             MinecraftAccess.isContainerScreen(screen),

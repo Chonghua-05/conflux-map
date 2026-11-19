@@ -1,6 +1,5 @@
 package cn.net.rms.confluxmap.mc.ui.screen;
 
-import cn.net.rms.confluxmap.compat.MinecraftAccess;
 import cn.net.rms.confluxmap.core.annotation.Annotation;
 import cn.net.rms.confluxmap.core.annotation.AnnotationStore;
 import cn.net.rms.confluxmap.compat.Texts;
@@ -81,7 +80,7 @@ public final class AnnotationLabelScreen extends ConfluxScreen {
     }
 
     private void returnToParent() {
-        MinecraftAccess.setScreen(Minecraft.getInstance(), parent);
+        requestClose(parent);
     }
 
     @Override
@@ -96,7 +95,7 @@ public final class AnnotationLabelScreen extends ConfluxScreen {
         final int mouseY,
         final float tickDelta
     ) {
-        draw.renderBackground(this, mouseX, mouseY, tickDelta);
+        draw.extractBackground(this, mouseX, mouseY, tickDelta);
         draw.drawTextWithShadow(
             this.font,
             Texts.translatable("confluxmap.screen.annotation.label.prompt"),

@@ -9,7 +9,8 @@ import cn.net.rms.confluxmap.core.annotation.CircleAnnotationGeometry;
 import cn.net.rms.confluxmap.core.annotation.FreehandAnnotationGeometry;
 import cn.net.rms.confluxmap.core.annotation.LineAnnotationGeometry;
 import cn.net.rms.confluxmap.core.annotation.RectangleAnnotationGeometry;
-import cn.net.rms.confluxmap.mc.render.RenderUtil;
+import cn.net.rms.confluxmap.core.util.Argb;
+import cn.net.rms.confluxmap.mc.render.GuiShapes;
 import java.util.List;
 import java.util.UUID;
 import net.minecraft.client.gui.Font;
@@ -32,23 +33,37 @@ public final class AnnotationRenderer {
         final AnnotationProjection projection,
         final UUID selectedId
     ) {
+        drawGeometry(matrices, annotations, projection, selectedId, 1f);
+    }
+
+    /** {@code alpha} scales every stroke so the minimap HUD can fade its annotation pass. */
+    public static void drawGeometry(
+        final PoseStack matrices,
+        final List<Annotation> annotations,
+        final AnnotationProjection projection,
+        final UUID selectedId,
+        final float alpha
+    ) {
         for (final Annotation annotation : annotations) {
             if (!projection.mayBeVisible(annotation.geometry().bounds(), SELECTED_STROKE_WIDTH)) {
                 continue;
             }
             if (annotation.id().equals(selectedId)) {
-                drawGeometry(matrices, annotation.geometry(), projection, SELECTED_STROKE_WIDTH, SELECTED_OUTLINE);
+                drawGeometry(
+                    matrices, annotation.geometry(), projection, SELECTED_STROKE_WIDTH,
+                    Argb.scaleAlpha(SELECTED_OUTLINE, alpha)
+                );
             }
             drawGeometry(
                 matrices, annotation.geometry(), projection, STROKE_WIDTH,
-                annotation.style().colorArgb()
+                Argb.scaleAlpha(annotation.style().colorArgb(), alpha)
             );
         }
     }
 
     public static void drawLabels(
         final GuiDraw draw,
-        final Font textRenderer,
+        final Font font,
         final List<Annotation> annotations,
         final AnnotationProjection projection,
         final double clipX,
@@ -57,27 +72,46 @@ public final class AnnotationRenderer {
         final double clipHeight,
         final ClipShape clipShape
     ) {
+        drawLabels(
+            draw, font, annotations, projection,
+            clipX, clipY, clipWidth, clipHeight, clipShape, 1f
+        );
+    }
+
+    /** {@code alpha} scales the label color so the minimap HUD can fade its annotation pass. */
+    public static void drawLabels(
+        final GuiDraw draw,
+        final Font font,
+        final List<Annotation> annotations,
+        final AnnotationProjection projection,
+        final double clipX,
+        final double clipY,
+        final double clipWidth,
+        final double clipHeight,
+        final ClipShape clipShape,
+        final float alpha
+    ) {
         for (final Annotation annotation : annotations) {
             if (annotation.label().isEmpty()
                 || !projection.mayBeVisible(annotation.geometry().bounds(), 2.0)) {
                 continue;
             }
             final AnnotationProjection.ScreenPoint anchor = projection.project(annotation.geometry().bounds().center());
-            final int textWidth = textWidth(textRenderer, annotation.label());
+            final int textWidth = textWidth(font, annotation.label());
             final double left = anchor.x() - textWidth / 2.0;
-            final double top = anchor.y() - textRenderer.lineHeight / 2.0;
+            final double top = anchor.y() - font.lineHeight / 2.0;
             if (!fitsClip(
-                left, top, textWidth, textRenderer.lineHeight,
+                left, top, textWidth, font.lineHeight,
                 clipX, clipY, clipWidth, clipHeight, clipShape
             )) {
                 continue;
             }
             draw.drawTextWithShadow(
-                textRenderer,
+                font,
                 annotation.label(),
                 (float) left,
                 (float) top,
-                annotation.style().colorArgb() | 0xFF000000
+                Argb.scaleAlpha(annotation.style().colorArgb() | 0xFF000000, alpha)
             );
         }
     }
@@ -135,7 +169,7 @@ public final class AnnotationRenderer {
             final AnnotationProjection.ScreenPoint center = projection.project(circle.center());
             final float radius = (float) (circle.radius() / projection.blocksPerPixel());
             if (radius > 0.0f) {
-                RenderUtil.drawRing(matrices, (float) center.x(), (float) center.y(), radius, width, color);
+                GuiShapes.drawRing(matrices, (float) center.x(), (float) center.y(), radius, width, color);
             }
         } else if (geometry instanceof final RectangleAnnotationGeometry rectangle) {
             final AnnotationPoint min = rectangle.min();
@@ -161,7 +195,8 @@ public final class AnnotationRenderer {
         }
     }
 
-    private static void stroke(
+    /** Screen-space quad line, also reused by the fullscreen map's measure overlay. */
+    public static void stroke(
         final PoseStack matrices,
         final AnnotationProjection.ScreenPoint start,
         final AnnotationProjection.ScreenPoint end,
@@ -184,7 +219,7 @@ public final class AnnotationRenderer {
         final float y2 = (float) end.y() - py;
         final float x3 = (float) start.x() - px;
         final float y3 = (float) start.y() - py;
-        RenderUtil.fillTriangle(matrices, x0, y0, x1, y1, x2, y2, color);
-        RenderUtil.fillTriangle(matrices, x0, y0, x2, y2, x3, y3, color);
+        GuiShapes.fillTriangle(matrices, x0, y0, x1, y1, x2, y2, color);
+        GuiShapes.fillTriangle(matrices, x0, y0, x2, y2, x3, y3, color);
     }
 }

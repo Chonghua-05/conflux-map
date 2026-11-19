@@ -1,12 +1,15 @@
 package cn.net.rms.confluxmap.mc.ui;
 
 import cn.net.rms.confluxmap.compat.Ids;
+import cn.net.rms.confluxmap.core.config.ConfluxConfig;
 import java.io.IOException;
+import java.io.InputStream;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
+import java.util.function.Supplier;
 import net.neoforged.fml.ModList;
 import net.minecraft.server.packs.resources.ResourceManager;
 import net.minecraft.resources.Identifier;
@@ -45,6 +48,9 @@ public final class UiResourceTheme {
     );
     private static final Map<Identifier, UiIcon> XAERO_WORLD_MAP_ICONS = xaeroIcons();
 
+    private static final Supplier<ConfluxConfig.ControlStyle> DEFAULT_CONTROL_STYLE_SUPPLIER =
+        () -> ConfluxConfig.ControlStyle.AUTO;
+
     private boolean xaeroMinimapFrame;
     private boolean xaeroWorldMapGui;
     private boolean confluxSquareFrame;
@@ -53,8 +59,14 @@ public final class UiResourceTheme {
     private boolean xaeroPlayerMarker;
     private boolean vanillaButtonStyle;
     private Set<Identifier> overriddenConfluxIcons = Set.of();
+    private final Supplier<ConfluxConfig.ControlStyle> controlStyleSupplier;
 
     public UiResourceTheme() {
+        this(DEFAULT_CONTROL_STYLE_SUPPLIER);
+    }
+
+    public UiResourceTheme(final Supplier<ConfluxConfig.ControlStyle> controlStyleSupplier) {
+        this(false, false, false, false, Set.of(), controlStyleSupplier);
     }
 
     UiResourceTheme(
@@ -64,11 +76,30 @@ public final class UiResourceTheme {
         final boolean confluxCircleFrame,
         final Set<Identifier> overriddenConfluxIcons
     ) {
+        this(
+            xaeroMinimapFrame,
+            xaeroWorldMapGui,
+            confluxSquareFrame,
+            confluxCircleFrame,
+            overriddenConfluxIcons,
+            DEFAULT_CONTROL_STYLE_SUPPLIER
+        );
+    }
+
+    UiResourceTheme(
+        final boolean xaeroMinimapFrame,
+        final boolean xaeroWorldMapGui,
+        final boolean confluxSquareFrame,
+        final boolean confluxCircleFrame,
+        final Set<Identifier> overriddenConfluxIcons,
+        final Supplier<ConfluxConfig.ControlStyle> controlStyleSupplier
+    ) {
         this.xaeroMinimapFrame = xaeroMinimapFrame;
         this.xaeroWorldMapGui = xaeroWorldMapGui;
         this.confluxSquareFrame = confluxSquareFrame;
         this.confluxCircleFrame = confluxCircleFrame;
         this.overriddenConfluxIcons = Set.copyOf(overriddenConfluxIcons);
+        this.controlStyleSupplier = controlStyleSupplier;
     }
 
     public void reload(final ResourceManager manager) {
@@ -77,11 +108,11 @@ public final class UiResourceTheme {
         if (manager == null) {
             return;
         }
-        final boolean xaeroMinimapLoaded = ModList.get().isLoaded("xaerominimap");
+        final boolean xaeroMinimapLoaded = net.neoforged.fml.ModList.get().isLoaded("xaerominimap");
         xaeroMinimapFrame = suppliedByResourcePack(manager, XAERO_MINIMAP_FRAME, xaeroMinimapLoaded);
         xaeroPlayerMarker = suppliedByResourcePack(manager, XAERO_MINIMAP_GUI, xaeroMinimapLoaded);
         xaeroWorldMapGui = suppliedByResourcePack(
-            manager, XAERO_WORLD_MAP_GUI, ModList.get().isLoaded("xaeroworldmap")
+            manager, XAERO_WORLD_MAP_GUI, net.neoforged.fml.ModList.get().isLoaded("xaeroworldmap")
         );
         confluxSquareFrame = resourceCount(manager, CONFLUX_SQUARE_FRAME) > 0;
         confluxCircleFrame = resourceCount(manager, CONFLUX_CIRCLE_FRAME) > 0;
@@ -104,9 +135,13 @@ public final class UiResourceTheme {
         return XAERO_WORLD_MAP_ICONS.getOrDefault(confluxIcon, UiIcon.monochrome(confluxIcon));
     }
 
-    /** Uses the effective Minecraft button skin only when another resource layer replaces it. */
+    /** Vanilla button skin per the configured control style; AUTO defers to resource-pack override detection. */
     public boolean useVanillaButtonStyle() {
-        return vanillaButtonStyle;
+        final ConfluxConfig.ControlStyle style = controlStyleSupplier.get();
+        if (style == null || style == ConfluxConfig.ControlStyle.AUTO) {
+            return vanillaButtonStyle;
+        }
+        return style == ConfluxConfig.ControlStyle.VANILLA;
     }
 
     /** Optional player marker supplied only by an enabled resource pack. */
@@ -164,6 +199,7 @@ public final class UiResourceTheme {
         return isResourcePackOverride(resourceCount(manager, id), providingModLoaded);
     }
 
+
     static boolean isResourcePackOverride(
         final int resourceCount,
         final boolean providingModLoaded
@@ -178,6 +214,7 @@ public final class UiResourceTheme {
     private static Map<Identifier, UiIcon> xaeroIcons() {
         final Map<Identifier, UiIcon> icons = new HashMap<>();
         mapNativeIcon(icons, "annotation_circle.png");
+        mapNativeIcon(icons, "annotation_clear.png");
         mapNativeIcon(icons, "annotation_collapse.png");
         mapNativeIcon(icons, "annotation_drawing.png");
         mapNativeIcon(icons, "annotation_eraser.png");
@@ -197,6 +234,8 @@ public final class UiResourceTheme {
         mapNativeIcon(icons, "map_biome.png");
         mapNativeIcon(icons, "map_biome_off.png");
         mapNativeIcon(icons, "map_terrain.png");
+        mapNativeIcon(icons, "map_import.png");
+        mapNativeIcon(icons, "measure.png");
         mapNativeIcon(icons, "structure_search.png");
         mapNativeIcon(icons, "structure_search_off.png");
         mapNativeIcon(icons, "waypoint_local.png");

@@ -1,19 +1,32 @@
 package cn.net.rms.confluxmap.mc.ui.screen;
 
+import cn.net.rms.confluxmap.compat.Texts;
 import cn.net.rms.confluxmap.compat.Widgets;
+import cn.net.rms.confluxmap.core.predict.SearchOrder;
 import cn.net.rms.confluxmap.mc.ui.GuiDraw;
+import net.minecraft.client.gui.Font;
+import net.minecraft.client.gui.screens.Screen;
 import net.minecraft.client.gui.components.Button;
 
-/** Shared two-line candidate list layout, controls, separators, and scrolling. */
+/** Shared single-line candidate list layout, controls, separators, and scrolling. */
 final class CandidateListUi {
     private static final int LIST_TOP = 112;
     private static final int LIST_BOTTOM_SPACE = 32;
-    private static final int ROW_HEIGHT = 44;
-    private static final int ACTION_ROW_OFFSET = 22;
+    private static final int ROW_HEIGHT = 24;
     private static final int ACTION_WIDTH = 76;
     private static final int GAP = 4;
     private static final int SEPARATOR_COLOR = 0xAA777777;
     private static final int PREFERRED_CONTENT_WIDTH = 230;
+
+    static SearchOrder toggledOrder(final SearchOrder order) {
+        return order == SearchOrder.FARTHEST ? SearchOrder.NEAREST : SearchOrder.FARTHEST;
+    }
+
+    static String orderLabelKey(final SearchOrder order) {
+        return order == SearchOrder.FARTHEST
+            ? "confluxmap.screen.structure_candidates.order.farthest"
+            : "confluxmap.screen.structure_candidates.order.nearest";
+    }
 
     private final int rowX;
     private final int rowWidth;
@@ -73,12 +86,8 @@ final class CandidateListUi {
         return actionWidth;
     }
 
-    int mapButtonY(final int index) {
-        return rowY(index);
-    }
-
     int waypointButtonY(final int index) {
-        return rowY(index) + ACTION_ROW_OFFSET;
+        return rowY(index) + 2;
     }
 
     int dividerY(final int index) {
@@ -102,17 +111,38 @@ final class CandidateListUi {
         );
     }
 
-    void layoutButtons(
-        final int index,
-        final Button mapButton,
-        final Button waypointButton
-    ) {
+    void layoutButton(final int index, final Button waypointButton) {
         final boolean visible = isVisible(index);
-        mapButton.visible = visible;
         waypointButton.visible = visible;
         if (visible) {
-            Widgets.setY(mapButton, mapButtonY(index));
             Widgets.setY(waypointButton, waypointButtonY(index));
+        }
+    }
+
+    int candidateAt(final double mouseX, final double mouseY) {
+        if (mouseX < rowX || mouseX >= actionX()
+            || mouseY < LIST_TOP || mouseY >= LIST_TOP + visibleRows * ROW_HEIGHT) {
+            return -1;
+        }
+        final int index = scrollOffset + (int) ((mouseY - LIST_TOP) / ROW_HEIGHT);
+        return index < totalRows ? index : -1;
+    }
+
+    /**
+     * Draws the full row line as a tooltip, but only when it is wider than the width the
+     * row was trimmed to, so the tooltip always means content the row is hiding.
+     */
+    void drawRowTooltip(
+        final GuiDraw draw,
+        final Screen screen,
+        final Font renderer,
+        final String line,
+        final int fittedWidth,
+        final int mouseX,
+        final int mouseY
+    ) {
+        if (renderer.width(line) > fittedWidth) {
+            draw.drawTooltip(screen, renderer, Texts.literal(line), mouseX, mouseY);
         }
     }
 

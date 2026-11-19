@@ -2,13 +2,12 @@ package cn.net.rms.confluxmap.mc;
 
 import cn.net.rms.confluxmap.bridge.GameBridge;
 import cn.net.rms.confluxmap.bridge.PlayerView;
-import cn.net.rms.confluxmap.core.model.DimensionId;
+import cn.net.rms.confluxmap.compat.Dimensions;
 import cn.net.rms.confluxmap.core.task.SessionGuard;
 import java.util.Optional;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.player.LocalPlayer;
 import net.minecraft.world.entity.Entity;
-import net.minecraft.resources.Identifier;
 import net.minecraft.util.Mth;
 
 public final class McGameBridge implements GameBridge {
@@ -58,21 +57,20 @@ public final class McGameBridge implements GameBridge {
         return player != null && cameraEntity != null && cameraEntity != player;
     }
 
+    @Override
+    public boolean isOnRenderThread() {
+        return client.isSameThread();
+    }
+
     private Optional<PlayerView> viewOf(final Entity entity, final float tickDelta) {
-        final Identifier dim = client.level.dimension().identifier();
         return Optional.of(new PlayerView(
             Mth.lerp(tickDelta, entity.xo, entity.getX()),
             Mth.lerp(tickDelta, entity.yo, entity.getY()),
             Mth.lerp(tickDelta, entity.zo, entity.getZ()),
             entity.getEyeY(),
             entity.getViewYRot(tickDelta),
-            DimensionId.of(dim.getNamespace(), dim.getPath())
+            Dimensions.of(client.level)
         ));
-    }
-
-    @Override
-    public boolean isOnRenderThread() {
-        return client.isSameThread();
     }
 
     @Override

@@ -1,6 +1,5 @@
 package cn.net.rms.confluxmap.mc.ui.screen;
 
-import cn.net.rms.confluxmap.compat.MinecraftAccess;
 import cn.net.rms.confluxmap.core.config.ConfigIo;
 import cn.net.rms.confluxmap.core.config.ConfluxConfig;
 import cn.net.rms.confluxmap.core.config.MinimapPlacement;
@@ -11,7 +10,8 @@ import net.minecraft.client.Minecraft;
 import net.minecraft.client.input.MouseButtonEvent;
 import net.minecraft.client.input.KeyEvent;
 import net.minecraft.client.gui.screens.Screen;
-import org.lwjgl.glfw.GLFW;
+import cn.net.rms.confluxmap.compat.Keys;
+import cn.net.rms.confluxmap.compat.MouseButtons;
 
 /** Explicit edit mode for dragging the minimap without consuming normal gameplay clicks. */
 public final class MinimapPositionScreen extends ConfluxScreen {
@@ -71,29 +71,27 @@ public final class MinimapPositionScreen extends ConfluxScreen {
     @Override
     public void onClose() {
         configIo.save(config);
-        MinecraftAccess.setScreen(Minecraft.getInstance(), parent);
+        requestClose(parent);
     }
 
     @Override
     public boolean keyPressed(final KeyEvent input) {
         final int keyCode = input.key();
+        if (swallowWhileClosing(input)) {
+            return true;
+        }
         int deltaX = 0;
         int deltaY = 0;
-        switch (keyCode) {
-            case GLFW.GLFW_KEY_LEFT:
-                deltaX = -1;
-                break;
-            case GLFW.GLFW_KEY_RIGHT:
-                deltaX = 1;
-                break;
-            case GLFW.GLFW_KEY_UP:
-                deltaY = -1;
-                break;
-            case GLFW.GLFW_KEY_DOWN:
-                deltaY = 1;
-                break;
-            default:
-                break;
+        // Keys.* are not compile-time constants on 26.3 (SDL codes resolve at class init),
+        // so this cannot be a switch over them.
+        if (keyCode == Keys.LEFT) {
+            deltaX = -1;
+        } else if (keyCode == Keys.RIGHT) {
+            deltaX = 1;
+        } else if (keyCode == Keys.UP) {
+            deltaY = -1;
+        } else if (keyCode == Keys.DOWN) {
+            deltaY = 1;
         }
         if (deltaX != 0 || deltaY != 0) {
             applyPosition(MinimapPlacement.nudge(
@@ -117,7 +115,7 @@ public final class MinimapPositionScreen extends ConfluxScreen {
         if (super.mouseClicked(click, doubledClick)) {
             return true;
         }
-        if (button != 0) {
+        if (button != MouseButtons.LEFT) {
             return false;
         }
         drag = MinimapPlacement.startDrag(currentLayout(), mouseX, mouseY);
@@ -129,7 +127,7 @@ public final class MinimapPositionScreen extends ConfluxScreen {
         final double mouseX = click.x();
         final double mouseY = click.y();
         final int button = click.button();
-        if (button == 0 && drag != null) {
+        if (button == MouseButtons.LEFT && drag != null) {
             applyPosition(MinimapPlacement.dragTo(width, height, config.minimapSize, drag, mouseX, mouseY));
             return true;
         }
@@ -139,7 +137,7 @@ public final class MinimapPositionScreen extends ConfluxScreen {
     @Override
     public boolean mouseReleased(final MouseButtonEvent click) {
         final int button = click.button();
-        if (button == 0 && drag != null) {
+        if (button == MouseButtons.LEFT && drag != null) {
             drag = null;
             return true;
         }

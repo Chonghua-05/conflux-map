@@ -2,7 +2,8 @@ package cn.net.rms.confluxmap.mc.ui;
 
 import cn.net.rms.confluxmap.compat.Ids;
 import cn.net.rms.confluxmap.core.predict.StructureIndex;
-import cn.net.rms.confluxmap.mc.render.RenderUtil;
+import cn.net.rms.confluxmap.mc.render.GuiShapes;
+import cn.net.rms.confluxmap.mc.render.TextureBinds;
 import java.util.EnumMap;
 import java.util.Map;
 import net.minecraft.client.Minecraft;
@@ -77,8 +78,11 @@ public final class StructureIconCatalog {
         final float size,
         final int tint
     ) {
-        RenderUtil.bindTexture(Minecraft.getInstance(), icon(type, variant));
-        RenderUtil.drawTintedQuad(draw.matrices(), x, y, size, size, 0f, 0f, 1f, 1f, tint);
+        // Callers queue icon frames and list surfaces as buffered fills; without the flush the
+        // icon would be painted first and covered once those fills reach the screen.
+        draw.flushGui();
+        TextureBinds.bindTexture(Minecraft.getInstance(), icon(type, variant));
+        GuiShapes.drawTintedQuad(draw.matrices(), x, y, size, size, 0f, 0f, 1f, 1f, tint);
     }
 
     private static Map<StructureIndex.StructureType, Identifier> icons() {
@@ -104,6 +108,7 @@ public final class StructureIconCatalog {
         put(icons, StructureIndex.StructureType.END_CITY, "item/shulker_shell");
         put(icons, StructureIndex.StructureType.TRAIL_RUINS, "item/brush");
         put(icons, StructureIndex.StructureType.TRIAL_CHAMBERS, "item/trial_key");
+        put(icons, StructureIndex.StructureType.ABANDONED_CAMP, "item/campfire");
         put(icons, StructureIndex.StructureType.STRONGHOLD, "item/ender_eye");
         put(icons, StructureIndex.StructureType.NETHER_FOSSIL, "block/bone_block_side");
         return icons;

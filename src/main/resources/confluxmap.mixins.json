@@ -4,12 +4,15 @@
   "compatibilityLevel": "JAVA_25",
   "mixins": [
     "VanillaLayeredBiomeSourceAccessor",
-    "WorldChunkMixin"
+    "WorldChunkMixin",
+    "ChunkMapAccessor"
   ],
   "client": [
     "AgeableMobEntityRendererAccessor",
     "ChatHudMixin",
     "GameRendererAccessor",
+    "GuiGraphicsExtractorAccessor",
+    "ScreenFontAccessor",
     "ClientChunkManagerMixin",
     "ClientPlayNetworkHandlerMixin",
     "InGameHudMixin",

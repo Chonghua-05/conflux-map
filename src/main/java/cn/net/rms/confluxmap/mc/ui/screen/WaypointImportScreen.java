@@ -1,6 +1,5 @@
 package cn.net.rms.confluxmap.mc.ui.screen;
 
-import cn.net.rms.confluxmap.compat.MinecraftAccess;
 import cn.net.rms.confluxmap.ConfluxMapClient;
 import cn.net.rms.confluxmap.ConfluxMapMod;
 import cn.net.rms.confluxmap.core.waypoint.WaypointStore;
@@ -17,7 +16,7 @@ import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Objects;
 import java.util.Set;
-import net.neoforged.fml.loading.FMLPaths;
+import net.neoforged.fml.ModList;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.gui.screens.Screen;
 import net.minecraft.client.gui.components.Button;
@@ -63,7 +62,7 @@ final class WaypointImportScreen extends ConfluxScreen {
         if (context == null) {
             return List.of();
         }
-        final Path gameDir = FMLPaths.GAMEDIR.get();
+        final Path gameDir = net.neoforged.fml.loading.FMLPaths.GAMEDIR.get();
         return MigrationSourceScanner.scan(gameDir, context, ConfluxMapMod.LOGGER);
     }
 
@@ -102,7 +101,7 @@ final class WaypointImportScreen extends ConfluxScreen {
                 LIST_TOP + (i - scrollOffset) * ROW_HEIGHT,
                 20,
                 20,
-                Component.nullToEmpty(excludedSources.contains(index) ? "" : "✓"),
+                Component.literal(excludedSources.contains(index) ? "" : "✓"),
                 button -> toggleSource(index)
             ));
             toggle.active = result == null;
@@ -147,7 +146,7 @@ final class WaypointImportScreen extends ConfluxScreen {
 
     @Override
     public void onClose() {
-        MinecraftAccess.setScreen(Minecraft.getInstance(), parent);
+        requestClose(parent);
     }
 
     @Override
@@ -233,7 +232,7 @@ final class WaypointImportScreen extends ConfluxScreen {
 
     @Override
     protected void renderContents(final GuiDraw draw, final int mouseX, final int mouseY, final float tickDelta) {
-        draw.renderBackground(this, mouseX, mouseY, tickDelta);
+        draw.extractBackground(this, mouseX, mouseY, tickDelta);
         drawCentered(draw, getTitle().getString(), 24, TEXT_COLOR);
         if (sources.isEmpty()) {
             drawCentered(

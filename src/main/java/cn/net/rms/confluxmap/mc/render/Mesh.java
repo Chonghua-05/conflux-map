@@ -1,21 +1,23 @@
 package cn.net.rms.confluxmap.mc.render;
-import com.mojang.blaze3d.buffers.GpuBuffer;
-import com.mojang.blaze3d.pipeline.RenderPipeline;
-import com.mojang.blaze3d.systems.RenderPass;
+
+import com.mojang.renderpearl.api.pipeline.PrimitiveTopology;
+import com.mojang.renderpearl.api.pipeline.BindGroupLayout;
+import com.mojang.renderpearl.api.pipeline.RenderPipeline;
+import com.mojang.renderpearl.api.commands.RenderPass;
 import com.mojang.blaze3d.systems.RenderSystem;
-import com.mojang.blaze3d.vertex.VertexFormat;
+import com.mojang.renderpearl.api.vertex.VertexFormat;
+import java.util.Optional;
 import java.util.OptionalDouble;
-import java.util.OptionalInt;
-import com.mojang.blaze3d.vertex.MeshData;
-import com.mojang.blaze3d.vertex.BufferBuilder;
-import com.mojang.blaze3d.vertex.Tesselator;
+import net.minecraft.client.renderer.StagedVertexBuffer;
 import com.mojang.blaze3d.vertex.DefaultVertexFormat;
+
 import net.minecraft.client.gui.navigation.ScreenRectangle;
 import net.minecraft.client.renderer.state.gui.GuiRenderState;
 import net.minecraft.client.renderer.state.gui.GuiElementRenderState;
 import com.mojang.blaze3d.vertex.VertexConsumer;
 import net.minecraft.client.gui.render.TextureSetup;
 import java.util.Arrays;
+
 import org.joml.Matrix4f;
 import org.joml.Vector3f;
 import org.joml.Vector4f;
@@ -24,9 +26,9 @@ import org.joml.Vector4f;
  * One immediate-mode draw call, hiding how this Minecraft version starts and finishes a
  * tessellator batch.
  *
- * <p>1.21 rewrote the entry and exit of the batch - {@code Tessellator.getBuffer()} plus
- * {@code buffer.begin(..)} became {@code Tessellator.begin(..)}, per-vertex {@code next()}
- * disappeared, and {@code Tessellator.draw()} became
+ * <p>1.21 rewrote the entry and exit of the batch - {@code Tesselator.getBuffer()} plus
+ * {@code buffer.begin(..)} became {@code Tesselator.begin(..)}, per-vertex {@code next()}
+ * disappeared, and {@code Tesselator.draw()} became
  * {@code BufferRenderer.drawWithGlobalProgram(buffer.end())} - while the vertex emission in
  * between stayed the same. Wrapping only the three changed points keeps every caller's geometry
  * as a single shared copy instead of one per version.
@@ -42,22 +44,32 @@ public final class Mesh {
         TRIANGLE_FAN,
         QUADS
     }
+
+    private static final StagedVertexBuffer IMMEDIATE =
+        new StagedVertexBuffer(() -> "Conflux Map immediate geometry", 1 << 20);
+
     /** Captured vertex layout: x, y, z, u, v, r, g, b, a. */
     private static final int STRIDE = 9;
-    private final BufferBuilder buffer;
+
+    private final VertexConsumer buffer;
+    private final StagedVertexBuffer.Draw stagedDraw;
     private final GuiRenderState guiState;
     private final boolean textured;
     private final float[] pending;
     private float[] vertices;
     private int vertexCount;
-    private Mesh(final BufferBuilder buffer) {
+
+    private Mesh(final VertexConsumer buffer, final StagedVertexBuffer.Draw stagedDraw) {
         this.buffer = buffer;
+        this.stagedDraw = stagedDraw;
         this.guiState = null;
         this.textured = false;
         this.pending = null;
     }
+
     private Mesh(final GuiRenderState guiState, final boolean textured) {
         this.buffer = null;
+        this.stagedDraw = null;
         this.guiState = guiState;
         this.textured = textured;
         this.pending = new float[STRIDE];
@@ -66,14 +78,16 @@ public final class Mesh {
 
     /** Starts a batch in {@code format}; finish it with {@link #draw()}. */
     public static Mesh begin(final Mode mode, final VertexFormat format) {
-        return new Mesh(Tesselator.getInstance().begin(legacyMode(mode), format));
+        final StagedVertexBuffer.Draw draw = IMMEDIATE.appendDraw(format, topology(mode));
+        return new Mesh(IMMEDIATE.getVertexBuilder(draw), draw);
     }
-    private static VertexFormat.Mode legacyMode(final Mode mode) {
+
+    private static PrimitiveTopology topology(final Mode mode) {
         return switch (mode) {
-            case TRIANGLES -> VertexFormat.Mode.TRIANGLES;
-            case TRIANGLE_STRIP -> VertexFormat.Mode.TRIANGLE_STRIP;
-            case TRIANGLE_FAN -> VertexFormat.Mode.TRIANGLE_FAN;
-            case QUADS -> VertexFormat.Mode.QUADS;
+            case TRIANGLES -> PrimitiveTopology.TRIANGLES;
+            case TRIANGLE_STRIP -> PrimitiveTopology.TRIANGLE_STRIP;
+            case TRIANGLE_FAN -> PrimitiveTopology.TRIANGLE_FAN;
+            case QUADS -> PrimitiveTopology.QUADS;
         };
     }
 
@@ -88,7 +102,7 @@ public final class Mesh {
      * {@link OffscreenCanvas}' own framebuffer rather than the screen - still draw immediately.
      */
     public static Mesh beginGui(final Mode mode, final VertexFormat format) {
-        final GuiRenderState guiState = RenderUtil.guiState();
+        final GuiRenderState guiState = RenderTargetState.guiState();
         if (guiState != null) {
             return new Mesh(guiState, format == tintedTextureFormat());
         }
@@ -170,13 +184,14 @@ public final class Mesh {
     public void draw() {
         throw new IllegalStateException("1.21.5+ draws require an explicit render pipeline");
     }
+
     /** Finishes a {@link #beginGui} batch: recorded for the GUI renderer, or drawn on the spot. */
     public void drawGui(final RenderPipeline pipeline) {
         if (buffer == null) {
             guiState.addGuiElement(new CapturedGuiElement(
                 pipeline,
-                RenderUtil.guiTextureSetup(textured),
-                RenderUtil.guiScissor(),
+                TextureBinds.guiTextureSetup(textured),
+                RenderTargetState.guiScissor(),
                 vertices,
                 vertexCount,
                 textured
@@ -185,54 +200,50 @@ public final class Mesh {
         }
         draw(pipeline);
     }
-
+    
     /** Uploads and draws the batch through the pipeline-based renderer. */
     public void draw(final RenderPipeline pipeline) {
-        try (MeshData built = buffer.buildOrThrow()) {
-            final GpuBuffer vertexBuffer = pipeline.getVertexFormat()
-                .uploadImmediateVertexBuffer(built.vertexBuffer());
-            final GpuBuffer indexBuffer;
-            final VertexFormat.IndexType indexType;
-            if (built.indexBuffer() == null) {
-                final RenderSystem.AutoStorageIndexBuffer sequential = RenderSystem.getSequentialBuffer(
-                    built.drawState().mode()
-                );
-                indexBuffer = sequential.getBuffer(built.drawState().indexCount());
-                indexType = sequential.type();
-            } else {
-                indexBuffer = pipeline.getVertexFormat()
-                    .uploadImmediateIndexBuffer(built.indexBuffer());
-                indexType = built.drawState().indexType();
-            }
-            final var target = RenderUtil.drawTarget();
+        try {
+            IMMEDIATE.upload();
+            final StagedVertexBuffer.ExecuteInfo info = IMMEDIATE.getExecuteInfo(stagedDraw);
+            final var target = RenderTargetState.drawTarget();
             final var dynamicTransforms = RenderSystem.getDynamicUniforms().writeTransform(
-                RenderSystem.getModelViewMatrix(),
-                new Vector4f(1f, 1f, 1f, 1f),
-                new Vector3f(),
-                new Matrix4f()
+                RenderSystem.getModelViewMatrixCopy()
             );
             try (RenderPass pass = RenderSystem.getDevice().createCommandEncoder().createRenderPass(
                 () -> "Conflux Map immediate " + pipeline.getLocation(),
                 target.getColorTextureView(),
-                OptionalInt.empty(),
-                target.useDepth ? target.getDepthTextureView() : null,
+                Optional.empty(),
+                // 26.3 replaced RenderTarget.useDepth with hasDepth(); the pipeline must be
+                // compiled through the game's fallback cache before setPipeline accepts it,
+                // flattenSamplers became flattenUniforms, and bindTexture became setUniform.
+                target.hasDepth() ? target.getDepthTextureView() : null,
                 OptionalDouble.empty()
             )) {
-                pass.setPipeline(pipeline);
+                pass.setPipeline(RenderTargetState.compiled(pipeline));
                 RenderSystem.bindDefaultUniforms(pass);
                 pass.setUniform("DynamicTransforms", dynamicTransforms);
-                pass.setVertexBuffer(0, vertexBuffer);
-                RenderUtil.applyScissor(pass);
-                if (pipeline.getSamplers().contains("Sampler0")
-                    && RenderUtil.boundTexture() != null
-                    && RenderUtil.boundSampler() != null) {
-                    pass.bindTexture("Sampler0", RenderUtil.boundTexture(), RenderUtil.boundSampler());
+                pass.setVertexBuffer(0, info.vertexBuffer().slice());
+                RenderTargetState.applyScissor(pass);
+                if (BindGroupLayout.flattenUniforms(pipeline.getBindGroupLayouts()).stream()
+                        .anyMatch(layout -> layout.name().equals("Sampler0"))
+                    && TextureBinds.boundTexture() != null
+                    && TextureBinds.boundSampler() != null) {
+                    pass.setUniform("Sampler0", TextureBinds.boundTexture(), TextureBinds.boundSampler());
                 }
-                pass.setIndexBuffer(indexBuffer, indexType);
-                pass.drawIndexed(0, 0, built.drawState().indexCount(), 1);
+                pass.setIndexBuffer(info.indexBuffer(), info.indexType());
+                pass.drawIndexed(info.indexCount(), 1, info.firstIndex(), info.baseVertex(), 0);
             }
+        } finally {
+            IMMEDIATE.endFrame();
         }
     }
+    
+    /** Releases the reusable immediate vertex buffers during client shutdown. */
+    public static void close() {
+        IMMEDIATE.close();
+    }
+
     /**
      * One captured GUI batch, waiting for the GUI renderer's pass.
      *
@@ -250,7 +261,7 @@ public final class Mesh {
         private final float[] vertices;
         private final int vertexCount;
         private final boolean textured;
-
+    
         CapturedGuiElement(
             final RenderPipeline pipeline,
             final TextureSetup textureSetup,
@@ -267,33 +278,33 @@ public final class Mesh {
             this.textured = textured;
             this.bounds = boundsOf(vertices, vertexCount, scissorArea);
         }
-
+    
         @Override
         public RenderPipeline pipeline() {
             return pipeline;
         }
-
+    
         @Override
         public TextureSetup textureSetup() {
             return textureSetup;
         }
-
+    
         @Override
         public ScreenRectangle scissorArea() {
             return scissorArea;
         }
-
+    
         @Override
         public ScreenRectangle bounds() {
             return bounds;
         }
-
+    
         @Override
         public void buildVertices(final VertexConsumer consumer) {
             // 1.21.11 drops the depth argument and offsets the whole batch itself.
             emit(consumer, 0f);
         }
-
+    
         private void emit(final VertexConsumer consumer, final float depth) {
             for (int i = 0; i < vertexCount; i++) {
                 final int offset = i * STRIDE;
@@ -307,7 +318,7 @@ public final class Mesh {
                 );
             }
         }
-
+    
         private static ScreenRectangle boundsOf(
             final float[] vertices,
             final int vertexCount,

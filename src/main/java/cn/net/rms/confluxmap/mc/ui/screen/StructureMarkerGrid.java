@@ -7,7 +7,7 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 
-/** World-anchored thinning; callers query whole cells so viewport edges cannot change winners. */
+/** Level-anchored thinning; callers query whole cells so viewport edges cannot change winners. */
 final class StructureMarkerGrid {
     private record Cell(StructureType type, int x, int z) {}
 

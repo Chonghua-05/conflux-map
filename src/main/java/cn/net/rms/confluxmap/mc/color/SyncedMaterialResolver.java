@@ -1,6 +1,7 @@
 package cn.net.rms.confluxmap.mc.color;
 
 import cn.net.rms.confluxmap.compat.Regs;
+import cn.net.rms.confluxmap.core.color.MaterialDetailProfile;
 import cn.net.rms.confluxmap.core.net.PatchCodec;
 import cn.net.rms.confluxmap.core.predict.SyncedMaterialPalette;
 import java.util.LinkedHashSet;
@@ -8,6 +9,7 @@ import java.util.Optional;
 import java.util.Set;
 import net.minecraft.world.level.block.Block;
 import net.minecraft.world.level.block.state.BlockState;
+import net.minecraft.world.level.block.Blocks;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.multiplayer.ClientLevel;
 import net.minecraft.resources.Identifier;
@@ -37,6 +39,17 @@ public final class SyncedMaterialResolver {
         for (final PatchCodec.Sample sample : samples) {
             register(sample.materialId());
             register(sample.floorMaterialId());
+            register(sample.overlayMaterialId());
+        }
+    }
+
+    /** Registers one bare material id (a flat-baseline top block) for palette sampling. */
+    public void register(final String materialId) {
+        if (materialId == null || materialId.isEmpty()) {
+            return;
+        }
+        if (knownMaterials.add(materialId) || !palette.contains(materialId)) {
+            sample(materialId);
         }
     }
 
@@ -44,15 +57,6 @@ public final class SyncedMaterialResolver {
         palette.clear();
         for (final String material : knownMaterials) {
             sample(material);
-        }
-    }
-
-    private void register(final String materialId) {
-        if (materialId == null || materialId.isEmpty()) {
-            return;
-        }
-        if (knownMaterials.add(materialId) || !palette.contains(materialId)) {
-            sample(materialId);
         }
     }
 
@@ -71,7 +75,12 @@ public final class SyncedMaterialResolver {
             ? BlockPos.ZERO : client.player.blockPosition();
         palette.put(materialId, new SyncedMaterialPalette.Sample(
             sampler.baseColorFor(state, world, reference),
-            sampler.detailProfileFor(state, world, reference),
+            // Authoritative summaries carry no per-column bedrock count, so synced bedrock
+            // stays flat like a local toggle-off roof until the summary protocol grows a
+            // thickness field.
+            state.getBlock() == Blocks.BEDROCK
+                ? MaterialDetailProfile.flat()
+                : sampler.detailProfileFor(state, world, reference),
             tints.syncedTint(state),
             tints.fixedSyncedTint(state),
             state.toString().hashCode()

@@ -1,6 +1,10 @@
 package cn.net.rms.confluxmap.mc.snapshot;
 
+import cn.net.rms.confluxmap.compat.Regs;
 import cn.net.rms.confluxmap.core.color.LightTint;
+import cn.net.rms.confluxmap.core.color.OverlaySlotAssignment;
+import cn.net.rms.confluxmap.core.color.OverlayVisibility;
+import cn.net.rms.confluxmap.core.color.ShadingPipeline;
 import cn.net.rms.confluxmap.core.model.ChunkSnapshot;
 import cn.net.rms.confluxmap.core.model.MapLayer;
 import cn.net.rms.confluxmap.core.model.SurfaceKind;
@@ -14,12 +18,14 @@ import net.minecraft.world.level.block.state.BlockState;
 import net.minecraft.world.level.block.Blocks;
 import net.minecraft.world.level.block.CarpetBlock;
 import net.minecraft.world.level.block.FlowerBlock;
+import net.minecraft.world.level.block.IronBarsBlock;
+import net.minecraft.world.level.block.BushBlock;
 import net.minecraft.world.level.block.LeavesBlock;
 import net.minecraft.world.level.block.SnowLayerBlock;
 import net.minecraft.world.level.block.TallFlowerBlock;
 import net.minecraft.world.level.block.DoublePlantBlock;
+import net.minecraft.world.level.block.TransparentBlock;
 import net.minecraft.client.Minecraft;
-import net.minecraft.client.player.LocalPlayer;
 import net.minecraft.client.multiplayer.ClientLevel;
 import net.minecraft.world.level.material.FluidState;
 import net.minecraft.world.level.block.state.properties.BlockStateProperties;
@@ -29,6 +35,7 @@ import net.minecraft.core.Direction;
 import net.minecraft.util.Mth;
 import net.minecraft.world.level.levelgen.Heightmap;
 import net.minecraft.world.level.LightLayer;
+import net.minecraft.world.level.chunk.LevelChunkSection;
 import net.minecraft.world.level.chunk.status.ChunkStatus;
 import net.minecraft.world.level.chunk.LevelChunk;
 
@@ -49,15 +56,26 @@ public final class McChunkSnapshotFactory {
     private final Minecraft client;
     private final SpriteColorSampler sampler;
     private final ChunkTintSampler tints;
+    private final java.util.function.BooleanSupplier bedrockThicknessShading;
 
     public McChunkSnapshotFactory(
         final Minecraft client,
         final SpriteColorSampler sampler,
         final BiomeTintResolver tintResolver
     ) {
+        this(client, sampler, tintResolver, () -> true);
+    }
+
+    public McChunkSnapshotFactory(
+        final Minecraft client,
+        final SpriteColorSampler sampler,
+        final BiomeTintResolver tintResolver,
+        final java.util.function.BooleanSupplier bedrockThicknessShading
+    ) {
         this.client = client;
         this.sampler = sampler;
         this.tints = new ChunkTintSampler(client, tintResolver);
+        this.bedrockThicknessShading = bedrockThicknessShading;
     }
 
     /**
@@ -93,15 +111,13 @@ public final class McChunkSnapshotFactory {
         tints.beginChunk(world, chunkX, chunkZ);
 
         if (layer.type() == MapLayer.Type.SURFACE || layer.type() == MapLayer.Type.END_SURFACE) {
-            final LocalPlayer player = client.player;
-            final int playerY = player != null ? player.blockPosition().getY() : world.getMinY();
             final Heightmap heightmap = chunk.getOrCreateHeightmapUnprimed(Heightmap.Types.MOTION_BLOCKING);
             final int bottomY = world.getMinY();
-            final int topY = world.getMaxY();
+            final int topY = world.getHeight();
             for (int z = 0; z < 16; z++) {
                 for (int x = 0; x < 16; x++) {
                     sampleColumn(
-                        chunk, world, pos, baseX, baseZ, x, z, bottomY, topY, playerY, heightmap, z * 16 + x,
+                        chunk, world, pos, baseX, baseZ, x, z, bottomY, topY, heightmap, z * 16 + x,
                         surfaceY, fluidDepth, baseArgb, tintArgb, overlayArgb, kind, light,
                         xaeroBaseArgb, xaeroOverlayArgb
                     );
@@ -111,7 +127,7 @@ public final class McChunkSnapshotFactory {
             final boolean netherAmbient = isNetherLayer(layer.type());
             final boolean deferBlockLight = layer.type() == MapLayer.Type.NETHER_CEILING;
             final int worldMinY = world.getMinY();
-            final int worldMaxY = world.getMaxY();
+            final int worldMaxY = world.getHeight();
             for (int z = 0; z < 16; z++) {
                 for (int x = 0; x < 16; x++) {
                     sampleFloorColumn(
@@ -168,7 +184,7 @@ public final class McChunkSnapshotFactory {
         final BlockPos.MutableBlockPos pos = new BlockPos.MutableBlockPos();
         final int baseX = selection.chunkX() << 4;
         final int baseZ = selection.chunkZ() << 4;
-        final int worldMaxY = world.getMaxY();
+        final int worldMaxY = world.getHeight();
         final boolean netherAmbient = isNetherLayer(layer.type());
         tints.beginChunk(world, selection.chunkX(), selection.chunkZ());
         for (int z = 0; z < 16; z++) {
@@ -246,7 +262,6 @@ public final class McChunkSnapshotFactory {
         final int localZ,
         final int bottomY,
         final int topY,
-        final int playerY,
         final Heightmap heightmap,
         final int index,
         final short[] surfaceY,
@@ -264,7 +279,7 @@ public final class McChunkSnapshotFactory {
 
         int y = heightmap.getFirstAvailable(localX, localZ) - 1;
         if (y < bottomY) {
-            writeVoid(index, playerY, surfaceY, kind, baseArgb, tintArgb, overlayArgb, fluidDepth, light);
+            writeVoidColumn(index, surfaceY, kind, baseArgb, tintArgb, overlayArgb, fluidDepth, light);
             return;
         }
         pos.set(worldX, y, worldZ);
@@ -289,44 +304,56 @@ public final class McChunkSnapshotFactory {
             state = collapse(chunk.getBlockState(pos));
         }
         if (!isOpaque(state, world, pos)) {
-            // World bottom reached and never found an opaque block: §1 void fallback.
-            writeVoid(index, playerY, surfaceY, kind, baseArgb, tintArgb, overlayArgb, fluidDepth, light);
+            // Level bottom reached without an opaque block. A glass-family cover that runs out
+            // of world (quadra-gen's flat glass quadrant, glass bridges over the void) is itself
+            // the visible surface - the same promotion the companion's summarizer applies -
+            // instead of the §1 void fallback, which would render the glass transparent.
+            if (isLightPermeableCover(topOverlay)) {
+                writeSurface(
+                    index, worldX, worldZ, topY, pos, world,
+                    topOverlay, topOverlayY, classifySurfaceKind(topOverlay.getBlock()),
+                    null, 0, null, 0, null, 0, false,
+                    surfaceY, fluidDepth, baseArgb, tintArgb, overlayArgb, kind, light,
+                    xaeroBaseArgb, xaeroOverlayArgb
+                );
+                // The promoted cover keeps its texture's own translucency: a translucent glass
+                // floor over the void tints the map background like the glass tints the world
+                // beneath it, instead of painting an opaque plate.
+                if (isXaeroInvisible(topOverlay)) {
+                    xaeroBaseArgb[index] = Argb.TRANSPARENT;
+                    xaeroOverlayArgb[index] = Argb.TRANSPARENT;
+                }
+                return;
+            }
+            // §1 void fallback.
+            writeVoidColumn(index, surfaceY, kind, baseArgb, tintArgb, overlayArgb, fluidDepth, light);
             return;
         }
 
-        BlockState surfaceState = state;
-        int surfaceYVal = y;
-        BlockState transparentOverlay = null;
-        int transparentOverlayY = 0;
-        BlockState foliageOverlay = null;
-        int foliageOverlayY = 0;
-
+        // Both branches interpret the column through the shared OverlaySlotAssignment seam: the
+        // slot rules (air never fills a slot, thin-cover promotion, transparent/foliage split)
+        // live exactly once there instead of being re-derived per branch here.
+        final OverlaySlotAssignment<BlockState> slots;
         if (!descended) {
-            pos.set(worldX, surfaceYVal + 1, worldZ);
+            pos.set(worldX, y + 1, worldZ);
             final BlockState above = collapse(chunk.getBlockState(pos));
-            if (isPromotedSurfaceCover(above)) {
-                surfaceState = above;
-                surfaceYVal++;
-            } else if (!above.isAir()) {
-                foliageOverlay = above;
-                foliageOverlayY = surfaceYVal + 1;
-            }
-        } else if (isPromotedSurfaceCover(bottomOverlay)) {
-            // Thin surface-cover promotion: the foliage candidate becomes the surface itself.
-            surfaceState = bottomOverlay;
-            surfaceYVal = bottomOverlayY;
-            if (topOverlayY != bottomOverlayY) {
-                transparentOverlay = topOverlay;
-                transparentOverlayY = topOverlayY;
-            }
+            slots = OverlaySlotAssignment.forSurfaceColumn(
+                state, y, above, BlockState::isAir, McChunkSnapshotFactory::isPromotedSurfaceCover
+            );
         } else {
-            transparentOverlay = topOverlay;
-            transparentOverlayY = topOverlayY;
-            if (topOverlayY != bottomOverlayY) {
-                foliageOverlay = bottomOverlay;
-                foliageOverlayY = bottomOverlayY;
-            }
+            slots = OverlaySlotAssignment.forDescent(
+                state, y, topOverlay, topOverlayY, bottomOverlay, bottomOverlayY,
+                BlockState::isAir, McChunkSnapshotFactory::isPromotedSurfaceCover
+            );
         }
+        final BlockState surfaceState = slots.surface();
+        final int surfaceYVal = slots.surfaceY();
+        // Mutable copies: the seafloor scan below fills still-empty overlay slots with
+        // capturable underwater layers (coral, submerged decoration) beneath the fluid.
+        BlockState transparentOverlay = slots.transparentOverlay();
+        int transparentOverlayY = slots.transparentOverlayY();
+        BlockState foliageOverlay = slots.foliageOverlay();
+        int foliageOverlayY = slots.foliageOverlayY();
 
         final Block surfaceBlock = surfaceState.getBlock();
         final SurfaceKind resolvedKind = classifySurfaceKind(surfaceBlock);
@@ -413,7 +440,19 @@ public final class McChunkSnapshotFactory {
                 waterColor = Argb.over(coloredLayer(transparentOverlay, transparentOverlayY, worldX, worldZ, pos, world), waterColor);
             }
             baseArgb[index] = waterColor;
-            xaeroBaseArgb[index] = Argb.multiply(xaeroSurfaceBaseColor, surfaceTintColor);
+            // Mirror the composition above, gated by the same Xaero marker rule as the land
+            // branch: measured against the real Xaero mod, it draws a transparent cover (glass)
+            // on water both flush and with an air gap above, but the transparent slot carries
+            // the top-most crossed block - a torch standing on a glass bridge over water must
+            // stay hidden exactly like a torch over land.
+            int xaeroWaterColor = Argb.multiply(xaeroSurfaceBaseColor, surfaceTintColor);
+            if (transparentOverlay != null && !isXaeroInvisible(transparentOverlay)) {
+                xaeroWaterColor = Argb.over(
+                    xaeroColoredLayer(transparentOverlay, transparentOverlayY, worldX, worldZ, pos, world),
+                    xaeroWaterColor
+                );
+            }
+            xaeroBaseArgb[index] = xaeroWaterColor;
             tintArgb[index] = 0xFFFFFFFF;
 
             int floorComposite = Argb.TRANSPARENT;
@@ -423,9 +462,11 @@ public final class McChunkSnapshotFactory {
                 floorComposite = coloredLayer(seafloorState, seafloorY, worldX, worldZ, pos, world);
                 xaeroFloorComposite = xaeroColoredLayer(seafloorState, seafloorY, worldX, worldZ, pos, world);
                 if (foliageOverlay != null) {
-                    floorComposite = Argb.over(
-                        coloredLayer(foliageOverlay, foliageOverlayY, worldX, worldZ, pos, world), floorComposite
-                    );
+                    if (OverlayVisibility.overlayVisible(categorizeOverlay(foliageOverlay), false, false)) {
+                        floorComposite = Argb.over(
+                            coloredLayer(foliageOverlay, foliageOverlayY, worldX, worldZ, pos, world), floorComposite
+                        );
+                    }
                     if (!isXaeroInvisible(foliageOverlay)) {
                         xaeroFloorComposite = Argb.over(
                             xaeroColoredLayer(foliageOverlay, foliageOverlayY, worldX, worldZ, pos, world),
@@ -446,7 +487,9 @@ public final class McChunkSnapshotFactory {
             int overlayComposite = Argb.TRANSPARENT;
             int xaeroOverlayComposite = Argb.TRANSPARENT;
             if (foliageOverlay != null) {
-                overlayComposite = coloredLayer(foliageOverlay, foliageOverlayY, worldX, worldZ, pos, world);
+                if (OverlayVisibility.overlayVisible(categorizeOverlay(foliageOverlay), false, false)) {
+                    overlayComposite = coloredLayer(foliageOverlay, foliageOverlayY, worldX, worldZ, pos, world);
+                }
                 if (!isXaeroInvisible(foliageOverlay)) {
                     xaeroOverlayComposite = xaeroColoredLayer(
                         foliageOverlay, foliageOverlayY, worldX, worldZ, pos, world
@@ -503,18 +546,80 @@ public final class McChunkSnapshotFactory {
         return Argb.multiply(base, tint);
     }
 
-    /** Mirrors Xaero's default surface scan exclusions for decoration above the real terrain. */
+    /**
+     * Whether the Xaero-withStyle arrays must drop this decoration: the shared
+     * {@link OverlayVisibility} policy in Xaero style, mirroring Xaero's own scan exclusions
+     * (the torch marker family and bulk foliage vanish so that style shows the surface
+     * beneath them; glass is drawn, as measured against the real mod).
+     */
     private static boolean isXaeroInvisible(final BlockState state) {
+        return !OverlayVisibility.overlayVisible(categorizeOverlay(state), false, true);
+    }
+
+    /**
+     * Instance-based classification onto {@link OverlayVisibility.Category} - the authoritative
+     * mapping for live capture, richer than the name-based {@link OverlayVisibility#categorize}
+     * because block instances also recognize vegetation, which material ids cannot express.
+     * The 1.17.1 registry sweep test pins the two representations together; any block the name
+     * rules classify must land in the same category here, with the sweep's allowlist documenting
+     * the few that cannot (and why they are unreachable as overlays).
+     */
+    static OverlayVisibility.Category categorizeOverlay(final BlockState state) {
         final Block block = state.getBlock();
+        final boolean flower = isFlower(state, block);
         final boolean shortGrass = block == Blocks.SHORT_GRASS;
-        if (block == Blocks.TORCH || shortGrass || block == Blocks.GLASS || block == Blocks.GLASS_PANE) {
-            return true;
+        if (shortGrass || block == Blocks.FERN || (block instanceof DoublePlantBlock && !flower)) {
+            return OverlayVisibility.Category.BULK_FOLIAGE;
         }
-        final boolean flower = block instanceof FlowerBlock || block instanceof TallFlowerBlock
+        final String path = Regs.blockId(block).getPath();
+        for (final String suffix : OverlayVisibility.MARKER_SUFFIXES) {
+            if (path.endsWith(suffix)) {
+                return OverlayVisibility.Category.MARKER;
+            }
+        }
+        if (flower || block instanceof BushBlock || isFloorVegetation(path)) {
+            return OverlayVisibility.Category.VEGETATION;
+        }
+        return OverlayVisibility.Category.OTHER;
+    }
+
+    private static boolean isFlower(final BlockState state, final Block block) {
+        return block instanceof FlowerBlock || block instanceof TallFlowerBlock
             || state.is(BlockTags.FLOWERS)
             || block instanceof net.minecraft.world.level.block.PitcherCropBlock
             ;
-        return block instanceof DoublePlantBlock && !flower;
+    }
+
+    /**
+     * Cave/nether floor vegetation the block hierarchy does not expose as {@link BushBlock}
+     * (full-block and nether-ecology plants). Matched on registry path, never on {@code Blocks}
+     * constants: resolving those at class-init time would force vanilla's block registry to
+     * initialize whenever this factory loads, which explodes under the 1.18+ bare test bootstrap.
+     */
+    private static boolean isFloorVegetation(final String path) {
+        switch (path) {
+            case "azalea":
+            case "flowering_azalea":
+            case "big_dripleaf":
+            case "spore_blossom":
+            case "brown_mushroom":
+            case "red_mushroom":
+            case "nether_wart":
+            case "cave_vines":
+            case "cave_vines_plant":
+            case "weeping_vines":
+            case "weeping_vines_plant":
+            case "twisting_vines":
+            case "twisting_vines_plant":
+            case "crimson_roots":
+            case "warped_roots":
+            case "nether_sprouts":
+            case "crimson_fungus":
+            case "warped_fungus":
+                return true;
+            default:
+                return false;
+        }
     }
 
     /**
@@ -630,18 +735,31 @@ public final class McChunkSnapshotFactory {
         // synchronized roof pixels use that same representation and calculation.
         final int litColor;
         if (deferBlockLight) {
-            litColor = applyAmbientLight(Argb.multiply(solidBase, solidTint), netherAmbient);
-            light[index] = sampleBlockLightAbove(
-                world, pos, worldX, solidY, worldZ, worldMaxY
-            );
+            final int base;
+            if (solidBlock == Blocks.BEDROCK) {
+                final int pureBedrockBase = sampler.baseColorFor(solidState, world, pos);
+                if (bedrockThicknessShading.getAsBoolean()) {
+                    final int bedrockCount = countBedrockRoofThickness(chunk, localX, solidY, localZ, worldMinY);
+                    final float thicknessMultiplier = ShadingPipeline.bedrockThicknessMultiplier(bedrockCount);
+                    base = ShadingPipeline.applyBrightnessMultiplier(Argb.multiply(pureBedrockBase, solidTint), thicknessMultiplier);
+                } else {
+                    base = Argb.multiply(pureBedrockBase, solidTint);
+                }
+            } else {
+                base = Argb.multiply(solidBase, solidTint);
+            }
+            litColor = applyAmbientLight(base, netherAmbient);
         } else {
-            litColor = applyLight(
-                Argb.multiply(solidBase, solidTint), pos, world, solidBlock, netherAmbient
-            );
-            light[index] = sampleBlockLightAbove(
-                world, pos, worldX, solidY, worldZ, worldMaxY
-            );
+            // Bedrock stays flat outside the ceiling: synced summaries classify all bedrock
+            // alike, so a noised local floor would diverge from the flat authoritative palette.
+            final int base = solidBlock == Blocks.BEDROCK
+                ? Argb.multiply(sampler.baseColorFor(solidState, world, pos), solidTint)
+                : Argb.multiply(solidBase, solidTint);
+            litColor = applyLight(base, pos, world, solidBlock, netherAmbient);
         }
+        light[index] = sampleBlockLightAbove(
+            world, pos, worldX, solidY, worldZ, worldMaxY
+        );
 
         int overlayColor = Argb.TRANSPARENT;
         if (solidY + 1 < worldMaxY) {
@@ -664,17 +782,78 @@ public final class McChunkSnapshotFactory {
         fluidDepth[index] = 0;
     }
 
+    /**
+     * Counts bedrock blocks in the inclusive {@code [minY, solidY]} window downward from solidY.
+     * solidY itself is already confirmed to be bedrock by the caller, so counting starts at one.
+     * Discrete counting rather than run-abort keeps modified sandwich columns (air or netherrack
+     * pockets between bedrock layers) honest.
+     */
+    static int countBedrockThickness(final java.util.function.IntPredicate bedrockAt, final int solidY, final int minY) {
+        int count = 1;
+        for (int y = solidY - 1; y >= minY; y--) {
+            if (bedrockAt.test(y)) {
+                count++;
+            }
+        }
+        return count;
+    }
+
+    /**
+     * Probes the {@code [solidY - 4, solidY]} thickness window through per-y section lookup. A
+     * single-section lookup indexed with {@code y & 15} would wrap to the top of the wrong
+     * section once the window crosses a section boundary, which datapack ceiling dimensions can
+     * place within reach even though vanilla Nether geometry never does.
+     */
+    static int countBedrockRoofThickness(
+        final LevelChunk chunk,
+        final int localX,
+        final int solidY,
+        final int localZ,
+        final int worldMinY
+    ) {
+        final LevelChunkSection[] sections = chunk.getSections();
+        return countBedrockThickness(
+            y -> bedrockAt(sections, chunk.getSectionIndex(y), localX, y, localZ, worldMinY),
+            solidY,
+            Math.max(worldMinY, solidY - 4)
+        );
+    }
+
+    private static boolean bedrockAt(
+        final LevelChunkSection[] sections,
+        final int sectionIndex,
+        final int localX,
+        final int y,
+        final int localZ,
+        final int worldMinY
+    ) {
+        if (sectionIndex < 0 || sectionIndex >= sections.length) {
+            return false;
+        }
+        final LevelChunkSection section = sections[sectionIndex];
+        if (section.hasOnlyAir()) {
+            return false;
+        }
+        return section.getBlockState(localX, (y - worldMinY) & 15, localZ).is(Blocks.BEDROCK);
+    }
+
     /** §2.1's pivot-scan open test: non-opaque (§1's opacity test) and not lava. */
     static boolean isOpenForFloorScan(final BlockState state, final ClientLevel world, final BlockPos pos) {
         return !isOpaque(state, world, pos) && state.getBlock() != Blocks.LAVA;
     }
 
-    /** §2.1's overhang/foliage overlay eligibility: snow, or anything that isn't air/lava/water. */
+    /**
+     * §2.1's overhang/foliage overlay eligibility: snow, or anything that isn't air/lava/water,
+     * then filtered by the shared {@link OverlayVisibility} policy for floor-scan layers -
+     * bulk foliage and vegetation never render here, so cave floors stay clean material colour
+     * instead of speckled with plant dots.
+     */
     static boolean isFloorOverlayCandidate(final BlockState state) {
         if (state.getBlock() instanceof SnowLayerBlock) {
             return true;
         }
-        return !state.isAir() && state.getBlock() != Blocks.LAVA && state.getBlock() != Blocks.WATER;
+        return !state.isAir() && state.getBlock() != Blocks.LAVA && state.getBlock() != Blocks.WATER
+            && OverlayVisibility.overlayVisible(categorizeOverlay(state), true, false);
     }
 
     /** Thin snow and carpets remain the visible top even when MOTION_BLOCKING ignores them. */
@@ -683,8 +862,24 @@ public final class McChunkSnapshotFactory {
         return block instanceof SnowLayerBlock || block instanceof CarpetBlock;
     }
 
+    /**
+     * The glass family the heightmap counts as the surface but the opacity scan descends
+     * through - the same blocks the companion's {@code ChunkColumnSummarizer} treats as
+     * light-permeable covers. Tinted glass blocks light and stays the surface via opacity.
+     */
+    private static boolean isLightPermeableCover(final BlockState state) {
+        if (state == null) {
+            return false;
+        }
+        final Block block = state.getBlock();
+        if (block == Blocks.TINTED_GLASS) {
+            return false;
+        }
+        return block instanceof TransparentBlock || block instanceof IronBarsBlock;
+    }
+
     /** §2/§6 unified block-type classification, shared by the surface scan and the floor scan. */
-    private static SurfaceKind classifySurfaceKind(final Block surfaceBlock) {
+    static SurfaceKind classifySurfaceKind(final Block surfaceBlock) {
         if (surfaceBlock == Blocks.LAVA) {
             return SurfaceKind.LAVA;
         } else if (surfaceBlock == Blocks.WATER) {
@@ -750,9 +945,14 @@ public final class McChunkSnapshotFactory {
         return (byte) Mth.clamp(world.getBrightness(LightLayer.BLOCK, pos), 0, 15);
     }
 
-    private void writeVoid(
+    /**
+     * Floor-scan "no floor found" fallback: keeps the pivot-relative placeholder Y so the
+     * cave/nether layers stay pivot-anchored (see {@link #sampleFloorColumn}). Top-down
+     * surface scans must use {@link #writeVoidColumn} instead - their columns are known-empty.
+     */
+    private static void writeVoid(
         final int index,
-        final int playerY,
+        final int pivotY,
         final short[] surfaceY,
         final byte[] kind,
         final int[] baseArgb,
@@ -761,7 +961,28 @@ public final class McChunkSnapshotFactory {
         final byte[] fluidDepth,
         final byte[] light
     ) {
-        surfaceY[index] = clampSurfaceY(playerY + 1);
+        surfaceY[index] = clampSurfaceY(pivotY + 1);
+        writeVoidColumn(index, surfaceY, kind, baseArgb, tintArgb, overlayArgb, fluidDepth, light);
+    }
+
+    /**
+     * §1 void fallback for the top-down scan: the column is authoritatively empty, so it
+     * stores {@link ChunkSnapshot#NO_SURFACE} instead of a fabricated player-relative Y.
+     * Lookups then read the column as "known, no surface" - position menus report no
+     * height rather than a fake one, and relief shading treats it as an absent neighbor
+     * instead of a fake cliff next to real terrain.
+     */
+    private static void writeVoidColumn(
+        final int index,
+        final short[] surfaceY,
+        final byte[] kind,
+        final int[] baseArgb,
+        final int[] tintArgb,
+        final int[] overlayArgb,
+        final byte[] fluidDepth,
+        final byte[] light
+    ) {
+        surfaceY[index] = ChunkSnapshot.NO_SURFACE;
         kind[index] = (byte) SurfaceKind.VOID.ordinal();
         baseArgb[index] = Argb.TRANSPARENT;
         tintArgb[index] = 0xFFFFFFFF;
@@ -788,8 +1009,8 @@ public final class McChunkSnapshotFactory {
         if (!state.canOcclude()) {
             return false;
         }
-        return state.isFaceSturdy(world, pos, Direction.DOWN)
-            || state.isFaceSturdy(world, pos, Direction.UP);
+        return state.isSolidRender()
+            || state.isSolidRender();
     }
 
     /** §1 seafloor-scan continuation: dampening < 5 and not leaves. */

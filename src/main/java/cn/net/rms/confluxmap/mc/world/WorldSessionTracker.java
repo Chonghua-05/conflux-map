@@ -1,6 +1,7 @@
 package cn.net.rms.confluxmap.mc.world;
 
 import cn.net.rms.confluxmap.ConfluxMapMod;
+import cn.net.rms.confluxmap.compat.Dimensions;
 import cn.net.rms.confluxmap.core.model.DimensionId;
 import cn.net.rms.confluxmap.core.model.WorldIdentity;
 import cn.net.rms.confluxmap.core.multiworld.ServerAliasResolver;
@@ -15,13 +16,12 @@ import java.util.function.Consumer;
 import cn.net.rms.confluxmap.neoforge.compat.ClientTickEvents;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.multiplayer.ServerData;
-import net.minecraft.resources.Identifier;
 import net.minecraft.world.level.storage.LevelResource;
 
 /**
  * Watches the client for world joins, disconnects, dimension changes and identity rotations
  * and rotates the {@link SessionGuard} session accordingly. Detection is tick-based so it also
- * covers paths that fire no connection event (e.g. some proxy setups).
+ * covers paths that fire no Fabric event (e.g. some proxy setups).
  *
  * <p>Identity rotation: when a companion server is active, its advertised {@code worldId}
  * overrides the non-companion fallback. If a proxy world switch re-fires JOIN and the server
@@ -56,8 +56,8 @@ public final class WorldSessionTracker {
     }
 
     /**
-     * @param aliases resolves the typed address to the namespace its data lives in, merging the
-     *                several addresses of one server; null keeps the raw address, as before
+     * @param aliases resolves the typed ip to the namespace its data lives in, merging the
+     *                several addresses of one server; null keeps the raw ip, as before
      */
     public WorldSessionTracker(
         final SessionGuard guard,
@@ -113,7 +113,7 @@ public final class WorldSessionTracker {
             }
             return;
         }
-        final DimensionId dimension = toDimensionId(client.level.dimension().identifier());
+        final DimensionId dimension = Dimensions.of(client.level);
         updateSession(resolveWorldIdentity(client), dimension);
     }
 
@@ -162,10 +162,6 @@ public final class WorldSessionTracker {
         }
     }
 
-    private static DimensionId toDimensionId(final Identifier id) {
-        return DimensionId.of(id.getNamespace(), id.getPath());
-    }
-
     /**
      * Resolves the client's current world identity. Local sessions use the save directory; remote
      * sessions delegate handshake state and companion world ids to {@link CompanionSession}.
@@ -185,18 +181,18 @@ public final class WorldSessionTracker {
         if (clientMultiworld != null && clientMultiworld.migrationInProgress()) {
             return Optional.empty();
         }
-        final String address = canonicalAddress(resolveAddress(client));
+        final String ip = canonicalAddress(resolveAddress(client));
         if (companion.state() == CompanionSession.State.ACTIVE
             || companion.state() == CompanionSession.State.HELLO_SENT
             || clientMultiworld == null) {
-            return companion.resolveWorldIdentity(address);
+            return companion.resolveWorldIdentity(ip);
         }
-        return clientMultiworld.resolve(address);
+        return clientMultiworld.resolve(ip);
     }
 
     /**
-     * Maps the typed address onto the storage namespace that owns its data. Resolution is cached
-     * against the address and the companion ids it was resolved with, because this runs every tick
+     * Maps the typed ip onto the storage namespace that owns its data. Resolution is cached
+     * against the ip and the companion ids it was resolved with, because this runs every tick
      * while only those inputs can change the answer.
      */
     String canonicalAddress(final String rawAddress) {
@@ -233,7 +229,7 @@ public final class WorldSessionTracker {
     ) {
         switch (resolution.origin()) {
             case LEARNED -> ConfluxMapMod.LOGGER.info(
-                "Recognized {} as an address of {} from its companion world id; sharing its map data",
+                "Recognized {} as an ip of {} from its companion world id; sharing its map data",
                 rawAddress, resolution.canonicalId()
             );
             case CONFLICT -> ConfluxMapMod.LOGGER.info(

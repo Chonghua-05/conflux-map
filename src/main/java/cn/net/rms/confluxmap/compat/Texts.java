@@ -1,17 +1,19 @@
 package cn.net.rms.confluxmap.compat;
+
 import java.net.URI;
 import net.minecraft.network.chat.ClickEvent;
 import net.minecraft.network.chat.HoverEvent;
 import net.minecraft.network.chat.MutableComponent;
 import net.minecraft.network.chat.Component;
 
+
 /**
  * The one place that knows how this Minecraft version builds a text component.
  *
- * <p>1.19 deleted {@code LiteralText}/{@code TranslatableText} in favour of the {@code Text}
+ * <p>1.19 deleted {@code Component}/{@code TranslatableText} in favour of the {@code Component}
  * static factories. That rename reaches ~135 call sites across the UI, chat and command code, so
  * routing every one of them through these two methods keeps the version fork to a single seam
- * instead of scattering version-specific branches over many files.
+ * instead of scattering preprocessor branches over sixteen files.
  */
 public final class Texts {
     private Texts() {

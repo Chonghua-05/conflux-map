@@ -4,176 +4,58 @@ import cn.net.rms.confluxmap.core.util.Argb;
 import com.mojang.blaze3d.systems.RenderSystem;
 import java.util.List;
 import java.util.Optional;
-import com.mojang.blaze3d.pipeline.ColorTargetState;
-import com.mojang.blaze3d.pipeline.RenderPipeline;
-import com.mojang.blaze3d.shaders.UniformType;
-import net.minecraft.client.Minecraft;
-import net.minecraft.client.gui.Font;
-import net.minecraft.client.renderer.GameRenderer;
-import com.mojang.blaze3d.textures.GpuTextureView;
-import com.mojang.blaze3d.vertex.VertexFormat;
-import com.mojang.blaze3d.pipeline.RenderTarget;
+import com.mojang.renderpearl.api.pipeline.ColorTargetState;
+import com.mojang.renderpearl.api.pipeline.RenderPipeline;
 import net.minecraft.client.renderer.RenderPipelines;
-import net.minecraft.client.gui.navigation.ScreenRectangle;
-import net.minecraft.client.renderer.state.gui.GuiRenderState;
-import net.minecraft.client.gui.render.TextureSetup;
-import com.mojang.blaze3d.textures.AddressMode;
-import com.mojang.blaze3d.textures.FilterMode;
-import com.mojang.blaze3d.textures.GpuSampler;
-import com.mojang.blaze3d.systems.RenderPass;
-import net.minecraft.client.renderer.MultiBufferSource;
+import net.minecraft.client.Minecraft;
+import net.minecraft.client.renderer.GameRenderer;
 import com.mojang.blaze3d.vertex.DefaultVertexFormat;
-import com.mojang.blaze3d.platform.Window;
 import com.mojang.blaze3d.vertex.PoseStack;
-import net.minecraft.resources.Identifier;
 import org.joml.Matrix4f;
 import org.joml.Quaternionf;
 
 /**
- * Core-shader helpers for drawing dynamically-generated textures (map tiles) as flat GUI quads.
- * Render thread only; every call here assumes a current GL context.
- *
- * <p>The version differences live in {@link Mesh} (batch setup/teardown) and in the extra
- * mappings for the {@code GameRenderer} shader accessors, so the geometry below is one shared
+ * Flat GUI and world-space shape emission shared by the screens, HUD, radar, and world
+ * overlay passes. Render thread only; every call here assumes a current GL context. The
+ * version differences live in {@link Mesh} (batch setup/teardown) and in the extra
+ * mappings for the {@code GameRenderer} shader accessors, so the geometry is one shared
  * copy across every supported Minecraft version.
  */
-public final class RenderUtil {
+public final class GuiShapes {
     private static final RenderPipeline GUI_PRESERVE_DESTINATION_ALPHA =
         createGuiPreserveDestinationAlphaPipeline();
     private static final RenderPipeline GUI_REPLACE = createGuiReplacePipeline();
-    private static RenderTarget drawTarget;
-    private static boolean scissorEnabled;
-    private static int scissorX;
-    private static int scissorY;
-    private static int scissorWidth;
-    private static int scissorHeight;
-    private static GuiRenderState guiState;
-    private static GpuTextureView boundTexture;
-    // The GUI renderer clips in scaled GUI units, the render pass in framebuffer pixels.
-    private static int guiScissorX;
-    private static int guiScissorY;
-    private static int guiScissorWidth;
-    private static int guiScissorHeight;
-    private static GpuSampler boundSampler;
 
-    private RenderUtil() {
-    }
-
-    /** Selects the flat position+texture shader and standard alpha blending, for textured GUI quads. */
-    public static void beginTexturedQuads() {
-    }
-
-    public static void bindTexture(final int glId) {
-    }
-    public static void bindTexture(final GpuTextureView texture) {
-        bindTexture(
-            texture,
-            RenderSystem.getSamplerCache().getSampler(
-                AddressMode.CLAMP_TO_EDGE,
-                AddressMode.CLAMP_TO_EDGE,
-                FilterMode.NEAREST,
-                FilterMode.NEAREST,
-                false
-            )
-        );
-    }
-
-    public static void bindTexture(final GpuTextureView texture, final GpuSampler sampler) {
-        boundTexture = texture;
-        boundSampler = sampler;
-    }
-
-    static GpuTextureView boundTexture() {
-        return boundTexture;
-    }
-
-    static GpuSampler boundSampler() {
-        return boundSampler;
-    }
-    static RenderTarget drawTarget() {
-        return drawTarget == null ? Minecraft.getInstance().getMainRenderTarget() : drawTarget;
-    }
-
-    static void setDrawTarget(final RenderTarget target) {
-        drawTarget = target;
-    }
-
-    static void applyScissor(final RenderPass pass) {
-        if (scissorEnabled) {
-            pass.enableScissor(scissorX, scissorY, scissorWidth, scissorHeight);
-        }
-    }
     /**
-     * Points GUI-space batches at the element list the game is currently collecting. Set once
-     * per {@code GuiDraw}, which is the only way into this mod's screen and HUD drawing.
+     * Alpha multiplier of the interface transitions' reveal frames, applied to every color
+     * emitted here so a fading screen scales its fills, tints, and textures alike. Set only
+     * through {@code GuiDraw.beginReveal}/{@code endReveal}, which pair it in a try/finally;
+     * 1 keeps every color on the unchanged fast path. Render thread only.
      */
-    public static void setGuiState(final GuiRenderState state) {
-        guiState = state;
+    private static float revealAlpha = 1.0f;
+
+    public static void setRevealAlpha(final float alpha) {
+        revealAlpha = Math.max(0.0f, Math.min(1.0f, alpha));
     }
 
-    /** Null while an {@link OffscreenCanvas} owns the draws - those target its own framebuffer. */
-    static GuiRenderState guiState() {
-        return drawTarget == null ? guiState : null;
+    public static float revealAlpha() {
+        return revealAlpha;
     }
 
-    static ScreenRectangle guiScissor() {
-        return scissorEnabled
-            ? new ScreenRectangle(guiScissorX, guiScissorY, guiScissorWidth, guiScissorHeight)
-            : null;
+    private static int reveal(final int argbColor) {
+        return revealAlpha == 1.0f ? argbColor : Argb.scaleAlpha(argbColor, revealAlpha);
     }
 
-    static TextureSetup guiTextureSetup(final boolean textured) {
-        if (!textured || boundTexture == null) {
-            return TextureSetup.noTexture();
-        }
-        return TextureSetup.singleTexture(boundTexture, boundSampler);
-    }
 
     public static void rotateZ(final PoseStack matrices, final float degrees) {
-        matrices.mulPose(new Quaternionf().rotationZ((float) Math.toRadians(degrees)));
-    }
-
-    /** Saves the world ModelView and normalizes only the legacy LAST-event state. */
-    public static void pushWorldHudModelView() {
-        RenderSystem.getModelViewStack().pushMatrix();
-    }
-
-    /** Restores the global model-view saved by {@link #pushWorldHudModelView()}. */
-    public static void popModelView() {
-        RenderSystem.getModelViewStack().popMatrix();
-    }
-    /** Draws fully-lit marker text through the versioned text-layer argument. */
-    public static void drawSeeThroughText(
-        final Font textRenderer,
-        final String text,
-        final float x,
-        final float y,
-        final int color,
-        final PoseStack matrices,
-        final MultiBufferSource.BufferSource immediate,
-        final int light
-    ) {
-        textRenderer.drawInBatch(
-            text, x, y, color, false, matrices.last().pose(), immediate,
-            Font.DisplayMode.SEE_THROUGH, 0, light
-        );
-    }
-
-    /**
-     * Binds an already-vanilla-managed texture (player skin, mob texture, etc.) by identifier.
-     *
-     * <p>Core shaders sample what {@code RenderSystem.setShaderTexture} points at, not the
-     * legacy {@code TextureManager} bind - using the latter leaves unit 0 on whatever was
-     * drawn last (map tiles), which is exactly the "icons show dark terrain" bug.
-     */
-    public static void bindTexture(final Minecraft client, final Identifier id) {
-        final var texture = client.getTextureManager().getTexture(id);
-        bindTexture(texture.getTextureView(), texture.getSampler());
+        // 26.3 dropped mulPose(Quaternionf); rotate through a matrix instead.
+        matrices.mulPose(new org.joml.Matrix4f().rotation(
+            new Quaternionf().rotationZ((float) Math.toRadians(degrees))));
     }
 
     /**
      * Draws one axis-aligned textured quad in GUI space. Must be called between
-     * {@link #beginTexturedQuads()} and a bound texture ({@link #bindTexture(int)}).
+     * {@link TextureBinds#beginTexturedQuads()} and a bound texture ({@link TextureBinds#bindTexture(int)}).
      */
     public static void drawQuad(
         final PoseStack matrices,
@@ -186,6 +68,15 @@ public final class RenderUtil {
         final float u1,
         final float v1
     ) {
+        if (revealAlpha != 1.0f) {
+            // POSITION_TEXTURE carries no per-vertex color, so a reveal frame reroutes
+            // through the tinted twin instead of touching global shader color state.
+            drawTintedQuad(
+                matrices, x, y, width, height, u0, v0, u1, v1,
+                Argb.scaleAlpha(0xFFFFFFFF, revealAlpha)
+            );
+            return;
+        }
         final var model = matrices.last().pose();
         final Mesh mesh = Mesh.beginGui(Mesh.Mode.QUADS, Mesh.tintedTextureFormat());
         mesh.tintedVertex(model, x, y + height, 0, u0, v1, 1f, 1f, 1f, 1f);
@@ -197,7 +88,7 @@ public final class RenderUtil {
 
     /**
      * Self-contained (sets its own shader/blend, unlike {@link #drawQuad} which expects
-     * {@link #beginTexturedQuads()} to have been called by a tile-drawing loop) single-texture
+     * {@link TextureBinds#beginTexturedQuads()} to have been called by a tile-drawing loop) single-texture
      * quad with a per-vertex ARGB tint, multiplied over the sampled texture color. Used for radar
      * entity icons: alpha carries the above/below elevation fade, RGB carries the brightness dim,
      * matching the plain {@link #fillRect}/{@link #fillTriangle}/{@link #drawRing} markers'
@@ -215,10 +106,11 @@ public final class RenderUtil {
         final float v1,
         final int argbColor
     ) {
-        final float a = Argb.alpha(argbColor) / 255f;
-        final float r = Argb.red(argbColor) / 255f;
-        final float g = Argb.green(argbColor) / 255f;
-        final float b = Argb.blue(argbColor) / 255f;
+        final int revealedColor = reveal(argbColor);
+        final float a = Argb.alpha(revealedColor) / 255f;
+        final float r = Argb.red(revealedColor) / 255f;
+        final float g = Argb.green(revealedColor) / 255f;
+        final float b = Argb.blue(revealedColor) / 255f;
         final var model = matrices.last().pose();
         final Mesh mesh = Mesh.beginGui(Mesh.Mode.QUADS, Mesh.tintedTextureFormat());
         mesh.tintedVertex(model, x, y + height, 0, u0, v1, r, g, b, a);
@@ -255,7 +147,7 @@ public final class RenderUtil {
         final int copies = diameter * diameter - 1;
         // All shifted silhouettes can cover the same target pixel. Give each draw only the
         // per-layer alpha that converges on the requested fade after source-over accumulation.
-        final float a = Argb.alphaForRepeatedOverdraw(opacity, copies);
+        final float a = Argb.alphaForRepeatedOverdraw(opacity * revealAlpha, copies);
         final var model = matrices.last().pose();
         final Mesh mesh = Mesh.beginGui(Mesh.Mode.QUADS, Mesh.tintedTextureFormat());
         for (int offsetY = -radius; offsetY <= radius; offsetY++) {
@@ -289,10 +181,11 @@ public final class RenderUtil {
     ) {
         final int segments = Math.max(32, (int) Math.ceil(outerRadius * Math.PI / 2));
         final float innerRadius = Math.max(0f, outerRadius - thickness);
-        final float a = Argb.alpha(argbColor) / 255f;
-        final float r = Argb.red(argbColor) / 255f;
-        final float g = Argb.green(argbColor) / 255f;
-        final float b = Argb.blue(argbColor) / 255f;
+        final int revealedColor = reveal(argbColor);
+        final float a = Argb.alpha(revealedColor) / 255f;
+        final float r = Argb.red(revealedColor) / 255f;
+        final float g = Argb.green(revealedColor) / 255f;
+        final float b = Argb.blue(revealedColor) / 255f;
         final var model = matrices.last().pose();
         final Mesh mesh = Mesh.beginGui(Mesh.Mode.QUADS, Mesh.tintedTextureFormat());
         for (int i = 0; i < segments; i++) {
@@ -365,9 +258,10 @@ public final class RenderUtil {
         if (vertices.length % 20 != 0) {
             throw new IllegalArgumentException("projected textured quads require 20 floats per quad");
         }
-        final float a = Argb.alpha(argbColor) / 255f;
-        final float r = Argb.red(argbColor) / 255f;
-        final float g = Argb.green(argbColor) / 255f;
+        final int revealedColor = reveal(argbColor);
+        final float a = Argb.alpha(revealedColor) / 255f;
+        final float r = Argb.red(revealedColor) / 255f;
+        final float g = Argb.green(revealedColor) / 255f;
         final float b = Argb.blue(argbColor) / 255f;
         final var model = matrices.last().pose();
         final Mesh mesh = Mesh.beginGui(Mesh.Mode.QUADS, Mesh.tintedTextureFormat());
@@ -394,63 +288,6 @@ public final class RenderUtil {
         mesh.drawGui(GUI_REPLACE);
     }
 
-    /**
-     * Enables the GL scissor test for a rectangle given in GUI (scaled) coordinates,
-     * converting to framebuffer pixels via the window's current scale factor.
-     */
-    public static void enableScissor(
-        final Minecraft client,
-        final int guiX,
-        final int guiY,
-        final int guiWidth,
-        final int guiHeight
-    ) {
-        final Window window = client.getWindow();
-        final double scale = window.getGuiScale();
-        final int fbHeight = window.getHeight();
-        final int x = (int) Math.round(guiX * scale);
-        final int w = (int) Math.round(guiWidth * scale);
-        final int h = (int) Math.round(guiHeight * scale);
-        final int y = fbHeight - (int) Math.round((guiY + guiHeight) * scale);
-        scissorEnabled = true;
-        scissorX = x;
-        scissorY = y;
-        scissorWidth = w;
-        scissorHeight = h;
-        guiScissorX = guiX;
-        guiScissorY = guiY;
-        guiScissorWidth = guiWidth;
-        guiScissorHeight = guiHeight;
-    }
-
-    /** Enables scissoring in the pixel coordinates of the currently bound off-screen target. */
-    public static void enableTargetScissor(
-        final int targetX,
-        final int targetY,
-        final int width,
-        final int height,
-        final int targetHeight
-    ) {
-        final int scissorY = targetScissorY(targetY, height, targetHeight);
-        scissorEnabled = true;
-        scissorX = targetX;
-        RenderUtil.scissorY = scissorY;
-        scissorWidth = width;
-        scissorHeight = height;
-        guiScissorX = targetX;
-        guiScissorY = targetY;
-        guiScissorWidth = width;
-        guiScissorHeight = height;
-    }
-
-    static int targetScissorY(final int targetY, final int height, final int targetHeight) {
-        return targetHeight - targetY - height;
-    }
-
-    public static void disableScissor() {
-        scissorEnabled = false;
-    }
-
     /** Flat-colored filled triangle in GUI space (player arrow etc.). */
     public static void fillTriangle(
         final PoseStack matrices,
@@ -459,10 +296,11 @@ public final class RenderUtil {
         final float x2, final float y2,
         final int argbColor
     ) {
-        final float a = Argb.alpha(argbColor) / 255f;
-        final float r = Argb.red(argbColor) / 255f;
-        final float g = Argb.green(argbColor) / 255f;
-        final float b = Argb.blue(argbColor) / 255f;
+        final int revealedColor = reveal(argbColor);
+        final float a = Argb.alpha(revealedColor) / 255f;
+        final float r = Argb.red(revealedColor) / 255f;
+        final float g = Argb.green(revealedColor) / 255f;
+        final float b = Argb.blue(revealedColor) / 255f;
         final var model = matrices.last().pose();
         final Mesh mesh = Mesh.beginGui(Mesh.Mode.QUADS, DefaultVertexFormat.POSITION_COLOR);
         mesh.vertex(model, x0, y0, 0).color(r, g, b, a).next();
@@ -492,17 +330,18 @@ public final class RenderUtil {
     ) {
         final var model = matrices.last().pose();
         final Mesh mesh = Mesh.beginGui(Mesh.Mode.QUADS, DefaultVertexFormat.POSITION_COLOR);
+        final int revealedColor = reveal(argbColor);
         final int dropShadow = Argb.scaleAlpha(
-            0xA0000000, Argb.alpha(argbColor) / 255f
+            0xA0000000, Argb.alpha(revealedColor) / 255f
         );
         appendDiamond(
             mesh, model, centerX + 0.5f, centerY + 0.5f,
             Math.max(0f, radius - 0.25f), dropShadow
         );
-        final int topLeft = Argb.blendOver(argbColor, 0x70FFFFFF);
-        final int topRight = Argb.blendOver(argbColor, 0x28FFFFFF);
-        final int bottomRight = Argb.scale(argbColor, 0.5f);
-        final int bottomLeft = Argb.scale(argbColor, 0.72f);
+        final int topLeft = Argb.blendOver(revealedColor, 0x70FFFFFF);
+        final int topRight = Argb.blendOver(revealedColor, 0x28FFFFFF);
+        final int bottomRight = Argb.scale(revealedColor, 0.5f);
+        final int bottomLeft = Argb.scale(revealedColor, 0.72f);
         appendTriangleQuad(
             mesh, model,
             centerX, centerY - radius,
@@ -583,7 +422,7 @@ public final class RenderUtil {
     /**
      * Textured disk sampling an {@link OffscreenCanvas}: rim UVs walk the unit circle
      * around (0.5, 0.5), V flipped because FBO row 0 is the bottom. The currently bound
-     * texture must be the canvas contents; call between {@link #beginTexturedQuads()} and
+     * texture must be the canvas contents; call between {@link TextureBinds#beginTexturedQuads()} and
      * a bound texture.
      */
     public static void drawTexturedDisk(
@@ -592,6 +431,35 @@ public final class RenderUtil {
         final float centerY,
         final float radius
     ) {
+        if (revealAlpha != 1.0f) {
+            // The untinted fan has no per-vertex color to scale; reroute through the
+            // tinted twin so a reveal frame fades the composite.
+            drawTexturedDisk(
+                matrices, centerX, centerY, radius,
+                Argb.scaleAlpha(0xFFFFFFFF, revealAlpha)
+            );
+            return;
+        }
+        drawTexturedDisk(matrices, centerX, centerY, radius, 0xFFFFFFFF);
+    }
+
+    /**
+     * Tinted twin of the disk fan: an ARGB tint multiplied over the sampled canvas. The
+     * minimap HUD passes its fade alpha; a reveal frame scales the tint here.
+     */
+    public static void drawTexturedDisk(
+        final PoseStack matrices,
+        final float centerX,
+        final float centerY,
+        final float radius,
+        final int argbTint
+    ) {
+        final int revealedTint = reveal(argbTint);
+        final boolean opaque = revealedTint == 0xFFFFFFFF;
+        final float a = Argb.alpha(revealedTint) / 255f;
+        final float r = Argb.red(revealedTint) / 255f;
+        final float g = Argb.green(revealedTint) / 255f;
+        final float b = Argb.blue(revealedTint) / 255f;
         final var model = matrices.last().pose();
         final Mesh mesh = Mesh.beginGui(Mesh.Mode.QUADS, Mesh.tintedTextureFormat());
         final int segments = 48;
@@ -604,16 +472,29 @@ public final class RenderUtil {
             final float sin1 = (float) Math.sin(angle1);
             // Wound backwards through the segment so the fan matches the front-facing
             // order of fillRect; the legacy path called disableCull here instead.
-            mesh.tintedVertex(model, centerX, centerY, 0, 0.5f, 0.5f, 1f, 1f, 1f, 1f);
-            mesh.tintedVertex(
-                model, centerX + cos1 * radius, centerY + sin1 * radius, 0,
-                0.5f + 0.5f * cos1, 0.5f - 0.5f * sin1, 1f, 1f, 1f, 1f
-            );
-            mesh.tintedVertex(
-                model, centerX + cos0 * radius, centerY + sin0 * radius, 0,
-                0.5f + 0.5f * cos0, 0.5f - 0.5f * sin0, 1f, 1f, 1f, 1f
-            );
-            mesh.tintedVertex(model, centerX, centerY, 0, 0.5f, 0.5f, 1f, 1f, 1f, 1f);
+            if (opaque) {
+                mesh.tintedVertex(model, centerX, centerY, 0, 0.5f, 0.5f, 1f, 1f, 1f, 1f);
+                mesh.tintedVertex(
+                    model, centerX + cos1 * radius, centerY + sin1 * radius, 0,
+                    0.5f + 0.5f * cos1, 0.5f - 0.5f * sin1, 1f, 1f, 1f, 1f
+                );
+                mesh.tintedVertex(
+                    model, centerX + cos0 * radius, centerY + sin0 * radius, 0,
+                    0.5f + 0.5f * cos0, 0.5f - 0.5f * sin0, 1f, 1f, 1f, 1f
+                );
+                mesh.tintedVertex(model, centerX, centerY, 0, 0.5f, 0.5f, 1f, 1f, 1f, 1f);
+            } else {
+                mesh.tintedVertex(model, centerX, centerY, 0, 0.5f, 0.5f, r, g, b, a);
+                mesh.tintedVertex(
+                    model, centerX + cos1 * radius, centerY + sin1 * radius, 0,
+                    0.5f + 0.5f * cos1, 0.5f - 0.5f * sin1, r, g, b, a
+                );
+                mesh.tintedVertex(
+                    model, centerX + cos0 * radius, centerY + sin0 * radius, 0,
+                    0.5f + 0.5f * cos0, 0.5f - 0.5f * sin0, r, g, b, a
+                );
+                mesh.tintedVertex(model, centerX, centerY, 0, 0.5f, 0.5f, r, g, b, a);
+            }
         }
         mesh.drawGui(RenderPipelines.GUI_TEXTURED);
     }
@@ -627,10 +508,11 @@ public final class RenderUtil {
         final float thickness,
         final int argbColor
     ) {
-        final float a = Argb.alpha(argbColor) / 255f;
-        final float r = Argb.red(argbColor) / 255f;
-        final float g = Argb.green(argbColor) / 255f;
-        final float b = Argb.blue(argbColor) / 255f;
+        final int revealedColor = reveal(argbColor);
+        final float a = Argb.alpha(revealedColor) / 255f;
+        final float r = Argb.red(revealedColor) / 255f;
+        final float g = Argb.green(revealedColor) / 255f;
+        final float b = Argb.blue(revealedColor) / 255f;
         final var model = matrices.last().pose();
         final Mesh mesh = Mesh.beginGui(Mesh.Mode.QUADS, DefaultVertexFormat.POSITION_COLOR);
         final int segments = 48;
@@ -650,50 +532,6 @@ public final class RenderUtil {
             mesh.vertex(model, centerX + cos0 * outerRadius, centerY + sin0 * outerRadius, 0).color(r, g, b, a).next();
         }
         mesh.drawGui(RenderPipelines.GUI);
-    }
-
-    /**
-     * Selects the flat position+color shader and additive-ish blending
-     * ({@code src*alpha + dst*1}), for glow-style translucent 3D geometry like waypoint
-     * beams (see {@code mc.ui.world.WaypointWorldRenderer}). Unlike {@link #fillTriangle}
-     * and {@link #fillRect}, this does not reset itself on every draw call - callers issue
-     * this once, draw as many {@link #fillTriangle3D} calls as needed, then restore normal
-     * blending with {@link #restoreDefaultBlend()} when done.
-     */
-    public static void beginAdditiveTriangles() {
-    }
-
-    /** Restores standard alpha blending after {@link #beginAdditiveTriangles()}. */
-    public static void restoreDefaultBlend() {
-    }
-
-    /**
-     * Flat-colored filled triangle with three independent coordinates, for true 3D
-     * world-space geometry drawn from a {@code WorldRenderEvents} callback (unlike
-     * {@link #fillTriangle}, which always draws on the local matrix's Z=0 plane for flat
-     * GUI shapes). Assumes the shader and blend state are already set up by the caller -
-     * see {@link #beginAdditiveTriangles()}.
-     */
-    public static void fillTriangle3D(
-        final PoseStack matrices,
-        final float x0, final float y0, final float z0,
-        final float x1, final float y1, final float z1,
-        final float x2, final float y2, final float z2,
-        final int argbColor
-    ) {
-        final float a = Argb.alpha(argbColor) / 255f;
-        final float r = Argb.red(argbColor) / 255f;
-        final float g = Argb.green(argbColor) / 255f;
-        final float b = Argb.blue(argbColor) / 255f;
-        final var model = matrices.last().pose();
-        final Mesh mesh = Mesh.begin(Mesh.Mode.TRIANGLES, DefaultVertexFormat.POSITION_COLOR);
-        mesh.vertex(model, x0, y0, z0).color(r, g, b, a).next();
-        mesh.vertex(model, x1, y1, z1).color(r, g, b, a).next();
-        mesh.vertex(model, x2, y2, z2).color(r, g, b, a).next();
-        mesh.vertex(model, x2, y2, z2).color(r, g, b, a).next();
-        mesh.vertex(model, x1, y1, z1).color(r, g, b, a).next();
-        mesh.vertex(model, x0, y0, z0).color(r, g, b, a).next();
-        mesh.draw(RenderPipelines.DRAGON_RAYS);
     }
 
     /** Flat-colored axis-aligned quad (background/border), independent of any bound texture. */
@@ -725,44 +563,52 @@ public final class RenderUtil {
         final var model = matrices.last().pose();
         final Mesh mesh = Mesh.beginGui(Mesh.Mode.QUADS, DefaultVertexFormat.POSITION_COLOR);
         for (final ColoredRect rect : rects) {
-            appendRect(mesh, model, rect.x(), rect.y(), rect.width(), rect.height(), rect.argbColor());
+            appendRect(
+                mesh, model, rect.x(), rect.y(), rect.width(), rect.height(),
+                reveal(rect.argbColor())
+            );
         }
         mesh.drawGui(
             preserveDestinationAlpha ? GUI_PRESERVE_DESTINATION_ALPHA : RenderPipelines.GUI
         );
     }
+
     private static RenderPipeline createGuiPreserveDestinationAlphaPipeline() {
         final RenderPipeline gui = RenderPipelines.GUI;
         final RenderPipeline.Builder builder = RenderPipeline.builder()
             .withLocation("pipeline/confluxmap_gui_preserve_destination_alpha")
-            .withVertexShader(gui.getVertexShader())
-            .withFragmentShader(gui.getFragmentShader())
-            .withVertexFormat(gui.getVertexFormat(), gui.getVertexFormatMode());
-        builder
+            .withVertexShader(gui.getShaders().get(com.mojang.renderpearl.api.pipeline.ShaderType.VERTEX))
+            .withFragmentShader(gui.getShaders().get(com.mojang.renderpearl.api.pipeline.ShaderType.FRAGMENT))
             .withCull(gui.isCull())
             .withColorTargetState(new ColorTargetState(
-                gui.getColorTargetState().blendFunction(),
+                // 26.3 dropped the singular accessor; the list holds one entry for GUI.
+                gui.getColorTargetStates().get(0).blendFunction(),
+                gui.getColorTargetStates().get(0).format(),
                 ColorTargetState.WRITE_COLOR
-            ));
-        builder
-            .withUniform("DynamicTransforms", UniformType.UNIFORM_BUFFER)
-            .withUniform("Projection", UniformType.UNIFORM_BUFFER);
+            ))
+            .withVertexBinding(0, gui.getVertexFormatBinding(0))
+            .withPrimitiveTopology(gui.getPrimitiveTopology());
+        for (final var bindGroupLayout : gui.getBindGroupLayouts()) {
+            builder.withBindGroupLayout(bindGroupLayout);
+        }
         return builder.build();
     }
-
+    
     private static RenderPipeline createGuiReplacePipeline() {
         final RenderPipeline gui = RenderPipelines.GUI;
         final RenderPipeline.Builder builder = RenderPipeline.builder()
             .withLocation("pipeline/confluxmap_gui_replace")
-            .withVertexShader(gui.getVertexShader())
-            .withFragmentShader(gui.getFragmentShader())
-            .withVertexFormat(gui.getVertexFormat(), gui.getVertexFormatMode());
-        builder
+            .withVertexShader(gui.getShaders().get(com.mojang.renderpearl.api.pipeline.ShaderType.VERTEX))
+            .withFragmentShader(gui.getShaders().get(com.mojang.renderpearl.api.pipeline.ShaderType.FRAGMENT))
             .withCull(gui.isCull())
-            .withColorTargetState(new ColorTargetState(Optional.empty(), ColorTargetState.WRITE_ALL));
-        builder
-            .withUniform("DynamicTransforms", UniformType.UNIFORM_BUFFER)
-            .withUniform("Projection", UniformType.UNIFORM_BUFFER);
+            .withColorTargetState(new ColorTargetState(
+                Optional.empty(), gui.getColorTargetStates().get(0).format(), ColorTargetState.WRITE_ALL
+            ))
+            .withVertexBinding(0, gui.getVertexFormatBinding(0))
+            .withPrimitiveTopology(gui.getPrimitiveTopology());
+        for (final var bindGroupLayout : gui.getBindGroupLayouts()) {
+            builder.withBindGroupLayout(bindGroupLayout);
+        }
         return builder.build();
     }
 
@@ -789,7 +635,7 @@ public final class RenderUtil {
         final Mesh mesh = gui
             ? Mesh.beginGui(Mesh.Mode.QUADS, DefaultVertexFormat.POSITION_COLOR)
             : Mesh.begin(Mesh.Mode.QUADS, DefaultVertexFormat.POSITION_COLOR);
-        appendRect(mesh, model, x, y, width, height, argbColor);
+        appendRect(mesh, model, x, y, width, height, reveal(argbColor));
         if (gui) {
             mesh.drawGui(RenderPipelines.GUI);
         } else {
@@ -824,11 +670,11 @@ public final class RenderUtil {
      * ShaderProgram), so these three cannot be expressed as extra mappings and fork here instead.
      */
 
-    private static void useTextureShader() {
+    public static void useTextureShader() {
         // Pipeline selection happens at draw time.
     }
 
-    private static void useColorShader() {
+    public static void useColorShader() {
         // Pipeline selection happens at draw time.
     }
 

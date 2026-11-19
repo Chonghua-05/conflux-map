@@ -1,6 +1,5 @@
 package cn.net.rms.confluxmap.mc.ui.screen;
 
-import cn.net.rms.confluxmap.compat.MinecraftAccess;
 import cn.net.rms.confluxmap.ConfluxMapClient;
 import cn.net.rms.confluxmap.compat.Texts;
 import cn.net.rms.confluxmap.compat.Widgets;
@@ -63,7 +62,7 @@ public final class AnnotationEraserSettingsScreen extends ConfluxScreen {
 
     private void saveAndReturn() {
         ConfluxMapClient.get().configIo().save(config);
-        MinecraftAccess.setScreen(Minecraft.getInstance(), parent);
+        requestClose(parent);
     }
 
     @Override
@@ -86,7 +85,7 @@ public final class AnnotationEraserSettingsScreen extends ConfluxScreen {
         final int mouseY,
         final float tickDelta
     ) {
-        draw.renderBackground(this, mouseX, mouseY, tickDelta);
+        draw.extractBackground(this, mouseX, mouseY, tickDelta);
         final Component prompt = Texts.translatable("confluxmap.screen.annotation.eraser.prompt");
         draw.drawTextWithShadow(
             this.font,

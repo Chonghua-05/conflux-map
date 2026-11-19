@@ -5,6 +5,8 @@ import cn.net.rms.confluxmap.core.net.shared.SharedWaypointAvailability;
 import cn.net.rms.confluxmap.core.shared.SharedWaypoint;
 import cn.net.rms.confluxmap.core.waypoint.Waypoint;
 import cn.net.rms.confluxmap.core.waypoint.chat.WaypointChatCodec;
+import cn.net.rms.confluxmap.core.waypoint.list.EditDraft;
+import cn.net.rms.confluxmap.core.waypoint.list.WaypointRow;
 import cn.net.rms.confluxmap.mc.chat.WaypointChatDiagnostics;
 import cn.net.rms.confluxmap.mc.net.shared.SharedWaypointClient;
 import cn.net.rms.confluxmap.mc.ui.GuiDraw;
@@ -31,6 +33,12 @@ public final class WaypointShareConfirmScreen extends ConfluxScreen {
     private final Screen parent;
     private final Waypoint waypoint;
     private final boolean allowPublicTarget;
+    /**
+     * Create payload from the public edit form; publishing goes through the shared
+     * list model so the selected group travels with the create. Null for every
+     * share that has no form behind it (an existing local or shared waypoint).
+     */
+    private final EditDraft publicDraft;
     private Target target;
     private final SharedWaypointClient sharedWaypoints;
     private final String confluxPreview;
@@ -39,7 +47,7 @@ public final class WaypointShareConfirmScreen extends ConfluxScreen {
     private String errorKey;
 
     public WaypointShareConfirmScreen(final Screen parent, final Waypoint waypoint, final Target target) {
-        this(parent, waypoint, target, true);
+        this(parent, waypoint, target, true, null);
     }
 
     public static WaypointShareConfirmScreen forSharedWaypoint(
@@ -54,20 +62,50 @@ public final class WaypointShareConfirmScreen extends ConfluxScreen {
                 waypoint.type(), waypoint.createdAtEpochMs()
             ),
             Target.CHAT,
-            false
+            false,
+            null
         );
+    }
+
+    /** Chat-only share preview of one already-published row; cross-dimension fields are unused here. */
+    public static WaypointShareConfirmScreen forSharedWaypoint(
+        final Screen parent,
+        final WaypointRow row
+    ) {
+        return new WaypointShareConfirmScreen(
+            parent,
+            new Waypoint(
+                row.id(), row.name(), row.dimensionId(),
+                row.x(), row.y(), row.z(), row.colorArgb(), "", true,
+                row.type(), System.currentTimeMillis()
+            ),
+            Target.CHAT,
+            false,
+            null
+        );
+    }
+
+    WaypointShareConfirmScreen(
+        final Screen parent,
+        final Waypoint waypoint,
+        final Target target,
+        final EditDraft publicDraft
+    ) {
+        this(parent, waypoint, target, true, publicDraft);
     }
 
     private WaypointShareConfirmScreen(
         final Screen parent,
         final Waypoint waypoint,
         final Target target,
-        final boolean allowPublicTarget
+        final boolean allowPublicTarget,
+        final EditDraft publicDraft
     ) {
         super(Texts.translatable("confluxmap.screen.waypoint.share"));
         this.parent = parent;
         this.waypoint = waypoint.copy();
         this.allowPublicTarget = allowPublicTarget;
+        this.publicDraft = publicDraft;
         this.target = target;
         this.sharedWaypoints = ConfluxMapClient.get().sharedWaypoints();
         // Chat sharing previews the exact outgoing messages, so name truncation, coordinate
@@ -174,7 +212,7 @@ public final class WaypointShareConfirmScreen extends ConfluxScreen {
 
     @Override
     public void onClose() {
-        MinecraftAccess.setScreen(Minecraft.getInstance(), parent);
+        requestClose(parent);
     }
 
     @Override
@@ -226,8 +264,14 @@ public final class WaypointShareConfirmScreen extends ConfluxScreen {
                 errorKey = "confluxmap.screen.waypoint.publish_pending_message";
                 return;
             }
-            if (!sharedWaypoints.create(waypoint)) {
-                final String reasonKey = sharedWaypoints.createDisabledReasonKey();
+            // The public form's publish goes through the shared model so the selected
+            // group rides along; a plain local waypoint keeps the gateway create.
+            final boolean sent = publicDraft != null
+                ? ConfluxMapClient.get().sharedWaypointListModel().createWaypoint(publicDraft)
+                : sharedWaypoints.create(waypoint);
+            if (!sent) {
+                final String reasonKey =
+                    ConfluxMapClient.get().sharedWaypointListModel().canCreateWaypoint().reasonKey();
                 errorKey = reasonKey == null
                     ? "confluxmap.screen.waypoint.public_unavailable"
                     : reasonKey;
@@ -247,8 +291,8 @@ public final class WaypointShareConfirmScreen extends ConfluxScreen {
             return;
         }
         WaypointChatDiagnostics.outgoing(confluxPreview, xaeroPreview);
-        MinecraftAccess.sendChatMessage(client, confluxPreview);
-        MinecraftAccess.sendChatMessage(client, xaeroPreview);
+        MinecraftAccess.sendChat(client, confluxPreview);
+        MinecraftAccess.sendChat(client, xaeroPreview);
         onClose();
     }
 
@@ -261,7 +305,7 @@ public final class WaypointShareConfirmScreen extends ConfluxScreen {
 
     @Override
     protected void renderContents(final GuiDraw draw, final int mouseX, final int mouseY, final float tickDelta) {
-        draw.renderBackground(this, mouseX, mouseY, tickDelta);
+        draw.extractBackground(this, mouseX, mouseY, tickDelta);
         drawCentered(draw, getTitle().getString(), 18, TEXT_COLOR);
         if (target == Target.CHAT && confluxPreview != null && xaeroPreview != null) {
             int y = drawWrapped(draw, Texts.translatable(
@@ -304,7 +348,7 @@ public final class WaypointShareConfirmScreen extends ConfluxScreen {
     /** Draws every wrapped line of {@code value} and returns the y below the last line. */
     private int drawWrapped(final GuiDraw draw, final String value, final int y, final int color) {
         int lineY = y;
-        for (final FormattedCharSequence line : this.font.split(FormattedText.of(value), Math.max(40, width - 32))) {
+        for (final FormattedCharSequence line : this.font.split(Component.literal(value), Math.max(40, width - 32))) {
             draw.drawTextWithShadow(
                 this.font, line, width / 2f - this.font.width(line) / 2f, lineY, color
             );

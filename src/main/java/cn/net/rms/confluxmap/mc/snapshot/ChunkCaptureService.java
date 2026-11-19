@@ -14,11 +14,13 @@ import cn.net.rms.confluxmap.core.predict.PredictionTileService;
 import cn.net.rms.confluxmap.core.store.MapWorld;
 import cn.net.rms.confluxmap.core.store.MapWorldService;
 import cn.net.rms.confluxmap.core.task.CaptureRefreshSweep;
+import cn.net.rms.confluxmap.core.task.CaptureHoldoffGate;
 import cn.net.rms.confluxmap.core.task.CaptureTickBudget;
 import cn.net.rms.confluxmap.core.task.DirtyChunkSet;
 import cn.net.rms.confluxmap.core.task.MapExecutors;
 import cn.net.rms.confluxmap.core.task.SessionGuard;
 import cn.net.rms.confluxmap.core.tile.TileService;
+import cn.net.rms.confluxmap.core.util.ChunkKeys;
 import cn.net.rms.confluxmap.core.util.ChunkViewport;
 import cn.net.rms.confluxmap.mc.color.BiomeTintResolver;
 import cn.net.rms.confluxmap.mc.color.SpriteColorSampler;
@@ -67,6 +69,7 @@ public final class ChunkCaptureService {
     private final McTerrainChunkEncoder terrainEncoder;
     private final McTerrainWorker terrainWorker;
     private final DirtyChunkSet dirtyChunks = new DirtyChunkSet();
+    private final CaptureHoldoffGate holdoffGate = new CaptureHoldoffGate(0);
     private final CaptureRefreshSweep visibleRefresh = new CaptureRefreshSweep();
     private final AtomicLong storedSnapshots = new AtomicLong();
     private long lastLoggedSnapshots = -1;
@@ -100,7 +103,9 @@ public final class ChunkCaptureService {
         this.serverViewDistance = serverViewDistance;
         this.regionCache = regionCache;
         this.layerSelector = layerSelector;
-        this.factory = new McChunkSnapshotFactory(client, sampler, tintResolver);
+        this.factory = new McChunkSnapshotFactory(
+            client, sampler, tintResolver, () -> config.showNetherCeilingBedrockThickness
+        );
         this.terrainEncoder = new McTerrainChunkEncoder(client);
         this.terrainWorker = new McTerrainWorker(new McTerrainMaterialResolver(client));
     }
@@ -120,6 +125,7 @@ public final class ChunkCaptureService {
     public void onSessionChanged(final SessionGuard.Session session) {
         dirtyChunks.clear();
         visibleRefresh.reset();
+        holdoffGate.clear();
         minimapViewport = null;
         layerSelector.onSessionChanged(session);
         lastDecision = null;
@@ -136,6 +142,14 @@ public final class ChunkCaptureService {
         reseedViewport(viewpoint.blockX() >> 4, viewpoint.blockZ() >> 4);
     }
 
+    /** Re-marks all viewport chunks dirty so a layer-shading policy change takes effect immediately. */
+    public void recaptureCurrentView() {
+        final PlayerView viewpoint = gameBridge.viewpoint().orElse(null);
+        if (viewpoint != null) {
+            reseedViewport(viewpoint.blockX() >> 4, viewpoint.blockZ() >> 4);
+        }
+    }
+
     /** Main thread, from packet mixins. */
     public void markDirty(final int chunkX, final int chunkZ) {
         markCaptureDirty(chunkX, chunkZ);
@@ -143,6 +157,9 @@ public final class ChunkCaptureService {
     }
 
     private void markCaptureDirty(final int chunkX, final int chunkZ) {
+        if (!holdoffGate.tryMark(ChunkKeys.pack(chunkX, chunkZ))) {
+            return;
+        }
         dirtyChunks.mark(chunkX, chunkZ);
         visibleRefresh.markDirty(chunkX, chunkZ);
     }
@@ -165,12 +182,12 @@ public final class ChunkCaptureService {
      * <p>Tints are baked into the snapshot through {@link cn.net.rms.confluxmap.mc.color.BiomeTintResolver},
      * which goes through the game's own biome blend - that averages the biome color over a
      * {@code biomeBlendRadius} square that reaches into the adjacent chunks, and every position
-     * inside a chunk the client has not received yet answers {@code ClientWorld}'s plains
+     * inside a chunk the client has not received yet answers {@code ClientLevel}'s plains
      * fallback biome. A neighbour snapshotted before this chunk arrived therefore baked
      * plains-tinted water/grass into its border strip, which reads as a chunk grid wherever the
      * real biome's tint is far from plains - warm ocean water being the most visible case.
      * Vanilla discards the same stale colors by clearing the 3x3 {@code BiomeColorCache} square
-     * in {@code ClientWorld.resetChunkColor}; a snapshot has the color baked in, so the only
+     * in {@code ClientLevel.resetChunkColor}; a snapshot has the color baked in, so the only
      * way to drop it is to take the snapshot again.
      */
     public void markChunkLoaded(final int chunkX, final int chunkZ) {
@@ -274,7 +291,7 @@ public final class ChunkCaptureService {
         }
         final int centerX = player.blockPosition().getX() >> 4;
         final int centerZ = player.blockPosition().getZ() >> 4;
-        final int pivotY = layer.type() == MapLayer.Type.NETHER_CEILING ? client.level.getMaxY() - 1 : 0;
+        final int pivotY = layer.type() == MapLayer.Type.NETHER_CEILING ? client.level.getHeight() - 1 : 0;
         final int radiusLimit = captureViewDistance() + 1;
         final List<ChunkSnapshot> snapshots = new ArrayList<>(limit);
         for (int radius = 0; radius <= radiusLimit && snapshots.size() < limit; radius++) {
@@ -306,6 +323,10 @@ public final class ChunkCaptureService {
     }
 
     private void tick() {
+        holdoffGate.configure(config.recaptureHoldoffTicks);
+        for (final long matured : holdoffGate.tick()) {
+            markCaptureDirty(ChunkKeys.chunkX(matured), ChunkKeys.chunkZ(matured));
+        }
         final MapWorld world = worlds.current();
         final LocalPlayer player = client.player;
         final PlayerView viewpoint = gameBridge.viewpoint().orElse(null);
@@ -349,7 +370,7 @@ public final class ChunkCaptureService {
 
         terrainWorker.resolveMaterialRequests();
 
-        final int worldTopY = client.level.getMaxY();
+        final int worldTopY = client.level.getHeight();
         final List<LayerSelector.Decision> backgroundPlan = capturePlan(decision, worldTopY);
         final int backgroundChunkBudget = Math.max(
             1, config.snapshotBudgetPerTick / backgroundPlan.size()
@@ -484,7 +505,11 @@ public final class ChunkCaptureService {
                 terrainWorker.prime(encoded);
             }
         }
-        return accepted == plan.size();
+        if (accepted == plan.size()) {
+            holdoffGate.recordCaptured(ChunkKeys.pack((int) chunk[0], (int) chunk[1]));
+            return true;
+        }
+        return false;
     }
 
     private int finishWorkerResults(

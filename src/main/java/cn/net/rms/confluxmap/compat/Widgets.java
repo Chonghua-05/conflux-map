@@ -42,7 +42,7 @@ public final class Widgets {
     public static void tick(final EditBox field) {
     }
 
-    public static void setText(final EditBox field, final String text) {
+    public static void setValue(final EditBox field, final String text) {
         field.setValue(text);
     }
 
@@ -58,6 +58,5 @@ public final class Widgets {
     }
 
     public static void unfocus(final EditBox field) {
-        field.setFocused(false);
     }
 }

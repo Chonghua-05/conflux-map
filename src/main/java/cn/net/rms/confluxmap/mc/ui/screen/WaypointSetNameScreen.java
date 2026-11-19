@@ -135,7 +135,7 @@ final class WaypointSetNameScreen extends ConfluxScreen {
 
     @Override
     protected void renderContents(final GuiDraw draw, final int mouseX, final int mouseY, final float tickDelta) {
-        draw.renderBackground(this, mouseX, mouseY, tickDelta);
+        draw.extractBackground(this, mouseX, mouseY, tickDelta);
         drawCentered(draw, getTitle().getString(), 24, 0xFFFFFFFF);
         drawCentered(
             draw,

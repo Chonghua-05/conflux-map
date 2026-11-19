@@ -29,8 +29,12 @@ import net.minecraft.world.level.chunk.LevelChunk;
 /** Tracks loaded chunks, refreshes requested summaries, and persists final unload snapshots. */
 final class LiveChunkSummaryTracker {
     private static final int MAX_REGION_FLUSHES_PER_TICK = 8;
-    private static final int MAX_LIVE_SUMMARIES_PER_TICK = 2;
-    private static final int MAX_LIVE_INSPECTIONS_PER_TICK = 128;
+    /**
+     * A pending unload whose region mtime never moves (a write that will not happen, or one whose
+     * millisecond stamp collides) must not pin its live summary forever; it is force-flushed after
+     * this many ticks, the same bound the Paper companion's {@code PendingLiveRemovals} applies.
+     */
+    private static final long PENDING_UNLOAD_DEADLINE_TICKS = 600L;
     private static final long LIVE_DEMAND_TTL_NANOS = 2_000_000_000L;
 
     private final ServerConfig config;
@@ -47,6 +51,7 @@ final class LiveChunkSummaryTracker {
     private final List<LiveDemand> activeDemands = new ArrayList<>();
     private final Map<UUID, LiveDemand> watchedDemands = new HashMap<>();
     private final Map<ServerLevel, Integer> dimensionIndices = new HashMap<>();
+    private long tickCounter;
 
     private record LoadedKey(ServerLevel world, long chunkPos) {
     }
@@ -62,7 +67,8 @@ final class LiveChunkSummaryTracker {
         int chunkZ,
         SummaryCodec.Chunk summary,
         long observedMcaMtimeMs,
-        boolean awaitMcaWrite
+        boolean awaitMcaWrite,
+        long addedTick
     ) {
     }
 
@@ -195,6 +201,7 @@ final class LiveChunkSummaryTracker {
     }
 
     void tick(final MinecraftServer server, final SummaryDiskCache disk) {
+        tickCounter++;
         refreshLoadedChunks(System.nanoTime());
         flushPendingRegions(server, disk, MAX_REGION_FLUSHES_PER_TICK, false);
     }
@@ -257,10 +264,12 @@ final class LiveChunkSummaryTracker {
             return;
         }
         final int available = refreshQueue.size();
-        final int configuredPerTick = Math.max(1, (config.maxChunkSummariesPerSecond + 19) / 20);
-        final int budget = Math.min(MAX_LIVE_SUMMARIES_PER_TICK, configuredPerTick);
+        // Fabric captures are cheap heightmap reads, and the summarizer is demand-gated, so the
+        // shared cap exists to bound the tick cost when many chunks are demanded at once
+        // (exploration bursts, dirty floods), not to throttle steady state.
+        final int budget = LiveCapturePolicy.perTickCaptures(config.maxChunkSummariesPerSecond);
         int captured = refreshDirtyChunks(nowNanos, budget);
-        final int inspectionBudget = Math.min(available, MAX_LIVE_INSPECTIONS_PER_TICK);
+        final int inspectionBudget = Math.min(available, LiveCapturePolicy.MAX_LIVE_INSPECTIONS_PER_TICK);
         for (int inspected = 0; inspected < inspectionBudget && captured < budget; inspected++) {
             final LoadedKey key = refreshQueue.removeFirst();
             final LevelChunk chunk = loadedChunks.get(key);
@@ -306,7 +315,7 @@ final class LiveChunkSummaryTracker {
                     chunkZ(candidatePos),
                     nowNanos
                 );
-            }, MAX_LIVE_INSPECTIONS_PER_TICK);
+            }, LiveCapturePolicy.MAX_LIVE_INSPECTIONS_PER_TICK);
             if (key == null) {
                 break;
             }
@@ -367,7 +376,7 @@ final class LiveChunkSummaryTracker {
             }
         } catch (final RuntimeException e) {
             ConfluxMapMod.LOGGER.warn(
-                "companion: failed to summarize live chunk {},{} in {} ({})",
+                "[ConfluxMap] companion: failed to summarize live chunk {},{} in {} ({})",
                 chunkX, chunkZ, dimension, e.getMessage()
             );
         }
@@ -393,7 +402,7 @@ final class LiveChunkSummaryTracker {
             ignored -> new LinkedHashMap<>()
         ).put(
             localZ * 16 + localX,
-            new PendingChunk(chunkX, chunkZ, summary, observedMtime, awaitMcaWrite)
+            new PendingChunk(chunkX, chunkZ, summary, observedMtime, awaitMcaWrite, tickCounter)
         );
     }
 
@@ -416,7 +425,8 @@ final class LiveChunkSummaryTracker {
             final long mtime = RegionStoragePaths.mcaMtimeMs(
                 worldRoot, key.dimension(), key.regionX(), key.regionZ()
             );
-            if (mtime <= 0L || (!force && awaitingMcaWrite(entry.getValue().values(), mtime))) {
+            if (mtime <= 0L || (!force && awaitingMcaWrite(entry.getValue().values(), mtime)
+                && !pastUnloadDeadline(entry.getValue().values()))) {
                 continue;
             }
             final Map<Integer, SummaryCodec.Chunk> updates = new HashMap<>();
@@ -427,7 +437,7 @@ final class LiveChunkSummaryTracker {
                 disk.saveLiveChunks(key.dimension(), key.regionX(), key.regionZ(), mtime, updates);
             } catch (final IOException e) {
                 ConfluxMapMod.LOGGER.warn(
-                    "companion: failed to persist live summaries for region {},{} in {} ({})",
+                    "[ConfluxMap] companion: failed to persist live summaries for region {},{} in {} ({})",
                     key.regionX(), key.regionZ(), key.dimension(), e.getMessage()
                 );
                 continue;
@@ -448,6 +458,15 @@ final class LiveChunkSummaryTracker {
     ) {
         for (final PendingChunk chunk : chunks) {
             if (chunk.awaitMcaWrite() && chunk.observedMcaMtimeMs() == currentMtime) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private boolean pastUnloadDeadline(final Iterable<PendingChunk> chunks) {
+        for (final PendingChunk chunk : chunks) {
+            if (tickCounter - chunk.addedTick() >= PENDING_UNLOAD_DEADLINE_TICKS) {
                 return true;
             }
         }

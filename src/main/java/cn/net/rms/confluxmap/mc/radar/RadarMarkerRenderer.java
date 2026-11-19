@@ -6,7 +6,8 @@ import cn.net.rms.confluxmap.core.radar.RadarEntry;
 import cn.net.rms.confluxmap.core.radar.PlayerRadarDimensionIcon;
 import cn.net.rms.confluxmap.core.model.DimensionId;
 import cn.net.rms.confluxmap.core.util.Argb;
-import cn.net.rms.confluxmap.mc.render.RenderUtil;
+import cn.net.rms.confluxmap.mc.render.GuiShapes;
+import cn.net.rms.confluxmap.mc.render.TextureBinds;
 import cn.net.rms.confluxmap.mc.ui.GuiDraw;
 import cn.net.rms.confluxmap.mc.ui.WaypointMarkerRenderer;
 import java.util.List;
@@ -64,6 +65,7 @@ public final class RadarMarkerRenderer {
     /** Surface-selected marker detail level and player-name visibility. */
     public record Presentation(boolean detailedIcons, boolean showPlayerNames) {
         private static final Presentation COMPACT = new Presentation(false, false);
+        private static final Presentation COMPACT_WITH_NAMES = new Presentation(false, true);
         private static final Presentation DETAILED = new Presentation(true, false);
         private static final Presentation DETAILED_WITH_NAMES = new Presentation(true, true);
 
@@ -75,16 +77,23 @@ public final class RadarMarkerRenderer {
             return showPlayerNames ? DETAILED_WITH_NAMES : DETAILED;
         }
 
-        /** Resolves the configured minimap default plus the temporary player-list expansion. */
+        /**
+         * Resolves the configured minimap default plus the temporary player-list expansion.
+         * {@code alwaysShowPlayerNames} lifts the key-held requirement for names; the dots-only
+         * resting state keeps its compact icons but may still carry names (players render
+         * portraits either way).
+         */
         public static Presentation minimap(
             final ConfluxConfig.RadarDisplayMode displayMode,
             final boolean playerListPressed,
-            final boolean showPlayerNames
+            final boolean showPlayerNames,
+            final boolean alwaysShowPlayerNames
         ) {
+            final boolean names = showPlayerNames && (playerListPressed || alwaysShowPlayerNames);
             if (displayMode == ConfluxConfig.RadarDisplayMode.DOTS && !playerListPressed) {
-                return compact();
+                return names ? COMPACT_WITH_NAMES : COMPACT;
             }
-            return detailed(playerListPressed && showPlayerNames);
+            return detailed(names);
         }
     }
 
@@ -108,7 +117,7 @@ public final class RadarMarkerRenderer {
         final List<Marker> markers,
         final Presentation presentation
     ) {
-        drawAll(draw, client, config, iconManager, markers, presentation, marker -> true);
+        drawAll(draw, client, config, iconManager, markers, presentation, marker -> true, 1f);
     }
 
     /** Draws one player skin crop for HUD surfaces that do not have a loaded player entity. */
@@ -150,11 +159,12 @@ public final class RadarMarkerRenderer {
         final EntityIconManager iconManager,
         final List<Marker> markers,
         final Presentation presentation,
-        final Predicate<Marker> visible
+        final Predicate<Marker> visible,
+        final float fadeAlpha
     ) {
         for (final Marker marker : markers) {
             if (visible.test(marker)) {
-                drawMarker(draw, client, config, iconManager, marker, presentation);
+                drawMarker(draw, client, config, iconManager, marker, presentation, fadeAlpha);
             }
         }
     }
@@ -165,7 +175,8 @@ public final class RadarMarkerRenderer {
         final ConfluxConfig config,
         final EntityIconManager iconManager,
         final Marker marker,
-        final Presentation presentation
+        final Presentation presentation,
+        final float fadeAlpha
     ) {
         final RadarEntry entry = marker.entry();
         final float x = marker.x();
@@ -173,8 +184,8 @@ public final class RadarMarkerRenderer {
         final int yDelta = marker.yDelta();
         final Entity live = marker.live();
         final PoseStack matrices = draw.matrices();
-        final float alphaScale = marker.ghost()
-            ? 0.5f : entry.spectator() ? SPECTATOR_ALPHA : 1f;
+        final float alphaScale = (marker.ghost()
+            ? 0.5f : entry.spectator() ? SPECTATOR_ALPHA : 1f) * fadeAlpha;
         if (usesDetailedIcon(entry.category(), presentation)) {
             final ItemStack itemIcon = live != null && entry.category() == RadarCategory.OTHER
                 ? itemIconFor(live)
@@ -210,15 +221,16 @@ public final class RadarMarkerRenderer {
         final int color = Argb.scaleAlpha(elevationColor(baseColor(entry.category()), yDelta), alphaScale);
         if (entry.category() == RadarCategory.PLAYER) {
             if (marker.highlighted()) {
-                RenderUtil.fillRect(matrices, x - 3f, y - 3f, 6f, 6f, HIGHLIGHT_OUTLINE);
+                GuiShapes.fillRect(
+                    matrices, x - 3f, y - 3f, 6f, 6f, Argb.scaleAlpha(HIGHLIGHT_OUTLINE, fadeAlpha));
             }
-            RenderUtil.fillRect(matrices, x - 2f, y - 2f, 4f, 4f, color);
+            GuiShapes.fillRect(matrices, x - 2f, y - 2f, 4f, 4f, color);
             drawDestinationIcon(draw, client, config, marker);
             if (presentation.showPlayerNames() && entry.name() != null) {
                 drawCenteredLine(client, draw, entry.name(), x, y + 3f, alphaScale);
             }
         } else {
-            RenderUtil.fillBeveledDiamond(matrices, x, y, DIAMOND_RADIUS, color);
+            GuiShapes.fillBeveledDiamond(matrices, x, y, DIAMOND_RADIUS, color);
         }
     }
 
@@ -271,7 +283,7 @@ public final class RadarMarkerRenderer {
                 return false;
             }
         } else {
-            RenderUtil.bindTexture(client, icon.texture());
+            TextureBinds.bindTexture(client, icon.texture());
         }
         if (outlineThickness > 0) {
             if (highlighted) {
@@ -286,13 +298,13 @@ public final class RadarMarkerRenderer {
                 );
             }
         }
-        RenderUtil.drawTintedQuad(
+        GuiShapes.drawTintedQuad(
             matrices, x - iconHalfWidth, y - iconHalfHeight, iconWidth, iconHeight,
             icon.u0(), icon.v0(), icon.u1(), icon.v1(), tint
         );
         if (icon.hasOverlay()) {
-            RenderUtil.bindTexture(client, icon.overlayTexture());
-            RenderUtil.drawTintedQuad(
+            TextureBinds.bindTexture(client, icon.overlayTexture());
+            GuiShapes.drawTintedQuad(
                 matrices, x - iconHalfWidth, y - iconHalfHeight, iconWidth, iconHeight,
                 icon.ou0(), icon.ov0(), icon.ou1(), icon.ov1(), tint
             );
@@ -314,7 +326,7 @@ public final class RadarMarkerRenderer {
         final int color = Argb.scaleAlpha(
             elevationColor(ICON_OUTLINE, yDelta), alphaScale
         );
-        RenderUtil.drawDarkTextureOutline(
+        GuiShapes.drawDarkTextureOutline(
             matrices, x - iconWidth / 2f, y - iconHeight / 2f,
             iconWidth, iconHeight,
             icon.u0(), icon.v0(), icon.u1(), icon.v1(), thickness, Argb.alpha(color) / 255f
@@ -334,7 +346,7 @@ public final class RadarMarkerRenderer {
         final int color = Argb.scaleAlpha(
             elevationColor(HIGHLIGHT_OUTLINE, yDelta), alphaScale
         );
-        RenderUtil.fillRect(
+        GuiShapes.fillRect(
             matrices,
             x - iconWidth / 2f - thickness,
             y - iconHeight / 2f - thickness,

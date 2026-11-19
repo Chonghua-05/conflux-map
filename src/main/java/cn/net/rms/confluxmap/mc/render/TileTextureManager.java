@@ -12,11 +12,14 @@ import cn.net.rms.confluxmap.core.predict.PredictionTileService;
 import cn.net.rms.confluxmap.core.tile.TileService;
 import cn.net.rms.confluxmap.core.tile.TileUpdate;
 import cn.net.rms.confluxmap.core.util.Argb;
+import cn.net.rms.confluxmap.core.util.TileMath;
 import com.mojang.blaze3d.systems.RenderSystem;
+import java.util.HashSet;
 import java.util.Iterator;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import com.mojang.blaze3d.platform.NativeImage;
 import net.minecraft.client.renderer.texture.DynamicTexture;
 
@@ -90,6 +93,11 @@ public final class TileTextureManager {
     }
 
     private void upload(final TileUpdate update) {
+        // Debug-gated e2e accounting: the completion report closes the prediction viewport
+        // window's "displayed" half, so it must fire only when the texture actually uploaded.
+        final boolean timed = PredictedTileKeys.isPredicted(update.key())
+            && PredictionTileService.debugTimingEnabled();
+        final long uploadStartNanos = timed ? System.nanoTime() : 0L;
         TileTexture entry = textures.get(update.key());
         final boolean fresh = entry == null;
         if (fresh) {
@@ -159,6 +167,9 @@ public final class TileTextureManager {
         }
         entry.texture.upload();
         configureSampling(entry.texture);
+        if (timed) {
+            predictionTiles.onPredictedUploaded(update.key(), System.nanoTime() - uploadStartNanos);
+        }
     }
 
     /**
@@ -253,8 +264,7 @@ public final class TileTextureManager {
      * would throw on a {@code "!pred"} layer id, since {@code MapLayer.parse} doesn't know it.
      */
     public boolean bind(final TileKey key) {
-        final TileTexture entry = textures.get(key);
-        if (entry == null) {
+        if (!bindIfResident(key)) {
             if (PredictedTileKeys.isPredicted(key)) {
                 predictionTiles.requestTile(key);
             } else {
@@ -262,7 +272,67 @@ public final class TileTextureManager {
             }
             return false;
         }
-        RenderUtil.bindTexture(entry.texture.getTextureView());
+        return true;
+    }
+
+    /**
+     * Binds the parent tile one LOD coarser than {@code key} when it is resident, filling
+     * {@code uvOut} with the {@code [u0, v0, u1, v1]} quadrant of that parent covering {@code key}.
+     * Read-only on a miss: a missing parent is not requested, because the caller only wants it as a
+     * stand-in while {@code key} itself loads. Returns false (leaving {@code uvOut} untouched) when
+     * no coarser tile exists - at {@link TileMath#MAX_LOD}, before that parent has uploaded, or
+     * when a predicted parent's composition has gone stale (see {@link #bindFallbackChild}).
+     */
+    public boolean bindFallbackParent(final TileKey key, final float[] uvOut) {
+        if (key.lod() >= TileMath.MAX_LOD) {
+            return false;
+        }
+        final TileKey parent = new TileKey(
+            key.world(), key.dimension(), key.layerId(),
+            key.lod() + 1,
+            TileMath.parentTile(key.tileX()),
+            TileMath.parentTile(key.tileZ())
+        );
+        if (!bindFallbackIfFresh(parent)) {
+            return false;
+        }
+        TileMath.parentUv(key.tileX(), key.tileZ(), uvOut);
+        return true;
+    }
+
+    /**
+     * Binds a resident finer tile for the children fallback, read-only like the parent probe.
+     * A predicted tile additionally passes {@link PredictionTileService#compositionCurrent}:
+     * only the viewport's own LOD recomposes, so a tile left stale behind a zoom still claims
+     * terrain the real layer has since filled in, and drawing it across LODs would paint
+     * fabricated terrain over resident real tiles. A refused stand-in leaves the gap showing
+     * the background until the tile's LOD is viewed again.
+     */
+    public boolean bindFallbackChild(final TileKey key) {
+        return bindFallbackIfFresh(key);
+    }
+
+    /** Residency plus the predicted-composition validity every cross-LOD probe is gated on. */
+    private boolean bindFallbackIfFresh(final TileKey key) {
+        if (PredictedTileKeys.isPredicted(key) && !predictionTiles.compositionCurrent(key)) {
+            return false;
+        }
+        return bindIfResident(key);
+    }
+
+    /**
+     * Binds a tile that is already resident, without requesting it when absent. Unlike
+     * {@link #bind}, a miss is silent and leaves the manager untouched, so a fallback probe can
+     * never pull a tile into the upload queue just to cover a gap. A hit still counts as a use,
+     * so a fallback texture that keeps covering the screen stays at the fresh end of the LRU
+     * exactly like a directly drawn one.
+     */
+    private boolean bindIfResident(final TileKey key) {
+        final TileTexture entry = textures.get(key);
+        if (entry == null) {
+            return false;
+        }
+        TextureBinds.bindTexture(entry.texture.getTextureView());
         return true;
     }
 
@@ -293,5 +363,10 @@ public final class TileTextureManager {
         if (released > 0) {
             ConfluxMapMod.LOGGER.info("TileTextureManager: released {} predicted tile textures", released);
         }
+    }
+
+    /** Test-support only: snapshot of the keys with a resident GPU texture (monitor-guarded). */
+    public synchronized Set<TileKey> residentTexturesForTest() {
+        return new HashSet<>(textures.keySet());
     }
 }

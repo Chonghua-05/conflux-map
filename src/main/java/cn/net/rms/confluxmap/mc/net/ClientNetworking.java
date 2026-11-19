@@ -3,18 +3,25 @@ package cn.net.rms.confluxmap.mc.net;
 import cn.net.rms.confluxmap.ConfluxMapClient;
 import cn.net.rms.confluxmap.ConfluxMapMod;
 import cn.net.rms.confluxmap.compat.Ids;
+import cn.net.rms.confluxmap.compat.MinecraftAccess;
 import cn.net.rms.confluxmap.compat.PlayNetworking;
+import cn.net.rms.confluxmap.core.net.BiomeLangReqC2S;
+import cn.net.rms.confluxmap.core.net.BiomeLangS2C;
 import cn.net.rms.confluxmap.core.net.ErrorS2C;
+import cn.net.rms.confluxmap.core.net.FeatureRestrictionsS2C;
 import cn.net.rms.confluxmap.core.net.FlatBaselineS2C;
+import cn.net.rms.confluxmap.core.net.QuadraLayoutS2C;
 import cn.net.rms.confluxmap.core.net.HelloC2S;
 import cn.net.rms.confluxmap.core.net.HelloPolicyS2C;
 import cn.net.rms.confluxmap.core.net.LoadStateDeltaS2C;
 import cn.net.rms.confluxmap.core.net.MapCapabilitiesS2C;
 import cn.net.rms.confluxmap.core.net.MapCompatibilityS2C;
+import cn.net.rms.confluxmap.core.net.MapFullSyncManifestS2C;
 import cn.net.rms.confluxmap.core.net.MapInvalidateS2C;
 import cn.net.rms.confluxmap.core.net.MapPatchS2C;
 import cn.net.rms.confluxmap.core.net.MapRegionInvalidateS2C;
 import cn.net.rms.confluxmap.core.net.MapRegionPatchS2C;
+import cn.net.rms.confluxmap.core.net.MapSyncCapability;
 import cn.net.rms.confluxmap.core.net.MapSyncProtocol;
 import cn.net.rms.confluxmap.core.net.Message;
 import cn.net.rms.confluxmap.core.net.PolicyUpdateS2C;
@@ -23,6 +30,7 @@ import cn.net.rms.confluxmap.core.net.Proto;
 import cn.net.rms.confluxmap.core.net.ProtoException;
 import cn.net.rms.confluxmap.core.net.ServerInstanceS2C;
 import cn.net.rms.confluxmap.core.net.ServerViewDistanceS2C;
+import cn.net.rms.confluxmap.mc.ui.BiomeLabels;
 import cn.net.rms.confluxmap.nativepredict.PredictorVersion;
 import cn.net.rms.confluxmap.core.radar.ServerPlayerRadarState;
 import cn.net.rms.confluxmap.neoforge.compat.ClientPlayConnectionEvents;
@@ -36,8 +44,8 @@ import net.minecraft.resources.Identifier;
  * (HELLO_POLICY), to the correction sync loop (MAP_PATCH), or logs
  * (POLICY_UPDATE / ERROR). Network callbacks are decoded off-thread, then state changes are
  * marshalled to the client thread. On {@link ClientPlayConnectionEvents#JOIN} it sends a
- * HELLO_C2S immediately (the NeoForge connection callback fires after {@code onGameJoin} with the
- * channel ready); on {@link ClientPlayConnectionEvents#DISCONNECT} it
+ * HELLO_C2S immediately (fabric-api's JOIN fires at the RETURN of {@code onGameJoin} with the
+ * channel ready - see the research report); on {@link ClientPlayConnectionEvents#DISCONNECT} it
  * resets the session on that same client thread.
  */
 public final class ClientNetworking {
@@ -88,12 +96,13 @@ public final class ClientNetworking {
             ConfluxMapMod.LOGGER.warn("companion: undecodable S2C payload ({} bytes): {}", payload.length, e.getMessage());
             return;
         }
-        executeForConnection(client, handler, () -> dispatch(msg, payload.length));
+        executeForConnection(client, handler, () -> dispatch(client, msg, payload.length));
     }
 
-    private void dispatch(final Message msg, final int payloadBytes) {
+    private void dispatch(final Minecraft client, final Message msg, final int payloadBytes) {
         if (msg instanceof final HelloPolicyS2C p) {
             session.onPolicy(p);
+            requestDatapackBiomeNames(MinecraftAccess.language(client));
         } else if (msg instanceof MapCompatibilityS2C || msg instanceof MapCapabilitiesS2C) {
             session.onSelection(msg);
         } else if (msg instanceof final ServerViewDistanceS2C viewDistance) {
@@ -102,6 +111,10 @@ public final class ClientNetworking {
             session.onServerInstance(serverInstance);
         } else if (msg instanceof final FlatBaselineS2C f) {
             session.onFlatBaselines(f);
+        } else if (msg instanceof final QuadraLayoutS2C q) {
+            session.onQuadraLayouts(q);
+        } else if (msg instanceof final FeatureRestrictionsS2C r) {
+            session.onFeatureRestrictions(r);
         } else if (msg instanceof final PolicyUpdateS2C u) {
             onPolicyUpdate(u);
         } else if (msg instanceof final MapPatchS2C p) {
@@ -130,6 +143,16 @@ public final class ClientNetworking {
             final ServerPlayerRadarState radar = playerRadar;
             if (radar != null && session.entityRadarAllowed()) {
                 radar.accept(positions, System.currentTimeMillis());
+            }
+        } else if (msg instanceof final BiomeLangS2C biomeLangs) {
+            ConfluxMapMod.LOGGER.info(
+                "companion: biome names synced from the level ({} entries)", biomeLangs.names().size()
+            );
+            BiomeLabels.acceptDatapackNames(biomeLangs.names());
+        } else if (msg instanceof final MapFullSyncManifestS2C manifest) {
+            final MapSyncClient sync = mapSync;
+            if (sync != null) {
+                sync.onFullSyncManifest(manifest);
             }
         } else if (msg instanceof final ErrorS2C e) {
             onError(e, payloadBytes);
@@ -163,7 +186,20 @@ public final class ClientNetworking {
             if (radar != null) {
                 radar.clear();
             }
+            BiomeLabels.clearDatapackNames();
         });
+    }
+
+    /**
+     * Asks a companion that advertised the DATAPACK_BIOME_LANGS capability for the level's
+     * biome names in {@code locale}. Safe to call on any connection state; without a capable
+     * companion this is a no-op and biome names fall back to the registry id.
+     */
+    public void requestDatapackBiomeNames(final String locale) {
+        if (!session.isActive() || !session.supportsServer(MapSyncCapability.DATAPACK_BIOME_LANGS)) {
+            return;
+        }
+        sendMessage(new BiomeLangReqC2S(locale));
     }
 
     private static void executeForConnection(

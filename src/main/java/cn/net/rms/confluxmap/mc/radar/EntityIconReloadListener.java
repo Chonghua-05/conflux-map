@@ -20,12 +20,12 @@ public final class EntityIconReloadListener implements SimpleSynchronousResource
     }
 
     @Override
-    public Identifier getId() {
+    public Identifier getFabricId() {
         return ID;
     }
 
     @Override
-    public void onResourceManagerReload(final ResourceManager manager) {
+    public void reload(final ResourceManager manager) {
         icons.invalidateTextures();
     }
 }

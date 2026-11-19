@@ -7,15 +7,21 @@ import cn.net.rms.confluxmap.mc.ui.GuiDraw;
 import cn.net.rms.confluxmap.mc.ui.UiIcon;
 import cn.net.rms.confluxmap.mc.ui.UiResourceTheme;
 import cn.net.rms.confluxmap.mc.ui.UiTextureRegion;
-import cn.net.rms.confluxmap.mc.render.RenderUtil;
+import cn.net.rms.confluxmap.mc.render.GuiShapes;
+import cn.net.rms.confluxmap.mc.render.TextureBinds;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.gui.GuiGraphicsExtractor;
 import net.minecraft.client.gui.components.Button;
 import com.mojang.blaze3d.vertex.PoseStack;
 import net.minecraft.resources.Identifier;
 
-/** Shared text or icon button that keeps the Conflux style unless a text control is reskinned. */
-public final class ConfluxTextButton extends Button {
+/**
+ * Shared text or icon button that keeps the Conflux style unless a text control is reskinned.
+ * Open for small subclasses that need to hook the two self-drawn layers ({@link
+ * #drawContents} body, {@link #drawForeground} label) without touching the
+ * version-gated vanilla-style render seams.
+ */
+public class ConfluxTextButton extends Button {
     private static final int ICON_SIZE = 16;
     private static final int BACKGROUND = 0xE0181818;
     private static final int HOVER_BACKGROUND = 0xF02A2A2A;
@@ -66,7 +72,7 @@ public final class ConfluxTextButton extends Button {
         drawContents(GuiDraw.of(context));
     }
 
-    private void drawContents(final GuiDraw draw) {
+    protected void drawContents(final GuiDraw draw) {
         final int x = Widgets.x(this);
         final int y = Widgets.y(this);
         final int right = x + getWidth();
@@ -85,7 +91,7 @@ public final class ConfluxTextButton extends Button {
         drawForeground(draw);
     }
 
-    private void drawForeground(final GuiDraw draw) {
+    protected void drawForeground(final GuiDraw draw) {
         if (icon == null) {
             drawText(draw);
         } else {
@@ -104,12 +110,15 @@ public final class ConfluxTextButton extends Button {
     }
 
     private void drawIcon(final GuiDraw draw) {
+        // The icon quad draws immediately while button bodies (self-drawn fills or the vanilla
+        // sprite) stay buffered; without the flush the body paints later and dims the icon.
+        draw.flushGui();
         final ConfluxMapClient app = ConfluxMapClient.get();
         final UiResourceTheme theme = app == null ? null : app.uiResourceTheme();
         final UiIcon resolved = theme == null ? UiIcon.monochrome(icon) : theme.icon(icon);
         final UiTextureRegion texture = resolved.region();
-        RenderUtil.bindTexture(Minecraft.getInstance(), texture.texture());
-        RenderUtil.drawTintedQuad(
+        TextureBinds.bindTexture(Minecraft.getInstance(), texture.texture());
+        GuiShapes.drawTintedQuad(
             draw.matrices(),
             Widgets.x(this) + (getWidth() - ICON_SIZE) / 2,
             Widgets.y(this) + (getHeight() - ICON_SIZE) / 2,

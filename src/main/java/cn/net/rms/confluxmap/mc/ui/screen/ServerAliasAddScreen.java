@@ -1,6 +1,5 @@
 package cn.net.rms.confluxmap.mc.ui.screen;
 
-import cn.net.rms.confluxmap.compat.MinecraftAccess;
 import cn.net.rms.confluxmap.compat.Texts;
 import cn.net.rms.confluxmap.compat.Widgets;
 import cn.net.rms.confluxmap.mc.ui.GuiDraw;
@@ -73,7 +72,7 @@ final class ServerAliasAddScreen extends ConfluxScreen {
 
     @Override
     public void onClose() {
-        MinecraftAccess.setScreen(Minecraft.getInstance(), parent);
+        requestClose(parent);
     }
 
     @Override
@@ -83,7 +82,7 @@ final class ServerAliasAddScreen extends ConfluxScreen {
         final int mouseY,
         final float tickDelta
     ) {
-        draw.renderBackground(this, mouseX, mouseY, tickDelta);
+        draw.extractBackground(this, mouseX, mouseY, tickDelta);
         final String title = getTitle().getString();
         draw.drawTextWithShadow(
             this.font, title, width / 2f - this.font.width(title) / 2f, 24,

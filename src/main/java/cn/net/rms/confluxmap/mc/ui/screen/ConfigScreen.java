@@ -1,48 +1,47 @@
 package cn.net.rms.confluxmap.mc.ui.screen;
 
-import cn.net.rms.confluxmap.compat.MinecraftAccess;
 import cn.net.rms.confluxmap.ConfluxMapClient;
 import cn.net.rms.confluxmap.bridge.GameBridge;
 import cn.net.rms.confluxmap.compat.Texts;
 import cn.net.rms.confluxmap.compat.Widgets;
 import cn.net.rms.confluxmap.core.config.ConfigIo;
 import cn.net.rms.confluxmap.core.config.ConfluxConfig;
-import cn.net.rms.confluxmap.core.color.MapColorStyle;
 import cn.net.rms.confluxmap.core.net.shared.SharedWaypointAvailability;
 import cn.net.rms.confluxmap.core.predict.PredictionState;
-import cn.net.rms.confluxmap.core.predict.PredictionViewMode;
+import cn.net.rms.confluxmap.core.util.Easing;
+import cn.net.rms.confluxmap.core.util.Stagger;
 import cn.net.rms.confluxmap.mc.net.CompanionSession;
 import cn.net.rms.confluxmap.mc.net.shared.SharedWaypointClient;
 import cn.net.rms.confluxmap.mc.predict.ManualSeedService;
 import cn.net.rms.confluxmap.mc.ui.GuiDraw;
 import cn.net.rms.confluxmap.mc.ui.UiResourceTheme;
+import cn.net.rms.confluxmap.mc.ui.anim.PopupReveal;
+import cn.net.rms.confluxmap.mc.ui.anim.TabSwitchFlow;
+import cn.net.rms.confluxmap.mc.ui.anim.UiMotion;
 import java.util.ArrayList;
-import java.util.Arrays;
 import java.util.List;
-import java.util.function.BooleanSupplier;
-import java.util.function.Consumer;
-import java.util.function.Function;
-import java.util.function.DoubleConsumer;
-import java.util.function.DoubleFunction;
-import java.util.function.DoubleSupplier;
-import java.util.function.IntConsumer;
-import java.util.function.IntFunction;
-import java.util.function.IntSupplier;
-import java.util.function.Supplier;
 import net.minecraft.client.Minecraft;
+import net.minecraft.client.gui.Font;
 import net.minecraft.client.gui.screens.Screen;
 import net.minecraft.client.gui.components.Button;
-import com.mojang.blaze3d.vertex.PoseStack;
+import net.minecraft.client.gui.components.AbstractWidget;
+import net.minecraft.client.gui.components.EditBox;
 import net.minecraft.util.FormattedCharSequence;
 import net.minecraft.network.chat.FormattedText;
 import net.minecraft.network.chat.Component;
 
 /**
  * Settings screen exposing every {@link ConfluxConfig} field, grouped into category
- * tabs (Minimap/Layers/Radar/Waypoints/Performance). Built entirely from vanilla
- * widgets, no external config-lib dependency, matching {@link WaypointListScreen}/
+ * tabs (Minimap/Map/Markers/Radar/Waypoints/Prediction/General). Built entirely from
+ * vanilla widgets, no external config-lib dependency, matching {@link WaypointListScreen}/
  * {@link WaypointEditScreen}'s style: plain {@link Button}s that cycle through
  * boolean/enum values on click, and paired sliders/numeric fields for int ranges.
+ *
+ * <p>This class owns the screen lifecycle: tabs, scrolling, policy polling in
+ * {@code tick()}, and rendering. Row construction lives in {@link ConfigRows}, label
+ * and value-text formatting in {@link ConfigValueLabels}, and the server-policy
+ * snapshots in {@link RadarSettingsAccess}/{@link PredictionSettingsAccess}/
+ * {@link PlayerMarkerSettingsAccess}.
  *
  * <p>Every change mutates and saves the shared {@link ConfluxConfig} immediately, so
  * every other system observes the same value without a separate apply step.
@@ -52,13 +51,14 @@ import net.minecraft.network.chat.Component;
  * supplies a parent screen so closing settings returns to the map.
  */
 public final class ConfigScreen extends ConfluxScreen {
-    private enum Category {
+    enum Category {
         MINIMAP("confluxmap.screen.config.category.minimap"),
-        LAYERS("confluxmap.screen.config.category.layers"),
+        MAP("confluxmap.screen.config.category.map"),
+        MARKERS("confluxmap.screen.config.category.markers"),
         RADAR("confluxmap.screen.config.category.radar"),
         WAYPOINTS("confluxmap.screen.config.category.waypoints"),
-        PERFORMANCE("confluxmap.screen.config.category.performance"),
-        PREDICTION("confluxmap.screen.config.category.prediction");
+        PREDICTION("confluxmap.screen.config.category.prediction"),
+        GENERAL("confluxmap.screen.config.category.general");
 
         private final String labelKey;
 
@@ -67,126 +67,20 @@ public final class ConfigScreen extends ConfluxScreen {
         }
     }
 
-    enum RadarSettingsAccess {
-        ALLOWED(true, null),
-        FORBIDDEN_BY_SERVER(false, "confluxmap.screen.config.radar.disabled_by_server");
-
-        private final boolean controlsActive;
-        private final String noticeKey;
-
-        RadarSettingsAccess(final boolean controlsActive, final String noticeKey) {
-            this.controlsActive = controlsActive;
-            this.noticeKey = noticeKey;
-        }
-
-        static RadarSettingsAccess from(final boolean serverAllowsRadar) {
-            return serverAllowsRadar ? ALLOWED : FORBIDDEN_BY_SERVER;
-        }
-
-        boolean controlsActive() {
-            return controlsActive;
-        }
-
-        String noticeKey() {
-            return noticeKey;
-        }
-
-        String tooltipKey() {
-            return noticeKey;
-        }
-    }
-
-    enum PredictionControl { UNDERLAY, NETWORK_SYNC, STRUCTURES }
-
-    record PlayerMarkerSettingsAccess(boolean resourceOverride) {
-        static PlayerMarkerSettingsAccess from(final boolean resourceOverride) {
-            return new PlayerMarkerSettingsAccess(resourceOverride);
-        }
-
-        boolean controlsActive() {
-            return !resourceOverride;
-        }
-
-        String tooltipKey() {
-            return resourceOverride
-                ? "confluxmap.config.player_marker.disabled_by_resource_pack"
-                : null;
-        }
-    }
-
-    record PredictionSettingsAccess(
-        boolean underlayDisabledByServer,
-        String networkSyncDisabledReasonKey,
-        boolean structuresDisabledByServer,
-        boolean structureSearchAllowed
-    ) {
-        static PredictionSettingsAccess from(
-            final boolean singleplayer,
-            final boolean seedIndependentUnderlay,
-            final boolean seedSharingDisabledByServer,
-            final String networkSyncDisabledReasonKey,
-            final boolean structureSearchAllowed
-        ) {
-            return from(
-                singleplayer,
-                seedIndependentUnderlay,
-                seedSharingDisabledByServer,
-                false,
-                networkSyncDisabledReasonKey,
-                structureSearchAllowed
-            );
-        }
-
-        static PredictionSettingsAccess from(
-            final boolean singleplayer,
-            final boolean seedIndependentUnderlay,
-            final boolean seedSharingDisabledByServer,
-            final boolean manualSeedAvailable,
-            final String networkSyncDisabledReasonKey,
-            final boolean structureSearchAllowed
-        ) {
-            final boolean remoteSeedDisabled = !singleplayer
-                && seedSharingDisabledByServer
-                && !manualSeedAvailable;
-            return new PredictionSettingsAccess(
-                remoteSeedDisabled && !seedIndependentUnderlay,
-                networkSyncDisabledReasonKey,
-                remoteSeedDisabled,
-                structureSearchAllowed
-            );
-        }
-
-        String disabledReasonKey(final PredictionControl control) {
-            return switch (control) {
-                case UNDERLAY -> underlayDisabledByServer
-                    ? "confluxmap.screen.config.prediction.seed_disabled_by_server"
-                    : null;
-                case NETWORK_SYNC -> networkSyncDisabledReasonKey;
-                case STRUCTURES -> !structureSearchAllowed
-                    ? "confluxmap.map.structure_search.disabled_by_server"
-                    : structuresDisabledByServer
-                        ? "confluxmap.screen.config.prediction.seed_disabled_by_server"
-                        : null;
-            };
-        }
-    }
-
     private static final int MARGIN = 8;
     private static final int TAB_Y = 24;
     private static final int TAB_HEIGHT = 20;
     private static final int TAB_GAP = 4;
-    private static final int ROW_HEIGHT = 22;
+    static final int ROW_HEIGHT = 22;
     private static final int MAX_ROW_WIDTH = 280;
     private static final int BOTTOM_MARGIN = 30;
     private static final int RADAR_NOTICE_PADDING = 4;
     private static final int NOTICE_TEXT_COLOR = 0xFFFFAA00;
-
-    private static final String[] ZOOM_VALUE_KEYS = {
-        "confluxmap.value.zoom_0_5",
-        "confluxmap.value.zoom_1",
-        "confluxmap.value.zoom_2",
-        "confluxmap.value.zoom_4"
-    };
+    /**
+     * Share of the row fade's timeline that each row waits behind the previous one; the
+     * slices compress per-row fades by the same factor, so all rows still finish together.
+     */
+    private static final float ROW_STAGGER_FRACTION = 0.25f;
 
     private final Screen parent;
     private final ConfluxConfig config;
@@ -197,20 +91,31 @@ public final class ConfigScreen extends ConfluxScreen {
     private final PredictionState predictionState;
     private final ManualSeedService manualSeedService;
     private final UiResourceTheme uiTheme;
-    private final List<IntSliderInput> sliderInputs = new ArrayList<>();
-    private final List<DecimalSliderInput> decimalSliderInputs = new ArrayList<>();
+    private final ConfigRows rows;
 
-    private Category category = Category.MINIMAP;
-    private int rowWidth = MAX_ROW_WIDTH;
+    Category category = Category.MINIMAP;
+    int rowWidth = MAX_ROW_WIDTH;
     /** Rows scroll in ROW_HEIGHT steps; widgets outside the viewport are simply not built. */
-    private int scrollOffset;
+    int scrollOffset;
     private int contentHeight;
-    private SharedWaypointAvailability sharedAvailability;
-    private RadarSettingsAccess radarAccess = RadarSettingsAccess.ALLOWED;
-    private PredictionSettingsAccess predictionAccess;
-    private PlayerMarkerSettingsAccess playerMarkerAccess =
+    SharedWaypointAvailability sharedAvailability;
+    RadarSettingsAccess radarAccess = RadarSettingsAccess.ALLOWED;
+    PredictionSettingsAccess predictionAccess;
+    PlayerMarkerSettingsAccess playerMarkerAccess =
         PlayerMarkerSettingsAccess.from(false);
-    private boolean manualSeedAvailable;
+    boolean manualSeedAvailable;
+    boolean minimapRestrictedByServer;
+    boolean waypointsRestrictedByServer;
+    /** True while the open reveal should still drive the rows' staggered fade-in. */
+    private boolean rowFadeArmed;
+    /** Pure two-act tab-switch state: the screen executes its decisions. */
+    private final TabSwitchFlow<Category> tabSwitch = new TabSwitchFlow<>();
+    /** Reveal of the act currently running; recreated at every act start. */
+    private PopupReveal actReveal;
+    /** The previous tab's rows and labels, kept fading until the retire act lands. */
+    private ConfigRows.RetireSnapshot retiring;
+    /** The tab bar's buttons in {@link Category} order, for the instant highlight move. */
+    private final List<Button> tabButtons = new ArrayList<>();
 
     public ConfigScreen() {
         this(null);
@@ -228,6 +133,7 @@ public final class ConfigScreen extends ConfluxScreen {
         this.predictionState = app.predictionState();
         this.manualSeedService = app.manualSeedService();
         this.uiTheme = app.uiResourceTheme();
+        this.rows = new ConfigRows(this, config, configIo);
     }
 
     /** Keep the world (and this session's capture pipeline) running while the screen is open. */
@@ -241,18 +147,17 @@ public final class ConfigScreen extends ConfluxScreen {
         rowWidth = Math.min(MAX_ROW_WIDTH, width - MARGIN * 2);
         scrollOffset = 0;
         manualSeedAvailable = manualSeedService.available();
+        // Arm for a real open only: a resize re-init lands on a settled reveal, and a
+        // parent screen reopened from a child replays its reveal after init, so neither
+        // may re-stagger the rows — those fade with the screen like every other widget.
+        rowFadeArmed = config.uiTransitionsEnabled && revealOpening();
         rebuild();
     }
 
     @Override
     public void tick() {
         super.tick();
-        for (final IntSliderInput sliderInput : sliderInputs) {
-            sliderInput.tick();
-        }
-        for (final DecimalSliderInput sliderInput : decimalSliderInputs) {
-            sliderInput.tick();
-        }
+        rows.tickInputs();
         final SharedWaypointAvailability availability = sharedWaypoints.availability();
         if (!availability.equals(sharedAvailability)) {
             sharedAvailability = availability;
@@ -286,17 +191,31 @@ public final class ConfigScreen extends ConfluxScreen {
                 rebuild();
             }
         }
+        final boolean currentMinimapRestricted = !companionSession.minimapAllowed();
+        if (currentMinimapRestricted != minimapRestrictedByServer) {
+            minimapRestrictedByServer = currentMinimapRestricted;
+            if (category == Category.MINIMAP) {
+                rebuild();
+            }
+        }
+        final boolean currentWaypointsRestricted = !companionSession.waypointsAllowed();
+        if (currentWaypointsRestricted != waypointsRestrictedByServer) {
+            waypointsRestrictedByServer = currentWaypointsRestricted;
+            if (category == Category.WAYPOINTS) {
+                rebuild();
+            }
+        }
     }
 
     private int viewportHeight() {
         return Math.max(ROW_HEIGHT, height - BOTTOM_MARGIN - rowsTop());
     }
 
-    private boolean rowVisible(final int y) {
+    boolean rowVisible(final int y) {
         return y >= rowsTop() && y + ROW_HEIGHT - 2 <= height - BOTTOM_MARGIN;
     }
 
-    private int rowsTop() {
+    int rowsTop() {
         final int baseRowsTop = tabLayout().contentTop();
         return category == Category.RADAR && radarAccess.noticeKey() != null
             ? baseRowsTop + radarNoticeHeight()
@@ -306,18 +225,27 @@ public final class ConfigScreen extends ConfluxScreen {
     private int radarNoticeHeight() {
         final String notice = Texts.translatable(radarAccess.noticeKey()).getString();
         final int lines = this.font.split(
-            FormattedText.of(notice), Math.max(40, rowWidth)
+            Component.literal(notice), Math.max(40, rowWidth)
         ).size();
         return lines * (this.font.lineHeight + 1) + RADAR_NOTICE_PADDING;
     }
 
     @Override
-    public boolean mouseScrolled(
-        final double mouseX,
-        final double mouseY,
-        final double horizontalAmount,
-        final double amount
-    ) {
+        public boolean mouseScrolled(
+            final double mouseX,
+            final double mouseY,
+            final double horizontalAmount,
+            final double amount
+        ) {
+        if (isClosing() || tabSwitch.phase() == TabSwitchFlow.Phase.RETIRING) {
+            // While act 1 retires the old rows, a scroll rebuild would lay fresh
+            // old-category rows under the fading snapshot.
+            return true;
+        }
+        // Scrolling rebuilds the rows and would destroy a text field mid-edit.
+        if (getFocused() instanceof EditBox) {
+            return false;
+        }
         final boolean overRows = mouseX >= rowX() && mouseX <= rowX() + rowWidth + 8
             && mouseY >= rowsTop() && mouseY <= height - BOTTOM_MARGIN;
         if (amount != 0 && overRows) {
@@ -339,24 +267,31 @@ public final class ConfigScreen extends ConfluxScreen {
     @Override
     public void onClose() {
         configIo.save(config);
-        if (parent == null) {
-            super.onClose();
-        } else {
-            MinecraftAccess.setScreen(Minecraft.getInstance(), parent);
-        }
+        requestClose(parent);
     }
 
-    private void rebuild() {
+    /** Rebuilds every row; also callable from a row's own click handler (e.g. to reveal a follow-up row). */
+    void rebuild() {
         sharedAvailability = sharedWaypoints.availability();
         radarAccess = RadarSettingsAccess.from(companionSession.entityRadarAllowed());
         predictionAccess = predictionSettingsAccess();
         playerMarkerAccess = playerMarkerSettingsAccess();
         manualSeedAvailable = manualSeedService.available();
-        sliderInputs.clear();
-        decimalSliderInputs.clear();
+        rows.clearInputs();
         clearWidgets();
         addTabs();
-        addRows();
+        if (tabSwitch.phase() == TabSwitchFlow.Phase.RETIRING) {
+            // Act 1 owns the rows: the old ones are fading from the snapshot, so no new
+            // rows may surface under them and the scrollbar stays with the retiring tab.
+            reAddRetiringWidgets();
+            addBottomButtons();
+            return;
+        }
+        contentHeight = rows.addRows() + scrollOffset - rowsTop();
+        addBottomButtons();
+    }
+
+    private void addBottomButtons() {
         final int bottomButtonWidth = Math.min(140, Math.max(80, (width - MARGIN * 2 - TAB_GAP) / 2));
         final int bottomButtonsWidth = bottomButtonWidth * 2 + TAB_GAP;
         final int bottomButtonsX = width / 2 - bottomButtonsWidth / 2;
@@ -374,24 +309,42 @@ public final class ConfigScreen extends ConfluxScreen {
         ));
     }
 
+    /**
+     * Puts the retiring rows back into the widget list after a mid-act rebuild dropped
+     * them, so they keep fading where they stood; they stay inactive until the act lands.
+     */
+    private void reAddRetiringWidgets() {
+        if (retiring == null) {
+            return;
+        }
+        for (final ConfigRows.RowSlot slot : retiring.rows()) {
+            for (final AbstractWidget widget : slot.widgets()) {
+                addRenderableWidget(widget);
+            }
+        }
+    }
+
     private void addTabs() {
         final Category[] categories = Category.values();
         final ConfigTabLayout layout = tabLayout();
         final int startX = width / 2 - layout.totalWidth() / 2;
+        // The highlight follows the machine's view, not the category field: during act 1
+        // the field stays on the old tab, and a mid-act rebuild must not undo the instant
+        // highlight move the click already made.
+        final Category highlighted = tabSwitch.highlighted(category);
+        tabButtons.clear();
         for (int index = 0; index < categories.length; index++) {
             final Category c = categories[index];
-            final Component label = c == category
-                ? Texts.literal("[" + Texts.translatable(c.labelKey).getString() + "]")
-                : Texts.translatable(c.labelKey);
             final Button tab = Widgets.button(
                 startX + index % layout.columns() * (layout.tabWidth() + TAB_GAP),
                 TAB_Y + index / layout.columns() * (TAB_HEIGHT + TAB_GAP),
                 layout.tabWidth(),
                 TAB_HEIGHT,
-                label,
+                tabLabel(c, c == highlighted),
                 b -> selectCategory(c)
             );
             addRenderableWidget(tab);
+            tabButtons.add(tab);
         }
     }
 
@@ -402,588 +355,302 @@ public final class ConfigScreen extends ConfluxScreen {
     }
 
     private void selectCategory(final Category c) {
+        switch (tabSwitch.click(c, category, config.uiTransitionsEnabled)) {
+            case NONE -> {
+            }
+            case REBUILD_NOW -> {
+                // No animation: drop any half-run act state with the instant rebuild.
+                retiring = null;
+                actReveal = null;
+                switchTo(c);
+            }
+            case BEGIN_RETIRE -> {
+                highlightTab(c);
+                beginRetireAct();
+            }
+            case FAST_FORWARD -> {
+                highlightTab(c);
+                // Cut the running act short; the next render frame lands it into the
+                // queued tab's rebuild.
+                actReveal.finishNow();
+            }
+        }
+    }
+
+    /** Swaps the rows in place: the transitions-off path and the pre-transition behavior. */
+    private void switchTo(final Category c) {
         category = c;
         scrollOffset = 0;
         rebuild();
     }
 
-    private void addRows() {
-        final int rowsTop = rowsTop();
-        int y = rowsTop - scrollOffset;
-        switch (category) {
-            case MINIMAP:
-                y = addToggleRow(y, "confluxmap.config.minimap.enabled", () -> config.minimapEnabled, v -> config.minimapEnabled = v);
-                y = addActionRow(
-                    y,
-                    "confluxmap.config.minimap.position",
-                    () -> MinecraftAccess.setScreen(Minecraft.getInstance(), new MinimapPositionScreen(this, config, configIo))
-                );
-                y = addToggleRow(
-                    y,
-                    "confluxmap.config.minimap.hud_avoidance",
-                    () -> config.minimapHudAvoidance,
-                    v -> config.minimapHudAvoidance = v
-                );
-                y = addEnumRow(
-                    y, "confluxmap.config.minimap.shape", ConfluxConfig.Shape.values(),
-                    () -> config.minimapShape, v -> config.minimapShape = v, ConfigScreen::shapeKey
-                );
-                y = addEnumRow(
-                    y,
-                    "confluxmap.config.player_marker.style",
-                    ConfluxConfig.PlayerMarkerStyle.values(),
-                    () -> config.playerMarkerStyle,
-                    v -> config.playerMarkerStyle = v,
-                    style -> playerMarkerAccess.resourceOverride()
-                        ? "confluxmap.value.player_marker.resource_pack"
-                        : playerMarkerStyleKey(style),
-                    playerMarkerAccess.controlsActive(),
-                    playerMarkerAccess.tooltipKey()
-                );
-                y = addIntSliderRow(
-                    y, "confluxmap.config.minimap.size", 64, 256,
-                    () -> config.minimapSize, v -> config.minimapSize = v, ConfigScreen::pxText
-                );
-                y = addToggleRow(y, "confluxmap.config.minimap.rotate", () -> config.minimapRotate, v -> config.minimapRotate = v);
-                y = addZoomRow(y);
-                y = addToggleRow(y, "confluxmap.config.minimap.show_coordinates", () -> config.showCoordinates, v -> config.showCoordinates = v);
-                y = addToggleRow(y, "confluxmap.config.minimap.show_biome", () -> config.showBiome, v -> config.showBiome = v);
-                y = addToggleRow(
-                    y, "confluxmap.config.player_trail.enabled",
-                    () -> config.playerTrailEnabled, v -> config.playerTrailEnabled = v
-                );
-                y = addIntSliderRow(
-                    y, "confluxmap.config.player_trail.duration",
-                    ConfluxConfig.MIN_PLAYER_TRAIL_DURATION_SECONDS,
-                    ConfluxConfig.MAX_PLAYER_TRAIL_DURATION_SECONDS,
-                    () -> config.playerTrailDurationSeconds,
-                    v -> config.playerTrailDurationSeconds = v,
-                    ConfigScreen::secondsText
-                );
-                y = addIntSliderRow(
-                    y, "confluxmap.config.player_trail.dot_size",
-                    ConfluxConfig.MIN_PLAYER_TRAIL_DOT_SIZE,
-                    ConfluxConfig.MAX_PLAYER_TRAIL_DOT_SIZE,
-                    () -> config.playerTrailDotSize,
-                    v -> config.playerTrailDotSize = v,
-                    ConfigScreen::pxText
-                );
-                y = addToggleRow(y, "confluxmap.config.fullmap.chunk_grid", () -> config.fullmapChunkGrid, v -> config.fullmapChunkGrid = v);
-                y = addToggleRow(
-                    y, "confluxmap.config.minimap.annotations",
-                    () -> config.annotationsOnHud, v -> config.annotationsOnHud = v
-                );
-                break;
-            case LAYERS:
-                y = addEnumRow(
-                    y, "confluxmap.config.layers.override", ConfluxConfig.LayerOverride.values(),
-                    () -> config.layerOverride, v -> config.layerOverride = v, ConfigScreen::layerOverrideKey
-                );
-                y = addToggleRow(y, "confluxmap.config.layers.show_indicator", () -> config.showLayerIndicator, v -> config.showLayerIndicator = v);
-                y = addIntSliderRow(
-                    y, "confluxmap.config.layers.cave_slice_y", 0, 255,
-                    () -> config.caveSliceY, v -> config.caveSliceY = v, ConfigScreen::plainText
-                );
-                y = addIntSliderRow(
-                    y, "confluxmap.config.layers.nether_slice_y", 0, 127,
-                    () -> config.netherSliceY, v -> config.netherSliceY = v, ConfigScreen::plainText
-                );
-                y = addToggleRow(
-                    y, "confluxmap.config.map.dynamic_lighting", () -> config.dynamicLighting, v -> config.dynamicLighting = v
-                );
-                y = addEnumRow(
-                    y, "confluxmap.config.map.color_style", MapColorStyle.values(),
-                    () -> config.mapColorStyle,
-                    v -> {
-                        config.mapColorStyle = v;
-                        ConfluxMapClient.get().onMapColorStyleChanged();
-                    },
-                    ConfigScreen::mapColorStyleKey
-                );
-                break;
-            case RADAR:
-                final boolean radarControlsActive = radarAccess.controlsActive();
-                final String radarTooltipKey = radarAccess.tooltipKey();
-                y = addToggleRow(
-                    y, "confluxmap.config.radar.enabled",
-                    () -> config.radarEnabled, v -> config.radarEnabled = v,
-                    radarControlsActive, radarTooltipKey
-                );
-                y = addEnumRow(
-                    y, "confluxmap.config.radar.display_mode",
-                    ConfluxConfig.RadarDisplayMode.values(),
-                    () -> config.radarDisplayMode, v -> config.radarDisplayMode = v,
-                    ConfigScreen::radarDisplayModeKey,
-                    radarControlsActive, radarTooltipKey
-                );
-                y = addToggleRow(
-                    y, "confluxmap.config.radar.show_players",
-                    () -> config.radarShowPlayers, v -> config.radarShowPlayers = v,
-                    radarControlsActive, radarTooltipKey
-                );
-                y = addToggleRow(
-                    y, "confluxmap.config.radar.show_hostile",
-                    () -> config.radarShowHostile, v -> config.radarShowHostile = v,
-                    radarControlsActive, radarTooltipKey
-                );
-                y = addToggleRow(
-                    y, "confluxmap.config.radar.show_passive",
-                    () -> config.radarShowPassive, v -> config.radarShowPassive = v,
-                    radarControlsActive, radarTooltipKey
-                );
-                y = addToggleRow(
-                    y, "confluxmap.config.radar.show_other",
-                    () -> config.radarShowOther, v -> config.radarShowOther = v,
-                    radarControlsActive, radarTooltipKey
-                );
-                y = addToggleRow(
-                    y, "confluxmap.config.radar.show_player_names",
-                    () -> config.radarShowPlayerNames, v -> config.radarShowPlayerNames = v,
-                    radarControlsActive, radarTooltipKey
-                );
-                y = addIntSliderRow(
-                    y, "confluxmap.config.radar.max_entities", 1, 500,
-                    () -> config.radarMaxEntities, v -> config.radarMaxEntities = v,
-                    ConfigScreen::plainText, radarControlsActive, radarTooltipKey
-                );
-                y = addToggleRow(
-                    y, "confluxmap.config.radar.player_icon_outline",
-                    () -> config.radarPlayerIconOutlineEnabled,
-                    v -> config.radarPlayerIconOutlineEnabled = v,
-                    radarControlsActive, radarTooltipKey
-                );
-                y = addIntSliderRow(
-                    y, "confluxmap.config.radar.icon_outline_thickness",
-                    ConfluxConfig.MIN_RADAR_ICON_OUTLINE_THICKNESS,
-                    ConfluxConfig.MAX_RADAR_ICON_OUTLINE_THICKNESS,
-                    () -> config.radarIconOutlineThickness,
-                    v -> config.radarIconOutlineThickness = v,
-                    ConfigScreen::pxText, radarControlsActive, radarTooltipKey
-                );
-                y = addIntSliderRow(
-                    y, "confluxmap.config.radar.icon_size",
-                    ConfluxConfig.MIN_RADAR_ICON_SIZE, ConfluxConfig.MAX_RADAR_ICON_SIZE,
-                    () -> config.radarIconSize, v -> config.radarIconSize = v,
-                    ConfigScreen::pxText, radarControlsActive, radarTooltipKey
-                );
-                y = addIntSliderRow(
-                    y, "confluxmap.config.radar.player_highlight_ghost_duration",
-                    ConfluxConfig.MIN_RADAR_PLAYER_HIGHLIGHT_GHOST_SECONDS,
-                    ConfluxConfig.MAX_RADAR_PLAYER_HIGHLIGHT_GHOST_SECONDS,
-                    () -> config.radarPlayerHighlightGhostSeconds,
-                    v -> config.radarPlayerHighlightGhostSeconds = v,
-                    ConfigScreen::secondsText, radarControlsActive, radarTooltipKey
-                );
-                break;
-            case WAYPOINTS:
-                y = addActionRow(
-                    y,
-                    "confluxmap.config.waypoints.teleport_command",
-                    () -> MinecraftAccess.setScreen(
-                        Minecraft.getInstance(),
-                        new TeleportCommandScreen(this, config, configIo)
-                    )
-                );
-                y = addToggleRow(
-                    y, "confluxmap.config.waypoints.show_local",
-                    () -> config.localWaypointsVisible, v -> config.localWaypointsVisible = v
-                );
-                if (sharedAvailability.visible()) {
-                    y = addToggleRow(
-                        y, "confluxmap.config.waypoints.show_shared",
-                        () -> config.sharedWaypointsVisible, v -> config.sharedWaypointsVisible = v,
-                        sharedAvailability.ready(),
-                        sharedAvailability.disabledByServer()
-                            ? "confluxmap.shared_waypoints.disabled_by_server"
-                            : null
-                    );
-                }
-                y = addIntSliderRow(
-                    y, "confluxmap.config.waypoints.render_distance", 0, 100_000,
-                    () -> config.waypointRenderDistance, v -> config.waypointRenderDistance = v, ConfigScreen::renderDistanceText
-                );
-                y = addToggleRow(
-                    y, "confluxmap.config.waypoints.edge_indicators",
-                    () -> config.waypointEdgeIndicatorsEnabled, v -> config.waypointEdgeIndicatorsEnabled = v
-                );
-                y = addIntSliderRow(
-                    y, "confluxmap.config.waypoints.death_points_kept", 0, 50,
-                    () -> config.deathPointsKept, v -> config.deathPointsKept = v, ConfigScreen::plainText
-                );
-                y = addToggleRow(
-                    y, "confluxmap.config.waypoints.beams_enabled",
-                    () -> config.waypointBeamsEnabled, v -> config.waypointBeamsEnabled = v
-                );
-                y = addToggleRow(
-                    y, "confluxmap.config.waypoints.labels_enabled",
-                    () -> config.waypointLabelsEnabled, v -> config.waypointLabelsEnabled = v
-                );
-                y = addIntSliderRow(
-                    y, "confluxmap.config.waypoints.icon_opacity",
-                    ConfluxConfig.MIN_WAYPOINT_ICON_OPACITY, ConfluxConfig.MAX_WAYPOINT_ICON_OPACITY,
-                    () -> config.waypointIconOpacity, v -> config.waypointIconOpacity = v,
-                    ConfigScreen::percentText
-                );
-                y = addIntSliderRow(
-                    y, "confluxmap.config.waypoints.highlight_dim_opacity",
-                    ConfluxConfig.MIN_WAYPOINT_HIGHLIGHT_DIM_OPACITY,
-                    ConfluxConfig.MAX_WAYPOINT_HIGHLIGHT_DIM_OPACITY,
-                    () -> config.waypointHighlightDimOpacity,
-                    v -> config.waypointHighlightDimOpacity = v,
-                    ConfigScreen::percentText
-                );
-                y = addIntSliderRow(
-                    y, "confluxmap.config.waypoints.label_scale",
-                    ConfluxConfig.MIN_WAYPOINT_LABEL_SCALE_PERCENT,
-                    ConfluxConfig.MAX_WAYPOINT_LABEL_SCALE_PERCENT,
-                    () -> config.waypointLabelScalePercent,
-                    v -> config.waypointLabelScalePercent = v,
-                    ConfigScreen::percentText
-                );
-                break;
-            case PERFORMANCE:
-                y = addIntSliderRow(
-                    y, "confluxmap.config.performance.snapshot_budget", 1, 64,
-                    () -> config.snapshotBudgetPerTick, v -> config.snapshotBudgetPerTick = v, ConfigScreen::plainText
-                );
-                y = addIntSliderRow(
-                    y, "confluxmap.config.performance.gpu_tile_cache_limit", 16, 2048,
-                    () -> config.gpuTileCacheLimit, v -> config.gpuTileCacheLimit = v, ConfigScreen::plainText
-                );
-                y = addToggleRow(
-                    y, "confluxmap.config.performance.update_check",
-                    () -> config.updateCheckEnabled, v -> config.updateCheckEnabled = v
-                );
-                break;
-            case PREDICTION:
-                final String underlayReason = predictionAccess.disabledReasonKey(
-                    PredictionControl.UNDERLAY
-                );
-                final String syncReason = predictionAccess.disabledReasonKey(
-                    PredictionControl.NETWORK_SYNC
-                );
-                final String structureReason = predictionAccess.disabledReasonKey(
-                    PredictionControl.STRUCTURES
-                );
-                y = addActionRow(
-                    y,
-                    "confluxmap.config.prediction.manual_seed",
-                    () -> MinecraftAccess.setScreen(
-                        Minecraft.getInstance(), new ManualSeedScreen(this)
-                    ),
-                    manualSeedAvailable,
-                    manualSeedAvailable ? null : "confluxmap.screen.config.prediction.seed_disabled_by_server"
-                );
-                y = addToggleRow(
-                    y, "confluxmap.config.prediction.enabled",
-                    () -> config.predictionEnabled, v -> config.predictionEnabled = v,
-                    underlayReason == null, underlayReason
-                );
-                y = addToggleRow(
-                    y, "confluxmap.config.prediction.network_sync",
-                    () -> config.predictionNetworkSync, v -> config.predictionNetworkSync = v,
-                    syncReason == null, syncReason
-                );
-                y = addToggleRow(
-                    y, "confluxmap.config.prediction.show_structures",
-                    () -> config.predictionShowStructures, v -> config.predictionShowStructures = v,
-                    structureReason == null, structureReason
-                );
-                y = addDecimalSliderRow(
-                    y, "confluxmap.config.prediction.structure_icon_detail_limit",
-                    ConfluxConfig.MIN_PREDICTION_STRUCTURE_ICON_HIDE_ZOOM,
-                    ConfluxConfig.MAX_PREDICTION_STRUCTURE_ICON_HIDE_ZOOM,
-                    DecimalSliderValue.CONTINUOUS,
-                    () -> config.predictionStructureIconHideZoom,
-                    v -> config.predictionStructureIconHideZoom = v,
-                    ConfigScreen::structureIconDetailLimitText,
-                    structureReason == null, structureReason
-                );
-                y = addEnumRow(
-                    y, "confluxmap.config.prediction.view_mode", PredictionViewMode.values(),
-                    () -> config.predictionViewMode,
-                    v -> {
-                        config.predictionViewMode = v;
-                        ConfluxMapClient.get().predictionTileService().setViewMode(v);
-                    }, ConfigScreen::predictionViewModeKey,
-                    underlayReason == null, underlayReason
-                );
-                y = addIntSliderRow(
-                    y, "confluxmap.config.prediction.debounce", 100, 2000,
-                    () -> config.predictionDebounceMs, v -> config.predictionDebounceMs = v,
-                    ConfigScreen::plainText, underlayReason == null, underlayReason
-                );
-                break;
-            default:
-                break;
-        }
-        contentHeight = y + scrollOffset - rowsTop;
+    private static Component tabLabel(final Category c, final boolean selected) {
+        return selected
+            ? Texts.literal("[" + Texts.translatable(c.labelKey).getString() + "]")
+            : Texts.translatable(c.labelKey);
     }
 
-    private int rowX() {
+    /**
+     * Moves the tab bar's {@code [label]} highlight to the clicked tab at the click
+     * instant, so the feedback never waits out the two acts; the landing rebuild recreates
+     * the same labels from the new category.
+     */
+    private void highlightTab(final Category c) {
+        final Category[] categories = Category.values();
+        for (int index = 0; index < tabButtons.size(); index++) {
+            tabButtons.get(index).setMessage(tabLabel(categories[index], categories[index] == c));
+        }
+    }
+
+    /**
+     * Opens act 1: the current rows stop being clickable and get snapshotted so a rebuild
+     * cannot drop them mid-fade, their reveal starts falling from full alpha, and the old
+     * category stays current until the landing rebuild — so tick-driven policy rebuilds
+     * keep serving the retiring tab instead of racing the act.
+     */
+    private void beginRetireAct() {
+        // A switch starting inside the open reveal takes the rows over; settling the open
+        // stagger first keeps the two drivers from fighting over the same rows.
+        settleOpenRowStagger();
+        retiring = rows.takeRetireSnapshot();
+        boolean focusedIsRetiring = false;
+        for (final ConfigRows.RowSlot slot : retiring.rows()) {
+            for (final AbstractWidget widget : slot.widgets()) {
+                widget.active = false;
+                focusedIsRetiring |= getFocused() == widget;
+            }
+        }
+        if (focusedIsRetiring) {
+            setFocused(null);
+        }
+        // The rows stood at full alpha, so the retire act falls from there.
+        actReveal = PopupReveal.fallingFrom(
+            1.0f, UiMotion.durationSeconds(config.uiTransitionSpeed)
+        );
+    }
+
+    /**
+     * Drives the two-act tab switch: ticks the running act's reveal, applies its per-row
+     * alphas before the widgets draw, and lands a finished act — the retire act rebuilds
+     * for the queued tab and starts the reveal act, a settled reveal hands the rows back
+     * to the inherited path. An idle screen pays a single phase check per frame, and a
+     * close fade takes the rows over like the open stagger does.
+     */
+    private void applyTabSwitch() {
+        if (tabSwitch.phase() == TabSwitchFlow.Phase.IDLE) {
+            return;
+        }
+        if (isClosing()) {
+            abandonTabSwitch();
+            return;
+        }
+        actReveal.tick(config.uiTransitionsEnabled, UiMotion.durationSeconds(config.uiTransitionSpeed));
+        if (actReveal.animating()) {
+            applyActAlphas();
+            return;
+        }
+        landTabSwitch();
+        if (actReveal != null && actReveal.animating()) {
+            // The landing rebuilt fresh rows; their first drawn frame starts the new act
+            // at zero instead of flashing in at full alpha.
+            applyActAlphas();
+        }
+    }
+
+    /**
+     * One frame of the running act. Act 1 slices its progress across the retiring rows in
+     * reverse build order — bottom row first, collecting upward — and act 2 replays the
+     * open stagger's build-order slices across every row, buttons and rows without a
+     * button alike.
+     */
+    private void applyActAlphas() {
+        final float progress = actReveal.progress();
+        if (tabSwitch.phase() == TabSwitchFlow.Phase.RETIRING) {
+            final List<ConfigRows.RowSlot> retiringRows = retiring.rows();
+            final int count = retiringRows.size();
+            for (int index = 0; index < count; index++) {
+                final float alpha = Easing.easeOutCubic(
+                    Stagger.slice(progress, count - 1 - index, count, ROW_STAGGER_FRACTION)
+                );
+                for (final AbstractWidget widget : retiringRows.get(index).widgets()) {
+                    if (widget instanceof RowButton button) {
+                        button.setRowAlpha(alpha);
+                    } else {
+                        widget.setAlpha(Math.max(alpha, ConfluxScreen.WIDGET_ALPHA_FLOOR));
+                        if (widget instanceof EditBox field) {
+                            field.visible = alpha >= ConfluxScreen.FIELD_VISIBLE_THRESHOLD;
+                        }
+                    }
+                }
+            }
+            return;
+        }
+        applyRowSlices(progress);
+    }
+
+    /**
+     * Slices one stagger progress across the rows in build order and stores each row's
+     * fade on its slot. A row button renders with the slice on both render channels; a
+     * row without a button — a slider, an icon-texture field — fades its widgets through
+     * the same slice, so those rows queue with the buttons instead of riding the faster
+     * uniform screen reveal and surfacing before the rows around them.
+     */
+    private void applyRowSlices(final float progress) {
+        final List<ConfigRows.RowSlot> slots = rows.rowSlots();
+        final int count = slots.size();
+        for (int index = 0; index < count; index++) {
+            final float alpha = Easing.easeOutCubic(
+                Stagger.slice(progress, index, count, ROW_STAGGER_FRACTION)
+            );
+            final ConfigRows.RowSlot slot = slots.get(index);
+            slot.setFade(alpha);
+            for (final AbstractWidget widget : slot.widgets()) {
+                if (widget instanceof RowButton button) {
+                    button.setRowAlpha(alpha);
+                } else {
+                    // The floor keeps a slider's vanilla-folded message out of the forced-
+                    // opaque zone while its row waits; see ConfluxScreen.WIDGET_ALPHA_FLOOR.
+                    widget.setAlpha(Math.max(alpha, ConfluxScreen.WIDGET_ALPHA_FLOOR));
+                    if (widget instanceof EditBox field) {
+                        field.visible = alpha >= ConfluxScreen.FIELD_VISIBLE_THRESHOLD;
+                    }
+                }
+            }
+        }
+    }
+
+    private void landTabSwitch() {
+        final TabSwitchFlow.Landing<Category> landing = tabSwitch.land();
+        switch (landing.action()) {
+            case REBUILD_AND_REVEAL -> {
+                retiring = null;
+                actReveal = new PopupReveal();
+                actReveal.setOpen(true);
+                switchTo(landing.target());
+            }
+            case SETTLE -> {
+                settleRowSlots();
+                retiring = null;
+                actReveal = null;
+            }
+            case NONE -> {
+            }
+        }
+    }
+
+    /**
+     * Hands every act-driven row back to the inherited path so the screen's own close fade
+     * moves them: a scoped row would keep its private alpha while the screen dims around it.
+     */
+    private void abandonTabSwitch() {
+        settleRowSlots();
+        if (retiring != null) {
+            for (final ConfigRows.RowSlot slot : retiring.rows()) {
+                for (final AbstractWidget widget : slot.widgets()) {
+                    if (widget instanceof RowButton button) {
+                        button.settleRowAlpha();
+                    } else {
+                        widget.setAlpha(1.0f);
+                        if (widget instanceof EditBox field) {
+                            field.visible = true;
+                        }
+                    }
+                }
+            }
+            retiring = null;
+        }
+        tabSwitch.reset();
+        actReveal = null;
+    }
+
+    /**
+     * Label alpha while a row stagger drives the rows — the open's or a tab switch's act 2.
+     * The label reads the same slot fade its row's widgets render with, so a header or a
+     * slider caption appears with its row instead of popping early on the faster uniform
+     * reveal that the un-scoped widgets would otherwise follow.
+     */
+    private float slotFadeAlpha(final ConfigRows.RowSlot slot) {
+        return slot.fade();
+    }
+
+    /** Label alpha for the retiring snapshot: the followed row's reverse-order fade. */
+    private float retiringLabelAlpha(final ConfigRows.RowSlot slot) {
+        final List<ConfigRows.RowSlot> retiringRows = retiring.rows();
+        for (int index = 0; index < retiringRows.size(); index++) {
+            if (retiringRows.get(index) == slot) {
+                return Easing.easeOutCubic(Stagger.slice(
+                    actReveal.progress(), retiringRows.size() - 1 - index, retiringRows.size(),
+                    ROW_STAGGER_FRACTION
+                ));
+            }
+        }
+        return 1.0f;
+    }
+
+    int rowX() {
         return width / 2 - rowWidth / 2;
     }
 
-    private int addToggleRow(final int y, final String labelKey, final BooleanSupplier getter, final Consumer<Boolean> setter) {
-        return addToggleRow(y, labelKey, getter, setter, true);
+    Font font() {
+        return this.font;
     }
 
-    private int addToggleRow(
-        final int y,
-        final String labelKey,
-        final BooleanSupplier getter,
-        final Consumer<Boolean> setter,
-        final boolean active
-    ) {
-        return addToggleRow(y, labelKey, getter, setter, active, null);
+    /** Screen-protected registration, exposed for {@link ConfigRows}. */
+    <T extends AbstractWidget> T addRowWidget(final T widget) {
+        return addRenderableWidget(widget);
     }
 
-    private int addToggleRow(
-        final int y,
-        final String labelKey,
-        final BooleanSupplier getter,
-        final Consumer<Boolean> setter,
-        final boolean active,
-        final String disabledTooltipKey
-    ) {
-        if (rowVisible(y)) {
-            final Button button = addRenderableWidget(Widgets.button(
-                rowX(), y, rowWidth, ROW_HEIGHT - 2, boolLabel(labelKey, getter.getAsBoolean()),
-                b -> {
-                    final boolean next = !getter.getAsBoolean();
-                    setter.accept(next);
-                    configIo.save(config);
-                    b.setMessage(boolLabel(labelKey, next));
+    /**
+     * Drives the rows' staggered fade-in through the open reveal's shared progress, sliced
+     * per row so the rows appear top to bottom. Runs after the reveal frame has set the
+     * uniform widget alpha, so the per-row values win for this frame. A rebuild mid-fade
+     * hands its new rows the current progress, and the first non-opening frame restores
+     * the exact pre-flight rows — a settled screen then pays a single flag check per frame.
+     */
+    private void applyRowStagger() {
+        if (!rowFadeArmed) {
+            return;
+        }
+        if (!revealOpening()) {
+            // The reveal landed or a close fade took over. Un-scope the rows so the
+            // screen's own fade handles both render channels from here — on a close-fade
+            // frame a scoped row would stay opaque while the screen dims.
+            settleOpenRowStagger();
+            return;
+        }
+        final float progress = revealProgress();
+        applyRowSlices(progress);
+    }
+
+    /** Disarms the open stagger and hands its rows back to the inherited path. */
+    private void settleOpenRowStagger() {
+        if (!rowFadeArmed) {
+            return;
+        }
+        rowFadeArmed = false;
+        settleRowSlots();
+    }
+
+    /**
+     * Restores every live row to the inherited path: the slot fade reset and every widget
+     * back to full alpha, so the screen's own fades — close fade, uniform reveal — move
+     * all rows as one. Covers rows without a button too: their alpha was scoped by the
+     * stagger and must not stay frozen at the last slice.
+     */
+    private void settleRowSlots() {
+        for (final ConfigRows.RowSlot slot : rows.rowSlots()) {
+            slot.setFade(1.0f);
+            if (slot.button() != null) {
+                slot.button().settleRowAlpha();
+            } else {
+                for (final AbstractWidget widget : slot.widgets()) {
+                    widget.setAlpha(1.0f);
+                    if (widget instanceof EditBox field) {
+                        field.visible = true;
+                    }
                 }
-            ));
-            button.active = active;
-            setDisabledTooltip(button, disabledTooltipKey);
+            }
         }
-        return y + ROW_HEIGHT;
-    }
-
-    private <T> int addEnumRow(
-        final int y,
-        final String labelKey,
-        final T[] values,
-        final Supplier<T> getter,
-        final Consumer<T> setter,
-        final Function<T, String> valueKeyFn
-    ) {
-        return addEnumRow(y, labelKey, values, getter, setter, valueKeyFn, true, null);
-    }
-
-    private <T> int addEnumRow(
-        final int y,
-        final String labelKey,
-        final T[] values,
-        final Supplier<T> getter,
-        final Consumer<T> setter,
-        final Function<T, String> valueKeyFn,
-        final boolean active,
-        final String disabledTooltipKey
-    ) {
-        if (rowVisible(y)) {
-            final Button button = addRenderableWidget(Widgets.button(
-                rowX(), y, rowWidth, ROW_HEIGHT - 2, enumLabel(labelKey, getter.get(), valueKeyFn),
-                b -> {
-                    final T next = nextValue(values, getter.get());
-                    setter.accept(next);
-                    configIo.save(config);
-                    b.setMessage(enumLabel(labelKey, next, valueKeyFn));
-                }
-            ));
-            button.active = active;
-            setDisabledTooltip(button, disabledTooltipKey);
-        }
-        return y + ROW_HEIGHT;
-    }
-
-    private int addZoomRow(final int y) {
-        if (rowVisible(y)) {
-            addRenderableWidget(Widgets.button(
-                rowX(), y, rowWidth, ROW_HEIGHT - 2, zoomLabel(config.minimapZoomIndex),
-                b -> {
-                    config.cycleMinimapZoom();
-                    configIo.save(config);
-                    b.setMessage(zoomLabel(config.minimapZoomIndex));
-                }
-            ));
-        }
-        return y + ROW_HEIGHT;
-    }
-
-    private int addActionRow(final int y, final String labelKey, final Runnable action) {
-        return addActionRow(y, labelKey, action, true, null);
-    }
-
-    private int addActionRow(
-        final int y,
-        final String labelKey,
-        final Runnable action,
-        final boolean active,
-        final String disabledTooltipKey
-    ) {
-        if (rowVisible(y)) {
-            final Button button = addRenderableWidget(Widgets.button(
-                rowX(), y, rowWidth, ROW_HEIGHT - 2, Texts.translatable(labelKey), ignored -> action.run()
-            ));
-            button.active = active;
-            setDisabledTooltip(button, disabledTooltipKey);
-        }
-        return y + ROW_HEIGHT;
-    }
-
-    private int addIntSliderRow(
-        final int y,
-        final String labelKey,
-        final int min,
-        final int max,
-        final IntSupplier getter,
-        final IntConsumer setter,
-        final IntFunction<String> valueText
-    ) {
-        return addIntSliderRow(y, labelKey, min, max, getter, setter, valueText, true);
-    }
-
-    private int addIntSliderRow(
-        final int y,
-        final String labelKey,
-        final int min,
-        final int max,
-        final IntSupplier getter,
-        final IntConsumer setter,
-        final IntFunction<String> valueText,
-        final boolean active
-    ) {
-        return addIntSliderRow(y, labelKey, min, max, getter, setter, valueText, active, null);
-    }
-
-    private int addIntSliderRow(
-        final int y,
-        final String labelKey,
-        final int min,
-        final int max,
-        final IntSupplier getter,
-        final IntConsumer setter,
-        final IntFunction<String> valueText,
-        final boolean active,
-        final String disabledTooltipKey
-    ) {
-        if (rowVisible(y)) {
-            final IntSliderInput sliderInput = new IntSliderInput(
-                this.font,
-                rowX(),
-                y,
-                rowWidth,
-                ROW_HEIGHT - 2,
-                min,
-                max,
-                getter.getAsInt(),
-                value -> {
-                    setter.accept(value);
-                    configIo.save(config);
-                },
-                value -> Texts.translatable(labelKey, valueText.apply(value))
-            );
-            sliderInput.setActive(active);
-            sliderInputs.add(sliderInput);
-            addRenderableWidget(sliderInput.slider());
-            addRenderableWidget(sliderInput.input());
-            setDisabledTooltip(sliderInput.slider(), disabledTooltipKey);
-            setDisabledTooltip(sliderInput.input(), disabledTooltipKey);
-        }
-        return y + ROW_HEIGHT;
-    }
-
-    private int addDecimalSliderRow(
-        final int y,
-        final String labelKey,
-        final double min,
-        final double max,
-        final double step,
-        final DoubleSupplier getter,
-        final DoubleConsumer setter,
-        final DoubleFunction<String> valueText,
-        final boolean active,
-        final String disabledTooltipKey
-    ) {
-        if (rowVisible(y)) {
-            final DecimalSliderInput sliderInput = new DecimalSliderInput(
-                this.font,
-                rowX(),
-                y,
-                rowWidth,
-                ROW_HEIGHT - 2,
-                min,
-                max,
-                step,
-                getter.getAsDouble(),
-                value -> {
-                    setter.accept(value);
-                    configIo.save(config);
-                },
-                value -> Texts.translatable(labelKey, valueText.apply(value))
-            );
-            sliderInput.setActive(active);
-            decimalSliderInputs.add(sliderInput);
-            addRenderableWidget(sliderInput.slider());
-            addRenderableWidget(sliderInput.input());
-            setDisabledTooltip(sliderInput.slider(), disabledTooltipKey);
-            setDisabledTooltip(sliderInput.input(), disabledTooltipKey);
-        }
-        return y + ROW_HEIGHT;
-    }
-
-    private static <T> T nextValue(final T[] values, final T current) {
-        final int index = Arrays.asList(values).indexOf(current);
-        return values[(index + 1) % values.length];
-    }
-
-    private static Component boolLabel(final String labelKey, final boolean value) {
-        return Texts.translatable(labelKey, resolvedText(value ? "confluxmap.value.on" : "confluxmap.value.off"));
-    }
-
-    private static <T> Component enumLabel(final String labelKey, final T value, final Function<T, String> valueKeyFn) {
-        return Texts.translatable(labelKey, resolvedText(valueKeyFn.apply(value)));
-    }
-
-    private static Component zoomLabel(final int zoomIndex) {
-        return Texts.translatable("confluxmap.config.minimap.zoom", resolvedText(ZOOM_VALUE_KEYS[zoomIndex]));
-    }
-
-    private static String resolvedText(final String key) {
-        return Texts.translatable(key).getString();
-    }
-
-    private static String plainText(final int value) {
-        return String.valueOf(value);
-    }
-
-    private static String pxText(final int value) {
-        return Texts.translatable("confluxmap.value.px", value).getString();
-    }
-
-    private static String percentText(final int value) {
-        return Texts.translatable("confluxmap.value.percent", value).getString();
-    }
-
-    private static String blocksText(final int value) {
-        return Texts.translatable("confluxmap.value.blocks", value).getString();
-    }
-
-    private static String secondsText(final int value) {
-        return Texts.translatable("confluxmap.value.seconds", value).getString();
-    }
-
-    private static String renderDistanceText(final int value) {
-        return value == 0 ? resolvedText("confluxmap.value.unlimited") : blocksText(value);
-    }
-
-    private static String structureIconDetailLimitText(final double scale) {
-        return Texts.translatable(
-            "confluxmap.value.zoom_multiplier", DecimalSliderInput.format(scale)
-        ).getString();
     }
 
     private PredictionSettingsAccess predictionSettingsAccess() {
@@ -997,7 +664,8 @@ public final class ConfigScreen extends ConfluxScreen {
             companionSession.seedSharingDisabledByServer(),
             manualSeedService.available(),
             companionSession.mapCorrectionDisabledReasonKey(),
-            companionSession.structureSearchAllowed()
+            companionSession.structureSearchAllowed(),
+            !companionSession.predictionAllowed()
         );
     }
 
@@ -1005,57 +673,25 @@ public final class ConfigScreen extends ConfluxScreen {
         return PlayerMarkerSettingsAccess.from(uiTheme.playerMarker().isPresent());
     }
 
-    private static String shapeKey(final ConfluxConfig.Shape shape) {
-        return shape == ConfluxConfig.Shape.CIRCLE ? "confluxmap.config.shape.circle" : "confluxmap.config.shape.square";
-    }
-
-    private static String playerMarkerStyleKey(final ConfluxConfig.PlayerMarkerStyle style) {
-        return style == ConfluxConfig.PlayerMarkerStyle.TRADITIONAL
-            ? "confluxmap.value.player_marker.traditional"
-            : "confluxmap.value.player_marker.modern";
-    }
-
-    private static String radarDisplayModeKey(final ConfluxConfig.RadarDisplayMode mode) {
-        return mode == ConfluxConfig.RadarDisplayMode.DOTS
-            ? "confluxmap.value.radar_display_mode.dots"
-            : "confluxmap.value.radar_display_mode.portraits";
-    }
-
-    private static String layerOverrideKey(final ConfluxConfig.LayerOverride override) {
-        switch (override) {
-            case FORCE_SURFACE:
-                return "confluxmap.config.layer_override.force_surface";
-            case FORCE_UNDERGROUND:
-                return "confluxmap.config.layer_override.force_underground";
-            case FORCE_SLICE:
-                return "confluxmap.config.layer_override.force_slice";
-            default:
-                return "confluxmap.config.layer_override.auto";
-        }
-    }
-
-    private static String mapColorStyleKey(final MapColorStyle style) {
-        return style == MapColorStyle.XAERO
-            ? "confluxmap.value.map_color_style.xaero"
-            : "confluxmap.value.map_color_style.conflux";
-    }
-
-    private static String predictionViewModeKey(final PredictionViewMode mode) {
-        switch (mode) {
-            case GENERATED_ONLY:
-                return "confluxmap.config.prediction.mode.generated_only";
-            case VISITED_ONLY:
-                return "confluxmap.config.prediction.mode.visited_only";
-            default:
-                return "confluxmap.config.prediction.mode.everywhere";
-        }
-    }
-
     @Override
     protected void renderContents(final GuiDraw draw, final int mouseX, final int mouseY, final float tickDelta) {
-        draw.renderBackground(this, mouseX, mouseY, tickDelta);
+        applyTabSwitch();
+        applyRowStagger();
+        draw.extractBackground(this, mouseX, mouseY, tickDelta);
         final String title = getTitle().getString();
         draw.drawTextWithShadow(this.font, title, width / 2f - this.font.width(title) / 2f, 8, 0xFFFFFFFF);
+        if (retiring == null) {
+            // During act 1 the snapshot replaces the live lists: before a rebuild they hold
+            // exactly the labels that are retiring, after one they hold the rebuilt tab's.
+            final ConfigRows.RowAlpha labelAlpha =
+                tabSwitch.phase() == TabSwitchFlow.Phase.REVEALING || rowFadeArmed
+                    ? this::slotFadeAlpha
+                    : ConfigRows.RowAlpha.FOLLOW_SCREEN;
+            rows.drawIconTextureLabels(draw, labelAlpha);
+            rows.drawSectionLabels(draw, labelAlpha);
+        } else {
+            rows.drawRetiringLabels(draw, retiring, this::retiringLabelAlpha);
+        }
         if (category == Category.RADAR && radarAccess.noticeKey() != null) {
             drawRadarPolicyNotice(draw);
         }
@@ -1082,7 +718,7 @@ public final class ConfigScreen extends ConfluxScreen {
         final String notice = Texts.translatable(radarAccess.noticeKey()).getString();
         int y = tabLayout().contentTop() + 2;
         for (final FormattedCharSequence line : this.font.split(
-            FormattedText.of(notice), Math.max(40, rowWidth)
+            Component.literal(notice), Math.max(40, rowWidth)
         )) {
             draw.drawTextWithShadow(
                 this.font, line, width / 2f - this.font.width(line) / 2f,

@@ -1,7 +1,7 @@
 package cn.net.rms.confluxmap.mc.ui.screen;
 
+import net.minecraft.network.chat.Component;
 import cn.net.rms.confluxmap.ConfluxMapClient;
-import cn.net.rms.confluxmap.compat.MinecraftAccess;
 import cn.net.rms.confluxmap.compat.MinecraftVersion;
 import cn.net.rms.confluxmap.compat.Texts;
 import cn.net.rms.confluxmap.compat.Widgets;
@@ -176,7 +176,7 @@ public final class ManualSeedScreen extends ConfluxScreen {
 
     @Override
     public void onClose() {
-        MinecraftAccess.setScreen(Minecraft.getInstance(), parent);
+        requestClose(parent);
     }
 
     @Override
@@ -186,7 +186,7 @@ public final class ManualSeedScreen extends ConfluxScreen {
         final int mouseY,
         final float tickDelta
     ) {
-        draw.renderBackground(this, mouseX, mouseY, tickDelta);
+        draw.extractBackground(this, mouseX, mouseY, tickDelta);
         drawCentered(draw, getTitle().getString(), 20, 0xFFFFFFFF);
         drawWrappedCentered(
             draw,
@@ -225,7 +225,7 @@ public final class ManualSeedScreen extends ConfluxScreen {
     ) {
         int y = startY;
         for (final FormattedCharSequence line : this.font.split(
-            FormattedText.of(value), Math.max(40, Math.min(280, width - 24))
+            Component.literal(value), Math.max(40, Math.min(280, width - 24))
         )) {
             draw.drawTextWithShadow(
                 this.font,

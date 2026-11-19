@@ -133,7 +133,7 @@ final class WaypointSetDeleteConfirmScreen extends ConfluxScreen {
 
     @Override
     protected void renderContents(final GuiDraw draw, final int mouseX, final int mouseY, final float tickDelta) {
-        draw.renderBackground(this, mouseX, mouseY, tickDelta);
+        draw.extractBackground(this, mouseX, mouseY, tickDelta);
         drawCentered(draw, getTitle().getString(), 24, TEXT_COLOR);
         drawCentered(draw, Texts.translatable(
             "confluxmap.screen.waypoint_set.delete.name", setName

@@ -1,5 +1,7 @@
 package cn.net.rms.confluxmap.mixin;
+
 import cn.net.rms.confluxmap.ConfluxMapClient;
+import cn.net.rms.confluxmap.ConfluxMapMod;
 import cn.net.rms.confluxmap.compat.GuiTransforms;
 import cn.net.rms.confluxmap.compat.MinecraftAccess;
 import cn.net.rms.confluxmap.core.config.ConfluxConfig;
@@ -31,6 +33,10 @@ public abstract class ToastHudMixin {
     @Unique
     private boolean confluxmap$toastsShifted;
 
+    /** Runs every frame while toasts show; the first fault disables the shift for the session. */
+    @Unique
+    private static boolean confluxmap$toastShiftFaulted;
+
     @Inject(
         method = "extractRenderState",
         at = @At("HEAD")
@@ -40,17 +46,27 @@ public abstract class ToastHudMixin {
         final CallbackInfo ci
     ) {
         confluxmap$toastsShifted = false;
-        final int screenWidth = context.guiWidth();
-        final int screenHeight = context.guiHeight();
-        final HudAmbient ambient = GuiTransforms.ambient(context);
-        ToastHudBounds.beginFrame(screenWidth, screenHeight);
-        final float shift = confluxmap$verticalPush(ambient, screenWidth, screenHeight);
-        if (shift == 0f) {
+        if (confluxmap$toastShiftFaulted) {
             return;
         }
-        context.pose().pushMatrix();
-        context.pose().translate(0, shift);
-        confluxmap$toastsShifted = true;
+        try {
+            final int screenWidth = context.guiWidth();
+            final int screenHeight = context.guiHeight();
+            final HudAmbient ambient = GuiTransforms.ambient(context);
+            ToastHudBounds.beginFrame(screenWidth, screenHeight);
+            final float shift = confluxmap$verticalPush(ambient, screenWidth, screenHeight);
+            if (shift == 0f) {
+                return;
+            }
+            context.pose().pushMatrix();
+            context.pose().translate(0, shift);
+            confluxmap$toastsShifted = true;
+        } catch (final Throwable fault) {
+            confluxmap$toastShiftFaulted = true;
+            ConfluxMapMod.LOGGER.error(
+                "toast HUD shift disabled after a fault", fault
+            );
+        }
     }
 
     @Inject(
@@ -64,11 +80,21 @@ public abstract class ToastHudMixin {
         if (!confluxmap$toastsShifted) {
             return;
         }
-        context.pose().popMatrix();
-        confluxmap$toastsShifted = false;
+        try {
+            context.pose().popMatrix();
+        } catch (final Throwable fault) {
+            if (!confluxmap$toastShiftFaulted) {
+                confluxmap$toastShiftFaulted = true;
+                ConfluxMapMod.LOGGER.error(
+                    "toast HUD shift disabled after a fault", fault
+                );
+            }
+        } finally {
+            confluxmap$toastsShifted = false;
+        }
     }
 
-    /** Returns the translation to push, in the coordinates of the matrix {@code ambient} sits on. */
+    /** Returns the translation to pushPose, in the coordinates of the matrix {@code ambient} sits on. */
     @Unique
     private static float confluxmap$verticalPush(
         final HudAmbient ambient,
@@ -86,7 +112,7 @@ public abstract class ToastHudMixin {
         }
         final var screen = MinecraftAccess.screen(client);
         if (!MinimapHudVisibility.shouldRender(
-            config.minimapEnabled,
+            config.minimapEnabled && app.companionSession().minimapAllowed(),
             app.gameBridge().session().active(),
             screen instanceof FullscreenMapScreen,
             MinecraftAccess.isContainerScreen(screen),

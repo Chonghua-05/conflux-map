@@ -1441,7 +1441,7 @@ public final class RegionSummaryService {
 
     static CompoundTag readChunkNbt(final ServerLevel world, final ChunkPos pos) throws IOException {
         try {
-            return world.getChunkSource().chunkMap.read(pos).join().orElse(null);
+            return ((cn.net.rms.confluxmap.mixin.ChunkMapAccessor) world.getChunkSource().chunkMap).confluxmap$readChunk(pos).join().orElse(null);
         } catch (final CompletionException e) {
             throw new IOException("failed to read chunk " + pos, e.getCause());
         }

@@ -3,11 +3,13 @@ package cn.net.rms.confluxmap.mc.net;
 import cn.net.rms.confluxmap.ConfluxMapMod;
 import cn.net.rms.confluxmap.core.model.WorldIdentity;
 import cn.net.rms.confluxmap.core.net.CorrectionProfile;
+import cn.net.rms.confluxmap.core.net.FeatureRestrictionsS2C;
 import cn.net.rms.confluxmap.core.net.FlatBaselineS2C;
 import cn.net.rms.confluxmap.core.net.HelloPolicyS2C;
 import cn.net.rms.confluxmap.core.net.MapCapabilitiesS2C;
 import cn.net.rms.confluxmap.core.net.MapCompatibilityS2C;
 import cn.net.rms.confluxmap.core.net.Message;
+import cn.net.rms.confluxmap.core.net.MapSyncCapability;
 import cn.net.rms.confluxmap.core.net.MapSyncCompatibility;
 import cn.net.rms.confluxmap.core.net.MapSyncProtocol;
 import cn.net.rms.confluxmap.core.net.MsgCodec;
@@ -15,7 +17,9 @@ import cn.net.rms.confluxmap.core.net.NegotiatedMapSync;
 import cn.net.rms.confluxmap.core.net.ProtoException;
 import cn.net.rms.confluxmap.core.net.ServerInstanceS2C;
 import cn.net.rms.confluxmap.core.net.ServerViewDistanceS2C;
+import cn.net.rms.confluxmap.core.net.QuadraLayoutS2C;
 import cn.net.rms.confluxmap.core.predict.FlatBaseline;
+import cn.net.rms.confluxmap.core.predict.QuadrantLayout;
 import cn.net.rms.confluxmap.nativepredict.PredictorVersion;
 import java.util.Optional;
 import java.util.OptionalLong;
@@ -37,7 +41,7 @@ import org.jetbrains.annotations.Nullable;
  * snapshot so render/worker threads can observe the latest state without locks. Three call sites:
  * <ul>
  *   <li>{@code ClientNetworking} calls {@link #onHelloSent()} / {@link #onPolicy(HelloPolicyS2C)}
- *       / {@link #reset()} after marshalling NeoForge network callbacks to the client thread.</li>
+ *       / {@link #reset()} after marshalling Fabric network callbacks to the client thread.</li>
  *   <li>{@code WorldSessionTracker} calls {@link #tick()} every client tick.</li>
  *   <li>{@code PredictionBootstrap} / {@code WorldSessionTracker} read the getters.</li>
  * </ul>
@@ -55,6 +59,8 @@ public final class CompanionSession {
     private final AtomicReference<State> state = new AtomicReference<>(State.NONE);
     private volatile HelloPolicyS2C policy;
     private volatile FlatBaselineS2C flatBaselines;
+    private volatile QuadraLayoutS2C quadraLayouts;
+    private volatile FeatureRestrictionsS2C featureRestrictions = FeatureRestrictionsS2C.none();
     private volatile Message pendingSelection;
     private volatile NegotiatedMapSync negotiatedMapSync;
     private volatile int serverViewDistance = -1;
@@ -68,6 +74,8 @@ public final class CompanionSession {
         state.set(State.HELLO_SENT);
         policy = null;
         flatBaselines = null;
+        quadraLayouts = null;
+        featureRestrictions = FeatureRestrictionsS2C.none();
         pendingSelection = null;
         negotiatedMapSync = null;
         serverViewDistance = -1;
@@ -160,11 +168,25 @@ public final class CompanionSession {
         this.flatBaselines = message;
     }
 
+    /** Called from {@link ClientNetworking}'s receiver: quadrant layouts arrive just before the policy. */
+    public void onQuadraLayouts(final QuadraLayoutS2C message) {
+        this.quadraLayouts = message;
+    }
+
+    /** Called from {@link ClientNetworking}'s receiver: feature restrictions arrive just before the policy. */
+    public void onFeatureRestrictions(final FeatureRestrictionsS2C message) {
+        if (message != null) {
+            this.featureRestrictions = message;
+        }
+    }
+
     /** Called from {@link ClientPlayConnectionEvents#DISCONNECT}; forget everything. */
     public void reset() {
         state.set(State.NONE);
         policy = null;
         flatBaselines = null;
+        quadraLayouts = null;
+        featureRestrictions = FeatureRestrictionsS2C.none();
         pendingSelection = null;
         negotiatedMapSync = null;
         serverViewDistance = -1;
@@ -281,6 +303,34 @@ public final class CompanionSession {
         return state.get() != State.ACTIVE || current == null || !current.flags().structureSearchForbidden();
     }
 
+    /**
+     * Whether the HUD minimap is permitted for the current connection. Servers predating
+     * FEATURE_RESTRICTIONS never send the frame, and a handshake that never reaches ACTIVE
+     * leaves the connection non-companion - both preserve the historical allowed behavior.
+     */
+    public boolean minimapAllowed() {
+        return state.get() != State.ACTIVE || !featureRestrictions.minimapForbidden();
+    }
+
+    /** Whether the fullscreen world map is permitted; see {@link #minimapAllowed()}. */
+    public boolean worldMapAllowed() {
+        return state.get() != State.ACTIVE || !featureRestrictions.worldMapForbidden();
+    }
+
+    public String restrictionMessage() {
+        return state.get() == State.ACTIVE ? featureRestrictions.message() : "";
+    }
+
+    /** Whether local waypoints (list, editor, in-world rendering) are permitted; see {@link #minimapAllowed()}. */
+    public boolean waypointsAllowed() {
+        return state.get() != State.ACTIVE || !featureRestrictions.waypointsForbidden();
+    }
+
+    /** Whether the prediction underlay is permitted; see {@link #minimapAllowed()}. */
+    public boolean predictionAllowed() {
+        return state.get() != State.ACTIVE || !featureRestrictions.predictionForbidden();
+    }
+
     /** Whether an active companion explicitly withheld the seed from this client. */
     public boolean seedSharingDisabledByServer() {
         final HelloPolicyS2C current = policy;
@@ -321,6 +371,16 @@ public final class CompanionSession {
             : negotiated.decodeInbound(payload);
     }
 
+    /**
+     * Whether the negotiated server advertised {@code capability}. This is the server's
+     * selection intersected with what this build knows, so it stays false against older
+     * companions even though the local enum knows the constant.
+     */
+    public boolean supportsServer(final MapSyncCapability capability) {
+        final NegotiatedMapSync negotiated = negotiatedMapSync;
+        return negotiated != null && negotiated.supports(capability);
+    }
+
     byte[] encodeOutbound(final Message message) throws ProtoException {
         final NegotiatedMapSync negotiated = negotiatedMapSync;
         return negotiated == null ? MsgCodec.encode(message) : negotiated.encodeOutbound(message);
@@ -354,6 +414,27 @@ public final class CompanionSession {
         for (final FlatBaselineS2C.Entry entry : current.entries()) {
             if (entry.dimIndex() == dimIndex) {
                 return Optional.of(entry.baseline());
+            }
+        }
+        return Optional.empty();
+    }
+
+    /**
+     * The server-advertised quadra-gen layout for dimension index {@code dimIndex}, or empty when
+     * the session is not active or quadra-gen manages nothing there (including servers predating
+     * QUADRA_LAYOUT, which never send the message).
+     */
+    public Optional<QuadrantLayout> quadraLayoutFor(final int dimIndex) {
+        if (state.get() != State.ACTIVE) {
+            return Optional.empty();
+        }
+        final QuadraLayoutS2C current = quadraLayouts;
+        if (current == null) {
+            return Optional.empty();
+        }
+        for (final QuadraLayoutS2C.Entry entry : current.entries()) {
+            if (entry.dimIndex() == dimIndex) {
+                return Optional.of(entry.layout());
             }
         }
         return Optional.empty();

@@ -16,7 +16,11 @@ import net.minecraft.world.level.levelgen.Heightmap;
 import net.minecraft.world.level.LightLayer;
 import net.minecraft.world.level.chunk.LevelChunk;
 
-/** Main-thread adapter that exposes one loaded {@link LevelChunk} through {@link ChunkColumnSource}. */
+/**
+ * Main-thread adapter that exposes one loaded {@link LevelChunk} through {@link ChunkColumnSource}.
+ * Every read stays on the chunk object: this runs from load/unload listeners, where a level
+ * query can re-enter the chunk system.
+ */
 final class WorldChunkColumnSource implements ChunkColumnSource {
     private final ServerLevel world;
     private final LevelChunk chunk;
@@ -64,7 +68,7 @@ final class WorldChunkColumnSource implements ChunkColumnSource {
     }
 
     static int toExclusiveHeight(final int topBlockY) {
-        // WorldChunk.sampleHeightmap returns the top block's Y, while ChunkColumnSource exposes
+        // LevelChunk.getHeight returns the top block's Y, while ChunkColumnSource exposes
         // vanilla's stored heightmap value: the first Y above that block.
         return topBlockY + 1;
     }
@@ -94,7 +98,7 @@ final class WorldChunkColumnSource implements ChunkColumnSource {
 
     @Override
     public int blockLightAbove(final int x, final int surfaceY, final int z) {
-        pos.set(startX + x, Math.min(surfaceY + 1, world.getMaxY() - 1), startZ + z);
+        pos.set(startX + x, Math.min(surfaceY + 1, world.getHeight() - 1), startZ + z);
         return world.getBrightness(net.minecraft.world.level.LightLayer.BLOCK, pos);
     }
 
@@ -104,8 +108,7 @@ final class WorldChunkColumnSource implements ChunkColumnSource {
         final int worldZ = startZ + z;
         final BiomeSample sample = new BiomeSample(worldX >> 2, y >> 2, worldZ >> 2);
         return biomeIds.computeIfAbsent(sample, ignored -> {
-            pos.set(worldX, y, worldZ);
-            final Identifier id = Regs.biomeIdAt(world, pos);
+            final Identifier id = Regs.chunkBiomeIdAt(world, chunk, worldX, y, worldZ);
             return id == null ? 1 : CubiomesBiomeIds.idForName(id.getPath()).orElse(1);
         });
     }

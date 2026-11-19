@@ -1,6 +1,6 @@
 package cn.net.rms.confluxmap.mc.ui.screen;
 
-import cn.net.rms.confluxmap.compat.MinecraftAccess;
+import net.minecraft.network.chat.Component;
 import cn.net.rms.confluxmap.compat.Texts;
 import cn.net.rms.confluxmap.compat.Widgets;
 import cn.net.rms.confluxmap.core.config.ConfigIo;
@@ -82,7 +82,7 @@ public final class UnsupportedPlatformWarningScreen extends ConfluxScreen {
             config.unsupportedPlatformWarningDismissed = true;
             configIo.save(config);
         }
-        MinecraftAccess.setScreen(Minecraft.getInstance(), parent);
+        requestClose(parent);
     }
 
     @Override
@@ -97,7 +97,7 @@ public final class UnsupportedPlatformWarningScreen extends ConfluxScreen {
         final int mouseY,
         final float tickDelta
     ) {
-        draw.renderBackground(this, mouseX, mouseY, tickDelta);
+        draw.extractBackground(this, mouseX, mouseY, tickDelta);
         drawCentered(draw, getTitle().getString(), 20, WARNING_TEXT_COLOR);
 
         int y = 46;
@@ -152,7 +152,7 @@ public final class UnsupportedPlatformWarningScreen extends ConfluxScreen {
         int lineY = y;
         final int textWidth = Math.min(MAX_TEXT_WIDTH, Math.max(80, width - 32));
         for (final FormattedCharSequence line : this.font.split(
-            FormattedText.of(value),
+            Component.literal(value),
             textWidth
         )) {
             draw.drawTextWithShadow(

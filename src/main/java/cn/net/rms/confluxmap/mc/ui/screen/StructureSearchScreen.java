@@ -1,6 +1,7 @@
 package cn.net.rms.confluxmap.mc.ui.screen;
 
 import cn.net.rms.confluxmap.compat.MinecraftAccess;
+import cn.net.rms.confluxmap.compat.MouseButtons;
 import cn.net.rms.confluxmap.ConfluxMapClient;
 import cn.net.rms.confluxmap.compat.Regs;
 import cn.net.rms.confluxmap.compat.Texts;
@@ -10,6 +11,7 @@ import cn.net.rms.confluxmap.core.model.DimensionId;
 import cn.net.rms.confluxmap.core.predict.BiomeTable;
 import cn.net.rms.confluxmap.core.predict.CubiomesBiomeIds;
 import cn.net.rms.confluxmap.core.predict.StructureIndex;
+import cn.net.rms.confluxmap.mc.ui.BiomeLabels;
 import cn.net.rms.confluxmap.mc.net.CompanionSession;
 import cn.net.rms.confluxmap.mc.predict.StructureMarkerService;
 import cn.net.rms.confluxmap.mc.ui.GuiDraw;
@@ -28,7 +30,6 @@ import net.minecraft.client.gui.components.Button;
 import net.minecraft.client.gui.components.EditBox;
 import net.minecraft.network.chat.Component;
 import net.minecraft.resources.Identifier;
-import net.minecraft.util.Util;
 
 /** Shared structure/biome picker with localized filtering and candidate browsing. */
 final class StructureSearchScreen extends ConfluxScreen {
@@ -120,12 +121,6 @@ final class StructureSearchScreen extends ConfluxScreen {
 
     @Override
     protected void init() {
-        if (mode == MapSearchMode.STRUCTURE
-            && companion.structureSearchAllowed()
-            && !config.predictionShowStructures) {
-            config.predictionShowStructures = true;
-            saveConfig();
-        }
         visibilityButtons.clear();
         locateButtons.clear();
         biomeLocateButtons.clear();
@@ -214,6 +209,7 @@ final class StructureSearchScreen extends ConfluxScreen {
         ));
         updatePolicyAccess();
         updateRows();
+        mapPane.addMenuButtons(this);
     }
 
     private void updateActionWidths() {
@@ -293,12 +289,18 @@ final class StructureSearchScreen extends ConfluxScreen {
 
     @Override
     public void onClose() {
-        MinecraftAccess.setScreen(Minecraft.getInstance(), parent);
+        requestClose(parent);
     }
 
     private void locate(final StructureIndex.StructureType type) {
         if (!companion.structureSearchAllowed()) {
             return;
+        }
+        // Structure candidates are marked on the map only by structure icons,
+        // so locating one needs the icon layer on; biome locating does not.
+        if (!config.predictionShowStructures) {
+            config.predictionShowStructures = true;
+            saveConfig();
         }
         MinecraftAccess.setScreen(
             Minecraft.getInstance(),
@@ -515,7 +517,7 @@ final class StructureSearchScreen extends ConfluxScreen {
             updateRows();
             return true;
         }
-        if (mapPane.mouseScrolled(mouseX, mouseY, amount, layout)) {
+        if (mapPane.mouseScrolled(this, mouseX, mouseY, amount, layout)) {
             return true;
         }
         return super.mouseScrolled(mouseX, mouseY, horizontalAmount, amount);
@@ -526,8 +528,15 @@ final class StructureSearchScreen extends ConfluxScreen {
         final double mouseX = click.x();
         final double mouseY = click.y();
         final int button = click.button();
+        if (isClosing()) {
+            return true;
+        }
+        if (mapPane.menuOpen() && !mapPane.menuContains(mouseX, mouseY)) {
+            mapPane.menuClickedOutside(this, mouseX, mouseY, button, splitLayout());
+            return true;
+        }
         final ScrollBarModel bar = scrollBar();
-        if (button == 0 && bar.visible()
+        if (button == MouseButtons.LEFT && bar.visible()
             && mouseX >= scrollBarX() && mouseX < scrollBarX() + SCROLLBAR_WIDTH
             && mouseY >= bar.trackTop() && mouseY < bar.trackTop() + bar.trackHeight()) {
             draggingScrollBar = true;
@@ -539,16 +548,20 @@ final class StructureSearchScreen extends ConfluxScreen {
             return true;
         }
         if (super.mouseClicked(click, doubledClick)) {
+            mapPane.consumePendingMenuAction(this);
             return true;
         }
-        return mapPane.mouseClicked(mouseX, mouseY, button, splitLayout());
+        if (mapPane.menuOpen()) {
+            return true;
+        }
+        return mapPane.mouseClicked(this, mouseX, mouseY, button, splitLayout());
     }
 
     @Override
     public boolean mouseDragged(final MouseButtonEvent click, final double deltaX, final double deltaY) {
         final double mouseY = click.y();
         final int button = click.button();
-        if (button == 0 && draggingScrollBar) {
+        if (button == MouseButtons.LEFT && draggingScrollBar) {
             updateScrollFromMouse(mouseY);
             return true;
         }
@@ -561,7 +574,7 @@ final class StructureSearchScreen extends ConfluxScreen {
     @Override
     public boolean mouseReleased(final MouseButtonEvent click) {
         final int button = click.button();
-        if (button == 0 && draggingScrollBar) {
+        if (button == MouseButtons.LEFT && draggingScrollBar) {
             draggingScrollBar = false;
             return true;
         }
@@ -659,6 +672,7 @@ final class StructureSearchScreen extends ConfluxScreen {
         final int mouseY,
         final float tickDelta
     ) {
+        mapPane.drawMenuHotkeys(draw, this.font);
         StructureSearchScrollBar.drawOverflowCues(
             draw,
             rowX - 4,
@@ -669,6 +683,11 @@ final class StructureSearchScreen extends ConfluxScreen {
             visibleRows(),
             scrollOffset
         );
+    }
+
+    @Override
+    protected boolean embeddedMenuHotkeyPressed(final int keyCode) {
+        return mapPane.menuHotkeyPressed(this, keyCode);
     }
 
     private void drawPanelCentered(
@@ -705,8 +724,8 @@ final class StructureSearchScreen extends ConfluxScreen {
     }
 
     static String localizedBiomeName(final Identifier biome) {
-        final String key = Util.makeDescriptionId("biome", biome);
-        final String translated = Texts.translatable(key).getString();
-        return translated.equals(key) ? biome.toString() : translated;
+        // Translated → datapack-synced → registry id; the datapack layer is what names custom
+        // biomes whose translations the client never loaded.
+        return BiomeLabels.displayName(biome);
     }
 }

@@ -1,6 +1,5 @@
 package cn.net.rms.confluxmap.mc.ui.screen;
 
-import cn.net.rms.confluxmap.compat.MinecraftAccess;
 import cn.net.rms.confluxmap.compat.Regs;
 import cn.net.rms.confluxmap.compat.Texts;
 import cn.net.rms.confluxmap.compat.Widgets;
@@ -110,7 +109,7 @@ final class WaypointIconPickerScreen extends ConfluxScreen {
 
     @Override
     public void onClose() {
-        MinecraftAccess.setScreen(Minecraft.getInstance(), parent);
+        requestClose(parent);
     }
 
     private void select(final Choice choice) {
@@ -184,7 +183,7 @@ final class WaypointIconPickerScreen extends ConfluxScreen {
         final int mouseY,
         final float tickDelta
     ) {
-        draw.renderBackground(this, mouseX, mouseY, tickDelta);
+        draw.extractBackground(this, mouseX, mouseY, tickDelta);
         drawCentered(draw, getTitle().getString(), 16, 0xFFFFFFFF);
         drawCentered(
             draw,
@@ -271,6 +270,6 @@ final class WaypointIconPickerScreen extends ConfluxScreen {
     }
 
     static Component itemChoiceButtonMessage(final String displayName) {
-        return Texts.literal("");
+        return Texts.literal(displayName);
     }
 }

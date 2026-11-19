@@ -53,12 +53,12 @@ public final class ResourceManagerHelper {
             final ResourceManager manager,
             final ProfilerFiller profiler
         ) {
-            delegate.onResourceManagerReload(manager);
+            delegate.reload(manager);
         }
 
         @Override
         public String getName() {
-            return delegate.getId().toString();
+            return delegate.getFabricId().toString();
         }
     }
 }

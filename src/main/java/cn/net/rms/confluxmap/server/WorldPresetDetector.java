@@ -42,17 +42,18 @@ public final class WorldPresetDetector {
             return WorldPreset.CUSTOM;
         }
         final BiomeSource source = generator.getBiomeSource();
-        if (source instanceof final MultiNoiseBiomeSource multiNoise) {
-            if (multiNoise.stable(MultiNoiseBiomeSourceParameterLists.NETHER)) {
-                return WorldPreset.DEFAULT;
+        if (source instanceof MultiNoiseBiomeSource) {
+            // 26.3 dropped MultiNoiseBiomeSource.matchesInstance; the generator settings key
+            // identifies the preset just as well and stays public.
+            if (noise.stable(NoiseGeneratorSettings.AMPLIFIED)) {
+                return WorldPreset.AMPLIFIED;
             }
-            if (multiNoise.stable(MultiNoiseBiomeSourceParameterLists.OVERWORLD)) {
-                if (noise.stable(NoiseGeneratorSettings.AMPLIFIED)) {
-                    return WorldPreset.AMPLIFIED;
-                }
-                return noise.stable(NoiseGeneratorSettings.LARGE_BIOMES)
-                    ? WorldPreset.LARGE_BIOMES
-                    : WorldPreset.DEFAULT;
+            if (noise.stable(NoiseGeneratorSettings.LARGE_BIOMES)) {
+                return WorldPreset.LARGE_BIOMES;
+            }
+            if (noise.stable(NoiseGeneratorSettings.OVERWORLD)
+                || noise.stable(NoiseGeneratorSettings.NETHER)) {
+                return WorldPreset.DEFAULT;
             }
         }
         if (source instanceof TheEndBiomeSource) {

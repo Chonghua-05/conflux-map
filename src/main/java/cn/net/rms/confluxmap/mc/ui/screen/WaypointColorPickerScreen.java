@@ -1,9 +1,9 @@
 package cn.net.rms.confluxmap.mc.ui.screen;
 
-import cn.net.rms.confluxmap.compat.MinecraftAccess;
+import cn.net.rms.confluxmap.compat.MouseButtons;
 import cn.net.rms.confluxmap.compat.Texts;
 import cn.net.rms.confluxmap.compat.Widgets;
-import cn.net.rms.confluxmap.mc.render.RenderUtil;
+import cn.net.rms.confluxmap.mc.render.GuiShapes;
 import cn.net.rms.confluxmap.mc.ui.GuiDraw;
 import java.util.ArrayList;
 import java.util.List;
@@ -30,7 +30,7 @@ final class WaypointColorPickerScreen extends ConfluxScreen {
     private boolean invalidHex;
     private String lastHexText;
     private float cachedPickerHue = Float.NaN;
-    private List<RenderUtil.ColoredRect> pickerRects = List.of();
+    private List<GuiShapes.ColoredRect> pickerRects = List.of();
 
     WaypointColorPickerScreen(
         final Screen parent,
@@ -55,7 +55,7 @@ final class WaypointColorPickerScreen extends ConfluxScreen {
         final int centerX = width / 2;
         hexField = new EditBox(
             this.font, centerX - 50, pickerTop() + PICKER_SIZE + 22,
-            100, 20, Component.nullToEmpty("")
+            100, 20, Component.literal("")
         );
         hexField.setMaxLength(7);
         lastHexText = color.hex();
@@ -93,12 +93,12 @@ final class WaypointColorPickerScreen extends ConfluxScreen {
             return;
         }
         onApply.accept(color.colorArgb());
-        MinecraftAccess.setScreen(Minecraft.getInstance(), parent);
+        requestClose(parent);
     }
 
     @Override
     public void onClose() {
-        MinecraftAccess.setScreen(Minecraft.getInstance(), parent);
+        requestClose(parent);
     }
 
     @Override
@@ -109,7 +109,7 @@ final class WaypointColorPickerScreen extends ConfluxScreen {
         if (super.mouseClicked(click, doubledClick)) {
             return true;
         }
-        if (button != 0) {
+        if (button != MouseButtons.LEFT) {
             return false;
         }
         if (insidePicker(mouseX, mouseY)) {
@@ -130,11 +130,11 @@ final class WaypointColorPickerScreen extends ConfluxScreen {
         final double mouseX = click.x();
         final double mouseY = click.y();
         final int button = click.button();
-        if (button == 0 && draggingPicker) {
+        if (button == MouseButtons.LEFT && draggingPicker) {
             updatePicker(mouseX, mouseY);
             return true;
         }
-        if (button == 0 && draggingHue) {
+        if (button == MouseButtons.LEFT && draggingHue) {
             updateHue(mouseY);
             return true;
         }
@@ -144,7 +144,7 @@ final class WaypointColorPickerScreen extends ConfluxScreen {
     @Override
     public boolean mouseReleased(final MouseButtonEvent click) {
         final int button = click.button();
-        if (button == 0 && (draggingPicker || draggingHue)) {
+        if (button == MouseButtons.LEFT && (draggingPicker || draggingHue)) {
             draggingPicker = false;
             draggingHue = false;
             return true;
@@ -198,7 +198,7 @@ final class WaypointColorPickerScreen extends ConfluxScreen {
         final int mouseY,
         final float tickDelta
     ) {
-        draw.renderBackground(this, mouseX, mouseY, tickDelta);
+        draw.extractBackground(this, mouseX, mouseY, tickDelta);
         drawCentered(draw, getTitle().getString(), 18, 0xFFFFFFFF);
         drawPicker(draw);
         final int previewLeft = width / 2 - 78;
@@ -220,12 +220,12 @@ final class WaypointColorPickerScreen extends ConfluxScreen {
         final int top = pickerTop();
         if (Float.compare(cachedPickerHue, color.hue()) != 0 || pickerRects.isEmpty()) {
             cachedPickerHue = color.hue();
-            final List<RenderUtil.ColoredRect> rects = new ArrayList<>();
+            final List<GuiShapes.ColoredRect> rects = new ArrayList<>();
             for (int y = 0; y < PICKER_SIZE; y += GRID_STEP) {
                 final float value = 1.0f - y / (float) (PICKER_SIZE - 1);
                 for (int x = 0; x < PICKER_SIZE; x += GRID_STEP) {
                     final float saturation = x / (float) (PICKER_SIZE - 1);
-                    rects.add(new RenderUtil.ColoredRect(
+                    rects.add(new GuiShapes.ColoredRect(
                         left + x, top + y,
                         Math.min(GRID_STEP, PICKER_SIZE - x),
                         Math.min(GRID_STEP, PICKER_SIZE - y),
@@ -237,7 +237,7 @@ final class WaypointColorPickerScreen extends ConfluxScreen {
             }
             final int hueLeft = left + PICKER_SIZE + PICKER_GAP;
             for (int y = 0; y < PICKER_SIZE; y++) {
-                rects.add(new RenderUtil.ColoredRect(
+                rects.add(new GuiShapes.ColoredRect(
                     hueLeft, top + y, HUE_WIDTH, 1,
                     WaypointColorPickerModel.fromHsv(
                         y / (float) (PICKER_SIZE - 1), 1.0f, 1.0f
@@ -246,7 +246,7 @@ final class WaypointColorPickerScreen extends ConfluxScreen {
             }
             pickerRects = List.copyOf(rects);
         }
-        RenderUtil.fillRects(draw.matrices(), pickerRects);
+        GuiShapes.fillRects(draw.matrices(), pickerRects);
         final int hueLeft = left + PICKER_SIZE + PICKER_GAP;
         final int pickerX = left + Math.round(color.saturation() * (PICKER_SIZE - 1));
         final int pickerY = top + Math.round((1.0f - color.value()) * (PICKER_SIZE - 1));

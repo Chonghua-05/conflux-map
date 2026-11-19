@@ -1,11 +1,19 @@
 package cn.net.rms.confluxmap.mc.render;
 
+import cn.net.rms.confluxmap.compat.Ids;
 import com.mojang.blaze3d.systems.RenderSystem;
+import java.io.IOException;
 import net.minecraft.client.Minecraft;
 import com.mojang.blaze3d.pipeline.RenderTarget;
 import com.mojang.blaze3d.pipeline.TextureTarget;
 import com.mojang.blaze3d.platform.Window;
+import com.mojang.blaze3d.resource.GraphicsResourceAllocator;
+import net.minecraft.client.renderer.LevelTargetBundle;
+import net.minecraft.client.renderer.PostChain;
+
 import com.mojang.blaze3d.ProjectionType;
+import com.mojang.renderpearl.api.GpuFormat;
+import org.joml.Vector4f;
 import net.minecraft.client.renderer.ProjectionMatrixBuffer;
 import org.joml.Matrix4f;
 
@@ -22,12 +30,18 @@ import org.joml.Matrix4f;
  */
 public final class OffscreenCanvas {
     private RenderTarget framebuffer;
-    private int sizePx;
+    private int widthPx;
+    private int heightPx;
     private ProjectionMatrixBuffer projectionMatrix;
 
     /** Bind + clear to transparent; sets an ortho projection in canvas pixel units. */
     public void begin(final int sizePx) {
         beginInternal(sizePx, true);
+    }
+
+    /** Rectangular variant used by full-width GUI effects. */
+    public void begin(final int widthPx, final int heightPx) {
+        beginInternal(widthPx, heightPx, true);
     }
 
     /** Binds the canvas without clearing it, for persistent texture-atlas updates. */
@@ -36,32 +50,46 @@ public final class OffscreenCanvas {
     }
 
     private void beginInternal(final int sizePx, final boolean clear) {
-        final boolean created = framebuffer == null || framebuffer.width != sizePx;
-        if (framebuffer == null || framebuffer.width != sizePx) {
+        beginInternal(sizePx, sizePx, clear);
+    }
+
+    private void beginInternal(final int widthPx, final int heightPx, final boolean clear) {
+        final boolean created = framebuffer == null
+            || framebuffer.width != widthPx
+            || framebuffer.height != heightPx;
+        if (created) {
             close();
-            framebuffer = new TextureTarget("Conflux Map minimap", sizePx, sizePx, false);
-            this.sizePx = sizePx;
+            // 26.3 RenderTargets describe both attachments as formats; null depth means none.
+            framebuffer = new TextureTarget(
+                "Conflux Map canvas", widthPx, heightPx, GpuFormat.RGBA8_UNORM, null
+            );
+            this.widthPx = widthPx;
+            this.heightPx = heightPx;
         }
         if (projectionMatrix == null) {
             projectionMatrix = new ProjectionMatrixBuffer("Conflux Map minimap projection");
         }
         if (created || clear) {
             RenderSystem.getDevice().createCommandEncoder().clearColorTexture(
-                framebuffer.getColorTexture(), 0
+                framebuffer.getColorTexture(), new Vector4f(0f, 0f, 0f, 0f)
             );
         }
-        RenderUtil.setDrawTarget(framebuffer);
+        RenderTargetState.setDrawTarget(framebuffer);
         RenderSystem.backupProjectionMatrix();
         // Persistent atlases are filled from the client tick, outside any GUI pass, so the
         // global model-view still holds whatever the world pass left in it. Canvas geometry is
         // already in canvas pixels and needs none of it.
         RenderSystem.getModelViewStack().pushMatrix().identity();
-        setProjection(canvasProjection(sizePx));
+        setProjection(canvasProjection(widthPx, heightPx));
     }
 
     /** Modern GUI rendering culls map quads unless the canvas uses the same downward Y axis. */
     private static Matrix4f canvasProjection(final int sizePx) {
-        return ortho(0f, sizePx, sizePx, 0f);
+        return canvasProjection(sizePx, sizePx);
+    }
+
+    private static Matrix4f canvasProjection(final int widthPx, final int heightPx) {
+        return ortho(0f, widthPx, heightPx, 0f);
     }
 
     /** Local depth used while the persistent radar atlas is filled from a client tick. */
@@ -88,21 +116,49 @@ public final class OffscreenCanvas {
 
     /** Unbind; restores the main framebuffer and vanilla's GUI projection. */
     public void end(final Minecraft client) {
-        RenderUtil.setDrawTarget(null);
+        RenderTargetState.setDrawTarget(null);
         RenderSystem.getModelViewStack().popMatrix();
         RenderSystem.restoreProjectionMatrix();
     }
 
     /** Binds the canvas contents for sampling; row 0 is the BOTTOM (flip V when sampling). */
     public void bindTexture() {
-        RenderUtil.bindTexture(framebuffer.getColorTextureView());
+        TextureBinds.bindTexture(framebuffer.getColorTextureView());
     }
+
+    /** Binds the canvas with bilinear filtering for scaled GUI effects. */
+    public void bindTextureLinear() {
+        TextureBinds.bindTexture(
+            framebuffer.getColorTextureView(),
+            RenderSystem.getSamplerCache().getSampler(
+                com.mojang.renderpearl.api.textures.AddressMode.CLAMP_TO_EDGE,
+                com.mojang.renderpearl.api.textures.AddressMode.CLAMP_TO_EDGE,
+                com.mojang.renderpearl.api.textures.FilterMode.LINEAR,
+                com.mojang.renderpearl.api.textures.FilterMode.LINEAR,
+                false
+            )
+        );
+    }
+
+    /** Applies Minecraft's menu-style separable box blur to this canvas in place. */
+    public boolean applyMenuBlur(final Minecraft client) throws IOException {
+        final PostChain blur = client.getShaderManager().getPostChain(
+            Ids.of("minecraft", "blur"), LevelTargetBundle.MAIN_TARGETS
+        );
+        if (blur == null) {
+            return false;
+        }
+        blur.process(framebuffer, GraphicsResourceAllocator.UNPOOLED);
+        return true;
+    }
+
 
     public void close() {
         if (framebuffer != null) {
             framebuffer.destroyBuffers();
             framebuffer = null;
-            sizePx = 0;
+            widthPx = 0;
+            heightPx = 0;
         }
         if (projectionMatrix != null) {
             projectionMatrix.close();
@@ -111,6 +167,6 @@ public final class OffscreenCanvas {
     }
 
     public int size() {
-        return sizePx;
+        return widthPx;
     }
 }

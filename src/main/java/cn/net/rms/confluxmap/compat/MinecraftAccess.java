@@ -22,6 +22,44 @@ public final class MinecraftAccess {
         return client.options.renderDistance().get();
     }
 
+    /** The client's selected language code (e.g. {@code "zh_cn"}). */
+    public static String language(final Minecraft client) {
+        return client.options.languageCode;
+    }
+
+    /**
+     * Identity of the current integrated server (null without one): lets callers cache
+     * per-session values on the client thread and re-resolve when the instance changes.
+     */
+    public static Object singleplayerServerRef(final Minecraft client) {
+        return client.getSingleplayerServer();
+    }
+
+    /**
+     * The current singleplayer world's save root, or null on a dedicated connection. Read
+     * on the client thread; the MCA backfill scanner resolves region files under it.
+     */
+    public static java.nio.file.Path singleplayerSaveRoot(final Minecraft client) {
+        return client.getSingleplayerServer() == null
+            ? null
+            : client.getSingleplayerServer().getWorldPath(
+                net.minecraft.world.level.storage.LevelResource.ROOT);
+    }
+
+    /**
+     * The current singleplayer world's {@code datapacks} directory, or null on a dedicated
+     * connection. Read on the client thread; the returned path stays valid for the whole
+     * session. Datapack translations only ever exist server-side, and the companion stays
+     * inactive in an unpublished singleplayer world, so the client reads the local level
+     * itself instead of waiting for a network answer that never comes.
+     */
+    public static java.nio.file.Path singleplayerDatapacksDir(final Minecraft client) {
+        return client.getSingleplayerServer() == null
+            ? null
+            : client.getSingleplayerServer().getWorldPath(
+                net.minecraft.world.level.storage.LevelResource.DATAPACK_DIR);
+    }
+
     /**
      * The player's biome-blend radius in blocks: the tint at a position is averaged over the
      * square that many blocks around it, and 0 turns blending off entirely.
@@ -45,12 +83,12 @@ public final class MinecraftAccess {
 
     /** The active screen, whose owner moved from Minecraft to Gui in 26.2. */
     public static Screen screen(final Minecraft client) {
-        return client.screen;
+        return client.gui.screen();
     }
 
     /** Changes the active screen through the version-appropriate owner. */
     public static void setScreen(final Minecraft client, final Screen screen) {
-        client.setScreen(screen);
+        client.gui.setScreen(screen);
     }
 
     /** Inventory-style screens also host JEI/REI overlays, so the minimap HUD must yield to them. */
@@ -63,12 +101,16 @@ public final class MinecraftAccess {
         return client.debugEntries.isOverlayVisible();
     }
 
-    /** Whether the player hid the vanilla HUD with F1. */
+    /**
+     * Whether the player hid the vanilla HUD with F1. The state lived in the options until
+     * 26.1 (hideGui) and moved to the Hud itself (26.2 toggles it, isHidden reports it), so
+     * HUD-side mods must hide with it — Fabric's HUD callbacks keep firing either way.
+     */
     public static boolean isHudHidden(final Minecraft client) {
-        return client.options.hideGui;
+        return client.gui.hud.isHidden();
     }
 
-    public static void sendChatMessage(final Minecraft client, final String message) {
+    public static void sendChat(final Minecraft client, final String message) {
         if (client.getConnection() != null) {
             client.getConnection().sendChat(message);
         }
@@ -103,6 +145,11 @@ public final class MinecraftAccess {
         return resources.getResource(id)
             .orElseThrow(() -> new IOException("missing resource: " + id))
             .open();
+    }
+
+    /** True when the default pack or a loaded resource pack provides the resource. */
+    public static boolean resourceExists(final ResourceManager resources, final Identifier id) {
+        return resources.getResource(id).isPresent();
     }
 
     public static void sendFeedback(

@@ -6,7 +6,7 @@ import net.minecraft.resources.Identifier;
  * The one place that knows how this Minecraft version builds an {@link Identifier}.
  *
  * <p>1.21 made the {@code Identifier} constructors private and moved construction to static
- * factories. Same reasoning as {@link Texts}: one seam here keeps version-sensitive details at
+ * factories. Same reasoning as {@link Texts}: one seam here beats a preprocessor branch at each
  * of the mod's channel, texture and registry-key call sites.
  */
 public final class Ids {

@@ -2,13 +2,16 @@ package cn.net.rms.confluxmap.neoforge.compat;
 
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.function.Consumer;
+import net.minecraft.client.renderer.state.level.LevelRenderState;
 import net.neoforged.neoforge.client.event.RenderLevelStageEvent;
+import net.neoforged.neoforge.client.event.SubmitCustomGeometryEvent;
 import net.neoforged.neoforge.common.NeoForge;
 
 /** Small event facade used by shared renderers; backed directly by NeoForge's render stages. */
 public final class LevelRenderEvents {
     public static final Event AFTER_TRANSLUCENT_TERRAIN = new Event();
     public static final Event END_MAIN = new Event();
+    public static final Event COLLECT_SUBMITS = new Event();
     private static boolean installed;
 
     public static synchronized void install() {
@@ -22,6 +25,10 @@ public final class LevelRenderEvents {
         );
         NeoForge.EVENT_BUS.addListener(
             (RenderLevelStageEvent.AfterLevel event) -> END_MAIN.invoke(new Context(event))
+        );
+        NeoForge.EVENT_BUS.addListener(
+            (SubmitCustomGeometryEvent event) ->
+                COLLECT_SUBMITS.invoke(new SubmitContext(event))
         );
     }
 
@@ -53,6 +60,29 @@ public final class LevelRenderEvents {
         @Override
         public net.minecraft.client.renderer.SubmitNodeCollector submitNodeCollector() {
             return null;
+        }
+    }
+
+    private static final class SubmitContext implements LevelRenderContext {
+        private final SubmitCustomGeometryEvent event;
+
+        private SubmitContext(final SubmitCustomGeometryEvent event) {
+            this.event = event;
+        }
+
+        @Override
+        public com.mojang.blaze3d.vertex.PoseStack poseStack() {
+            return event.getPoseStack();
+        }
+
+        @Override
+        public net.minecraft.client.renderer.SubmitNodeCollector submitNodeCollector() {
+            return event.getSubmitNodeCollector();
+        }
+
+        @Override
+        public LevelRenderState levelState() {
+            return event.getLevelRenderState();
         }
     }
 

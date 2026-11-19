@@ -1,6 +1,7 @@
 package cn.net.rms.confluxmap.mc.world;
 
 import cn.net.rms.confluxmap.ConfluxMapMod;
+import cn.net.rms.confluxmap.compat.Dimensions;
 import cn.net.rms.confluxmap.compat.MinecraftAccess;
 import cn.net.rms.confluxmap.compat.Regs;
 import cn.net.rms.confluxmap.compat.Texts;
@@ -68,7 +69,7 @@ public final class ClientMultiworldService {
     private OptionalLong previousSeedHash = OptionalLong.empty();
     private Map<String, String> signals = Map.of();
     private ClientWorldResolution resolution = ClientWorldResolution.collecting();
-    private String address;
+    private String ip;
     private String serverId;
     private String lockedProfileId;
     private OptionalLong lockedSeedHash = OptionalLong.empty();
@@ -95,9 +96,9 @@ public final class ClientMultiworldService {
     }
 
     /**
-     * @param aliases maps the typed address onto the namespace owning its data, so profiles are
+     * @param aliases maps the typed ip onto the namespace owning its data, so profiles are
      *                listed under the same server id the session stores under; null keeps the
-     *                raw address
+     *                raw ip
      */
     public ClientMultiworldService(
         final Minecraft client,
@@ -182,21 +183,7 @@ public final class ClientMultiworldService {
     /** Applies the profile state machine without triggering UI or terrain fallback side effects. */
     ClientWorldResolution resolveProfile(final String currentAddress) {
         observeAddress(currentAddress);
-        if (velocityQuery.blocksFallback() && supportsVelocityServerQuery()) {
-            resolution = ClientWorldResolution.collecting();
-            return resolution;
-        }
-        if (lockedProfileId != null && resolution.state() != ClientWorldResolution.State.RESOLVED) {
-            resolution = resolver.select(serverId, lockedProfileId, observation());
-        } else if (resolution.state() != ClientWorldResolution.State.RESOLVED) {
-            resolution = proxyWorldJoin
-                ? resolver.resolveAfterProxyWorldJoin(serverId, previousSeedHash, observation())
-                : resolver.resolve(serverId, observation());
-        }
-        if (resolution.state() == ClientWorldResolution.State.RESOLVED) {
-            lockProfile(resolution.profile());
-        }
-        return resolution;
+        return advanceResolution(false);
     }
 
     public boolean canManageProfiles() {
@@ -204,7 +191,7 @@ public final class ClientMultiworldService {
             return false;
         }
         // The companion owns the active cache identity, but the client profile list is still the
-        // recovery path for data created before the companion was installed. Prime the address
+        // recovery path for data created before the companion was installed. Prime the ip
         // namespace here because the normal session tracker intentionally bypasses this service
         // while the companion is active.
         if (companionWorldIdentityAuthoritative()) {
@@ -215,7 +202,7 @@ public final class ClientMultiworldService {
 
     /**
      * Storage namespace the current connection reads and writes under, empty when not connected to
-     * a server. This is the alias-resolved id, not the typed address.
+     * a server. This is the alias-resolved id, not the typed ip.
      */
     public Optional<String> currentServerId() {
         if (client == null || client.level == null || client.isLocalServer()) {
@@ -244,19 +231,24 @@ public final class ClientMultiworldService {
         return companion.state() == CompanionSession.State.ACTIVE;
     }
 
+    /** Hashed seed of the world the client is currently in; empty until the first join packet. */
+    public OptionalLong currentSeedHash() {
+        return seedHash;
+    }
+
     /** Returns the server-owned world identity currently controlling map storage, if any. */
     public Optional<WorldIdentity> companionWorldIdentity() {
         if (!companionWorldIdentityAuthoritative()) {
             return Optional.empty();
         }
         ensureAddressObserved();
-        return address == null ? Optional.empty() : companion.resolveWorldIdentity(address);
+        return ip == null ? Optional.empty() : companion.resolveWorldIdentity(ip);
     }
 
     /**
      * Name the player gave the world the companion is currently serving. Empty when unnamed, when
-     * no companion is active, or when there is no server connection; callers fall back to
-     * {@link #companionWorldOrdinal()}. The raw world UUID is an implementation detail players
+     * no companion is active, or when there is no server connection; callers fall back to the
+     * unnamed-world ordinal label. The raw world UUID is an implementation detail players
      * have no use for, so it never reaches the UI.
      */
     public Optional<String> companionWorldName() {
@@ -267,24 +259,57 @@ public final class ClientMultiworldService {
         return currentServerId().flatMap(serverId -> resolver.serverWorldName(serverId, worldId));
     }
 
-    /** 1-based label for an unnamed companion world; 1 when this server has recorded none yet. */
-    public int companionWorldOrdinal() {
-        final String worldId = companion.companionWorldId();
-        if (aliases == null || worldId == null) {
-            return 1;
-        }
-        return currentServerId()
-            .map(serverId -> Math.max(1, aliases.worldOrdinal(serverId, worldId)))
-            .orElse(1);
+    /** One server-owned world recorded under the current namespace. */
+    public record CompanionWorldView(
+        String worldId, Optional<String> name, int ordinal, boolean current
+    ) {
     }
 
-    /** Renames the active companion world, or clears the name when {@code name} is blank. */
-    public void renameCompanionWorld(final String name) {
-        final String worldId = companion.companionWorldId();
-        if (worldId == null) {
+    /**
+     * Server-determined worlds recorded under the current namespace, in first-seen order. The
+     * world the companion is serving now is always present even when the alias registry has not
+     * recorded it yet. Empty when no companion is active or no ip has been observed.
+     */
+    public List<CompanionWorldView> companionWorlds() {
+        final String currentWorldId = companion.companionWorldId();
+        if (currentWorldId == null) {
+            return List.of();
+        }
+        ensureAddressObserved();
+        final String server = serverId;
+        if (server == null) {
+            return List.of();
+        }
+        final List<String> worldIds = new ArrayList<>(
+            aliases == null ? List.of() : aliases.companionWorlds(server)
+        );
+        if (!worldIds.contains(currentWorldId)) {
+            worldIds.add(currentWorldId);
+        }
+        final List<CompanionWorldView> views = new ArrayList<>(worldIds.size());
+        for (final String worldId : worldIds) {
+            views.add(new CompanionWorldView(
+                worldId,
+                resolver.serverWorldName(server, worldId),
+                Math.max(1, aliases == null ? 1 : aliases.worldOrdinal(server, worldId)),
+                worldId.equals(currentWorldId)
+            ));
+        }
+        return views;
+    }
+
+    /**
+     * Renames a server-owned world recorded on this server, or clears the name when {@code name}
+     * is blank. Worlds the companion is not currently serving may be named too: the record
+     * outlives the visit.
+     */
+    public void renameCompanionWorld(final String worldId, final String name) {
+        Objects.requireNonNull(worldId, "worldId");
+        ensureAddressObserved();
+        if (serverId == null) {
             return;
         }
-        currentServerId().ifPresent(serverId -> resolver.nameServerWorld(serverId, worldId, name));
+        resolver.nameServerWorld(serverId, worldId, name);
     }
 
     /** Session writes stay suspended while an explicit cache migration drains the old cache. */
@@ -361,8 +386,8 @@ public final class ClientMultiworldService {
                 ProfileMigrationStatus.SEED_MISMATCH, profileId, null, null
             );
         }
-        final WorldIdentity source = WorldIdentity.multiplayer(address, profile.storageId());
-        final WorldIdentity target = companion.resolveWorldIdentity(address).orElse(null);
+        final WorldIdentity source = WorldIdentity.multiplayer(ip, profile.storageId());
+        final WorldIdentity target = companion.resolveWorldIdentity(ip).orElse(null);
         if (target == null) {
             return new ProfileMigrationPreparation(
                 ProfileMigrationStatus.COMPANION_REQUIRED, profileId, null, null
@@ -405,7 +430,7 @@ public final class ClientMultiworldService {
         if (profiles().stream().noneMatch(candidate -> candidate.id().equals(profile.id()))) {
             throw new IllegalArgumentException("profile does not belong to the current server");
         }
-        return WorldIdentity.multiplayer(address, profile.storageId());
+        return WorldIdentity.multiplayer(ip, profile.storageId());
     }
 
     public Optional<ClientWorldProfile> currentProfile() {
@@ -467,24 +492,43 @@ public final class ClientMultiworldService {
         signals = observed;
         terrainAttempted = false;
         observationGeneration++;
+        if (serverId == null || companionWorldIdentityAuthoritative()) {
+            return;
+        }
+        advanceResolution(true);
+        notifyAmbiguity();
+        tryTerrainMatch();
+    }
+
+    /**
+     * Single driver of the client fallback machine, shared by the tracker resolve and the
+     * signal refresh. The companion owning the storage identity is decided here once, so no
+     * entry can resolve, select, or create profiles beside the server's worlds. A stable-seed
+     * lock is only re-selected to learn new signals when {@code refreshStableLock} is set;
+     * the per-tick tracker path must skip that to avoid saving on every call.
+     */
+    private ClientWorldResolution advanceResolution(final boolean refreshStableLock) {
+        if (companionWorldIdentityAuthoritative()) {
+            return resolution;
+        }
+        if (velocityQuery.blocksFallback() && supportsVelocityServerQuery()) {
+            return resolution = ClientWorldResolution.collecting();
+        }
         if (serverId != null) {
-            if (velocityQuery.blocksFallback() && supportsVelocityServerQuery()) {
-                resolution = ClientWorldResolution.collecting();
-                return;
-            }
-            if (lockedProfileId != null && lockedSeedHash.equals(seedHash)) {
+            if (lockedProfileId != null && (refreshStableLock
+                ? lockedSeedHash.equals(seedHash)
+                : resolution.state() != ClientWorldResolution.State.RESOLVED)) {
                 resolution = resolver.select(serverId, lockedProfileId, observation());
-            } else {
+            } else if (resolution.state() != ClientWorldResolution.State.RESOLVED) {
                 resolution = proxyWorldJoin
                     ? resolver.resolveAfterProxyWorldJoin(serverId, previousSeedHash, observation())
                     : resolver.resolve(serverId, observation());
-                if (resolution.state() == ClientWorldResolution.State.RESOLVED) {
-                    lockProfile(resolution.profile());
-                }
             }
-            notifyAmbiguity();
-            tryTerrainMatch();
+            if (resolution.state() == ClientWorldResolution.State.RESOLVED) {
+                lockProfile(resolution.profile());
+            }
         }
+        return resolution;
     }
 
     /** Consumes only the response sequence from the currently pending client-issued query. */
@@ -497,7 +541,7 @@ public final class ClientMultiworldService {
             currentServerNotice
         );
         response.match().ifPresent(match -> {
-            if (serverId == null) {
+            if (serverId == null || companionWorldIdentityAuthoritative()) {
                 return;
             }
             resolution = resolver.resolveVelocityServer(
@@ -542,7 +586,7 @@ public final class ClientMultiworldService {
             observed.put("biomes", ClientWorldSignalHasher.hashSorted(biomes));
         }
 
-        final Identifier dimension = client.level.dimension().identifier();
+        final DimensionId dimension = Dimensions.of(client.level);
         observed.put("dimension", ClientWorldSignalHasher.hash(dimension.toString()));
         observed.put("dimension_type", ClientWorldSignalHasher.hash(
             client.level.dimensionType().hasCeiling() + ":"
@@ -569,10 +613,7 @@ public final class ClientMultiworldService {
         terrainAttempted = true;
         final long generation = observationGeneration;
         final String expectedServer = serverId;
-        final String dimension = DimensionId.of(
-            client.level.dimension().identifier().getNamespace(),
-            client.level.dimension().identifier().getPath()
-        ).fileName();
+        final String dimension = Dimensions.of(client.level).fileName();
         io.execute(() -> {
             final List<TerrainFingerprintMatcher.Candidate> candidates = loadTerrainCandidates(
                 expectedServer, dimension, layer, probes, profiles
@@ -595,7 +636,11 @@ public final class ClientMultiworldService {
     }
 
     private MapLayer terrainProbeLayer() {
-        switch (LayerSelector.classify(client.level.dimensionType())) {
+        final DimensionLayerPolicy.DimensionKind kind = DimensionLayerPolicy.classify(
+            Dimensions.of(client.level),
+            client.level.dimensionType()
+        );
+        switch (kind) {
             case HAS_CEILING:
                 return MapLayer.NETHER_CEILING;
             case NO_SKY_NO_CEILING:
@@ -631,8 +676,9 @@ public final class ClientMultiworldService {
                     regions.put(region, RegionFileCodec.decode(
                         input, region.x(), region.z(), layer.type().ordinal()
                     ));
-                } catch (final IOException | RegionFileCodec.RegionFileException ignored) {
+                } catch (final IOException | RegionFileCodec.RegionFileException error) {
                     // Recognition is read-only and best-effort; cache ownership remains with RegionDiskCache.
+                    ConfluxMapMod.LOGGER.warn("Skipping unreadable terrain cache file {}", file, error);
                 }
             }
             candidates.add(new TerrainFingerprintMatcher.Candidate(profile.id(), regions));
@@ -667,7 +713,7 @@ public final class ClientMultiworldService {
         previousSeedHash = OptionalLong.empty();
         signals = Map.of();
         resolution = ClientWorldResolution.collecting();
-        address = null;
+        ip = null;
         serverId = null;
         clearProfileLock();
         velocityQuery.disarm();
@@ -701,11 +747,11 @@ public final class ClientMultiworldService {
         lockedSeedHash = OptionalLong.empty();
     }
 
-    private void observeAddress(final String currentAddress) {
-        if (currentAddress.equals(address)) {
+    void observeAddress(final String currentAddress) {
+        if (currentAddress.equals(ip)) {
             return;
         }
-        address = currentAddress;
+        ip = currentAddress;
         serverId = WorldIdentity.multiplayer(currentAddress).serverId();
         clearProfileLock();
         resolution = ClientWorldResolution.collecting();
@@ -723,7 +769,7 @@ public final class ClientMultiworldService {
 
     /**
      * Keeps this service's server namespace identical to the session's. The session tracker hands
-     * an already-resolved address to {@link #resolve(String)}; the paths that read the client
+     * an already-resolved ip to {@link #resolve(String)}; the paths that read the client
      * directly resolve it here.
      */
     private String canonicalAddress(final String rawAddress) {

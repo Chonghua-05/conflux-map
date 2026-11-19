@@ -8,7 +8,7 @@ import cn.net.rms.confluxmap.core.task.SessionGuard;
 import java.util.Optional;
 import java.util.function.BooleanSupplier;
 
-/** Applies client-entered seed settings to the currently bound world session. */
+/** Applies client-entered seed settings only to the currently bound multiplayer world. */
 public final class ManualSeedService {
     private final ConfluxConfig config;
     private final ConfigIo configIo;
@@ -40,8 +40,7 @@ public final class ManualSeedService {
         final Runnable refreshPrediction
     ) {
         // Keep the policy suppliers in this overload for callers compiled against the previous
-        // API. Availability is intentionally independent of server seed sharing and applies to
-        // integrated singleplayer worlds as well as multiplayer sessions.
+        // API. Availability is intentionally independent of server seed sharing.
         this.config = config;
         this.configIo = configIo;
         this.sessions = sessions;
@@ -51,9 +50,9 @@ public final class ManualSeedService {
 
     public boolean available() {
         // A local entry is an explicit recovery/override path. It must remain available even
-        // when a companion shares a seed, and singleplayer worlds should be able to use it too
-        // (the integrated server may still hide its seed from the client UI).
-        return sessions.current().active();
+        // when a companion shares a seed: users may be restoring a pre-plugin seed, and clearing
+        // the entry still returns prediction to the server-advertised seed.
+        return sessions.current().active() && !singleplayer.getAsBoolean();
     }
 
     public Optional<ManualSeedConfig.Entry> current() {

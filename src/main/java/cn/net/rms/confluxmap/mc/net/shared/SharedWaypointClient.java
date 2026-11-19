@@ -7,9 +7,16 @@ import cn.net.rms.confluxmap.core.config.ConfigIo;
 import cn.net.rms.confluxmap.core.config.ConfluxConfig;
 import cn.net.rms.confluxmap.core.net.shared.CreateC2S;
 import cn.net.rms.confluxmap.core.net.shared.DeleteC2S;
+import cn.net.rms.confluxmap.core.net.shared.MoveBatchC2S;
+import cn.net.rms.confluxmap.core.net.shared.GroupCreateC2S;
+import cn.net.rms.confluxmap.core.net.shared.GroupDeleteC2S;
+import cn.net.rms.confluxmap.core.net.shared.GroupRemoveS2C;
+import cn.net.rms.confluxmap.core.net.shared.GroupRenameC2S;
+import cn.net.rms.confluxmap.core.net.shared.GroupUpsertS2C;
 import cn.net.rms.confluxmap.core.net.shared.HelloC2S;
 import cn.net.rms.confluxmap.core.net.shared.RemoveS2C;
 import cn.net.rms.confluxmap.core.net.shared.ResultS2C;
+import cn.net.rms.confluxmap.core.net.shared.SetWaypointGroupC2S;
 import cn.net.rms.confluxmap.core.net.shared.SharedWaypointAvailability;
 import cn.net.rms.confluxmap.core.net.shared.SharedWaypointClientState;
 import cn.net.rms.confluxmap.core.net.shared.SharedWaypointCodec;
@@ -22,9 +29,14 @@ import cn.net.rms.confluxmap.core.net.shared.SubscribeC2S;
 import cn.net.rms.confluxmap.core.net.shared.UpsertS2C;
 import cn.net.rms.confluxmap.core.net.shared.UpdateC2S;
 import cn.net.rms.confluxmap.core.shared.SharedWaypoint;
+import cn.net.rms.confluxmap.core.shared.SharedWaypointGroup;
 import cn.net.rms.confluxmap.core.shared.SharedWaypointLocationKey;
 import cn.net.rms.confluxmap.core.waypoint.Waypoint;
+import cn.net.rms.confluxmap.core.waypoint.list.EditDraft;
+import cn.net.rms.confluxmap.core.waypoint.list.SharedWaypointListModel;
+import cn.net.rms.confluxmap.core.waypoint.list.SharedWaypointMutations;
 import cn.net.rms.confluxmap.compat.Texts;
+import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
@@ -45,20 +57,25 @@ import net.minecraft.resources.Identifier;
  * <p>The adapter never puts public points in the local waypoint store. It publishes immutable
  * server snapshots to consumers and owns the handshake timeout, revision recovery, operation
  * correlation, and disconnect cleanup. Like {@link cn.net.rms.confluxmap.mc.net.ClientNetworking},
- * it sends HELLO unconditionally on JOIN: NeoForge fires the connection callback after
+ * it sends HELLO unconditionally on JOIN: fabric-api fires JOIN at the RETURN of
  * {@code onGameJoin}, before the server's {@code minecraft:register} payload is applied on the
  * client thread, so {@code ClientPlayNetworking.canSend} is deterministically false there. A
  * server without the companion simply never answers and the handshake times out into
  * {@link SharedWaypointClientState.State#UNSUPPORTED}.
  */
-public final class SharedWaypointClient {
+public final class SharedWaypointClient implements SharedWaypointMutations {
     public static final Identifier CHANNEL = Ids.of(SharedWaypointProto.CHANNEL_ID);
     private static final int MAX_PENDING_OPERATIONS = 128;
 
     public enum OperationKind {
         CREATE,
         DELETE,
-        UPDATE
+        UPDATE,
+        GROUP_CREATE,
+        GROUP_RENAME,
+        GROUP_DELETE,
+        SET_GROUP,
+        MOVE_BATCH
     }
 
     public record OperationResult(
@@ -77,7 +94,8 @@ public final class SharedWaypointClient {
     private record PendingOperation(
         OperationKind kind,
         SharedWaypointLocationKey createLocation,
-        boolean crossDimensionVisible
+        boolean crossDimensionVisible,
+        Double crossDimensionY
     ) {
         private PendingOperation {
             Objects.requireNonNull(kind, "kind");
@@ -102,6 +120,9 @@ public final class SharedWaypointClient {
     private final CopyOnWriteArrayList<Listener> listeners = new CopyOnWriteArrayList<>();
     private final Set<SharedWaypointLocationKey> pendingCrossDimensionPreferences =
         new LinkedHashSet<>();
+    /** Publish-echo Y overrides; keyed by location like {@link #pendingCrossDimensionPreferences}. */
+    private final Map<SharedWaypointLocationKey, Double> pendingCrossDimensionYPreferences =
+        new LinkedHashMap<>();
     private final Map<UUID, PendingOperation> pendingOperations = new LinkedHashMap<>() {
         @Override
         protected boolean removeEldestEntry(final Map.Entry<UUID, PendingOperation> eldest) {
@@ -141,6 +162,11 @@ public final class SharedWaypointClient {
         return stateMachine.view().list();
     }
 
+    /** Immutable, atomically published shared-waypoint groups in server creation order. */
+    public List<SharedWaypointGroup> groups() {
+        return stateMachine.view().groups();
+    }
+
     public boolean isOperator() {
         return stateMachine.view().operator();
     }
@@ -165,6 +191,19 @@ public final class SharedWaypointClient {
         return stateMachine.view().synchronizedSnapshot();
     }
 
+    /** One internally consistent state snapshot; the unified list model reads from this. */
+    public SharedWaypointClientState.View view() {
+        return stateMachine.view();
+    }
+
+    public boolean ownerManagementAllowed() {
+        return stateMachine.ownerManagementAllowed();
+    }
+
+    public int negotiatedMinor() {
+        return stateMachine.negotiatedMinor();
+    }
+
     public boolean supportsMarkerStyle() {
         return stateMachine.negotiatedMinor() >= 3;
     }
@@ -180,15 +219,21 @@ public final class SharedWaypointClient {
         if (waypoint == null) {
             return false;
         }
-        final SharedWaypointLocationKey location = SharedWaypointLocationKey.from(waypoint);
-        return list().stream().anyMatch(shared -> SharedWaypointLocationKey.from(shared).equals(location));
+        return isLocationSharedAt(SharedWaypointLocationKey.from(waypoint));
     }
 
     public boolean isCreatePending(final Waypoint waypoint) {
         if (waypoint == null) {
             return false;
         }
-        final SharedWaypointLocationKey location = SharedWaypointLocationKey.from(waypoint);
+        return isCreatePendingAt(SharedWaypointLocationKey.from(waypoint));
+    }
+
+    private boolean isLocationSharedAt(final SharedWaypointLocationKey location) {
+        return list().stream().anyMatch(shared -> SharedWaypointLocationKey.from(shared).equals(location));
+    }
+
+    private boolean isCreatePendingAt(final SharedWaypointLocationKey location) {
         return pendingOperations.values().stream()
             .anyMatch(pending -> location.equals(pending.createLocation()));
     }
@@ -201,9 +246,16 @@ public final class SharedWaypointClient {
         }
         final UUID operationId = UUID.randomUUID();
         final SharedWaypointLocationKey location = SharedWaypointLocationKey.from(waypoint);
+        // A shared waypoint is permanent; publishing forgets the local TEMPORARY
+        // lifecycle (the wire codec rejects it).
+        final Waypoint.Type publishedType = waypoint.type == Waypoint.Type.TEMPORARY
+            ? Waypoint.Type.NORMAL
+            : waypoint.type;
         return sendMutation(
             operationId,
-            new PendingOperation(OperationKind.CREATE, location, waypoint.crossDimensionVisible),
+            new PendingOperation(
+                OperationKind.CREATE, location, waypoint.crossDimensionVisible, waypoint.crossDimensionY
+            ),
             new CreateC2S(
                 operationId,
                 revision(),
@@ -213,7 +265,7 @@ public final class SharedWaypointClient {
                 waypoint.y,
                 waypoint.z,
                 waypoint.colorArgb,
-                waypoint.type,
+                publishedType,
                 waypoint.iconItemId,
                 waypoint.markerLabel
             )
@@ -227,7 +279,7 @@ public final class SharedWaypointClient {
     /** Returns the user-facing reason creation is unavailable, or {@code null} when allowed. */
     public String createDisabledReasonKey() {
         final SharedWaypointClientState.View view = stateMachine.view();
-        return createDisabledReasonKey(
+        return SharedWaypointListModel.createDisabledReasonKey(
             view.state(), view.synchronizedSnapshot(), view.operator(),
             stateMachine.ownerManagementAllowed()
         );
@@ -264,7 +316,7 @@ public final class SharedWaypointClient {
         final UUID operationId = UUID.randomUUID();
         return sendMutation(
             operationId,
-            new PendingOperation(OperationKind.DELETE, null, false),
+            new PendingOperation(OperationKind.DELETE, null, false, null),
             deleteMessage(operationId, waypoint)
         );
     }
@@ -276,11 +328,176 @@ public final class SharedWaypointClient {
         final UUID operationId = UUID.randomUUID();
         return sendMutation(
             operationId,
-            new PendingOperation(OperationKind.UPDATE, null, false),
+            new PendingOperation(OperationKind.UPDATE, null, false, null),
             updateMessage(operationId, original, updated)
         );
     }
 
+    /** True when the negotiated wire shape accepts client-originated group mutations. */
+    public boolean supportsGroupMutations() {
+        return stateMachine.negotiatedMinor() >= SharedWaypointProto.PROTO_MINOR_GROUP_MUTATIONS;
+    }
+
+    public boolean canCreateGroup() {
+        return createDisabledReasonKey() == null;
+    }
+
+    /** Mirrors the server rule: operators manage every group, owners only groups they created. */
+    public boolean canManageGroup(final SharedWaypointGroup group) {
+        return groupManageDisabledReasonKey(group) == null;
+    }
+
+    public String groupManageDisabledReasonKey(final SharedWaypointGroup group) {
+        final SharedWaypointClientState.View view = stateMachine.view();
+        final UUID localPlayerId = client.player == null ? null : client.player.getUUID();
+        return SharedWaypointListModel.groupManageDisabledReasonKey(
+            view.state(), view.synchronizedSnapshot(), view.operator(),
+            stateMachine.ownerManagementAllowed(), group, localPlayerId
+        );
+    }
+
+    public boolean createGroup(final String name) {
+        if (name == null || !supportsGroupMutations() || !canCreateGroup()) {
+            return false;
+        }
+        final UUID operationId = UUID.randomUUID();
+        return sendMutation(
+            operationId,
+            new PendingOperation(OperationKind.GROUP_CREATE, null, false, null),
+            new GroupCreateC2S(operationId, revision(), name)
+        );
+    }
+
+    public boolean renameGroup(final SharedWaypointGroup group, final String name) {
+        if (group == null || name == null || !supportsGroupMutations() || !canManageGroup(group)) {
+            return false;
+        }
+        final UUID operationId = UUID.randomUUID();
+        return sendMutation(
+            operationId,
+            new PendingOperation(OperationKind.GROUP_RENAME, null, false, null),
+            new GroupRenameC2S(operationId, group.revision(), group.id(), name)
+        );
+    }
+
+    public boolean deleteGroup(final SharedWaypointGroup group) {
+        if (group == null || !supportsGroupMutations() || !canManageGroup(group)) {
+            return false;
+        }
+        final UUID operationId = UUID.randomUUID();
+        return sendMutation(
+            operationId,
+            new PendingOperation(OperationKind.GROUP_DELETE, null, false, null),
+            new GroupDeleteC2S(operationId, group.revision(), group.id())
+        );
+    }
+
+    /** Moves one published waypoint into a group, or out of every group with a null target. */
+    public boolean setWaypointGroup(final SharedWaypoint original, final UUID groupId) {
+        if (original == null || !supportsGroupMutations() || !canUpdate(original)) {
+            return false;
+        }
+        final UUID operationId = UUID.randomUUID();
+        return sendMutation(
+            operationId,
+            new PendingOperation(OperationKind.SET_GROUP, null, false, null),
+            setWaypointGroupMessage(operationId, original, groupId)
+        );
+    }
+
+    @Override
+    public boolean create(final EditDraft draft, final UUID groupId) {
+        if (draft == null || !canCreate()) {
+            return false;
+        }
+        final SharedWaypointLocationKey location = SharedWaypointLocationKey.from(
+            draft.dimensionId(), draft.x(), draft.y(), draft.z()
+        );
+        if (isLocationSharedAt(location) || isCreatePendingAt(location)) {
+            return false;
+        }
+        final UUID operationId = UUID.randomUUID();
+        final UUID wireGroup = groupId != null && supportsGroupSelection() ? groupId : null;
+        return sendMutation(
+            operationId,
+            new PendingOperation(
+                OperationKind.CREATE, location,
+                draft.crossDimensionVisible(), draft.crossDimensionY()
+            ),
+            new CreateC2S(
+                operationId, revision(), draft.name(), draft.dimensionId(),
+                draft.x(), draft.y(), draft.z(), draft.colorArgb(), draft.type(),
+                draft.iconItemId(), draft.markerLabel(), wireGroup
+            )
+        );
+    }
+
+    @Override
+    public boolean update(final SharedWaypoint original, final EditDraft draft, final UUID groupId) {
+        if (original == null || draft == null || !canUpdate(original)) {
+            return false;
+        }
+        final UUID operationId = UUID.randomUUID();
+        final boolean sent = sendMutation(
+            operationId,
+            new PendingOperation(OperationKind.UPDATE, null, false, null),
+            updateMessage(operationId, original, draft, groupId)
+        );
+        if (sent) {
+            setCrossDimensionVisible(original.id(), draft.crossDimensionVisible());
+            setCrossDimensionY(original.id(), draft.crossDimensionY());
+        }
+        return sent;
+    }
+
+    @Override
+    public boolean moveBatch(final List<SharedWaypoint> waypoints, final UUID groupId) {
+        if (waypoints == null || waypoints.isEmpty() || !supportsGroupMutations()) {
+            return false;
+        }
+        if (!supportsBatchMove()) {
+            boolean any = false;
+            for (final SharedWaypoint waypoint : waypoints) {
+                any |= setWaypointGroup(waypoint, groupId);
+            }
+            return any;
+        }
+        for (final SharedWaypoint waypoint : waypoints) {
+            if (waypoint == null || !canUpdate(waypoint)) {
+                return false;
+            }
+        }
+        boolean any = false;
+        for (int start = 0; start < waypoints.size(); start += SharedWaypointProto.MAX_BATCH_MOVE_ENTRIES) {
+            final List<SharedWaypoint> chunk = waypoints.subList(
+                start, Math.min(waypoints.size(), start + SharedWaypointProto.MAX_BATCH_MOVE_ENTRIES)
+            );
+            any |= sendMoveBatchChunk(chunk, groupId);
+        }
+        return any;
+    }
+
+    private boolean sendMoveBatchChunk(final List<SharedWaypoint> chunk, final UUID groupId) {
+        final UUID operationId = UUID.randomUUID();
+        final List<MoveBatchC2S.Entry> entries = new ArrayList<>(chunk.size());
+        for (final SharedWaypoint waypoint : chunk) {
+            entries.add(new MoveBatchC2S.Entry(waypoint.id(), waypoint.revision(), groupId));
+        }
+        return sendMutation(
+            operationId,
+            new PendingOperation(OperationKind.MOVE_BATCH, null, false, null),
+            new MoveBatchC2S(operationId, revision(), entries)
+        );
+    }
+
+    /** True when the negotiated wire shape carries explicit group assignment on create/update. */
+    public boolean supportsGroupSelection() {
+        return stateMachine.negotiatedMinor() >= SharedWaypointProto.PROTO_MINOR_BATCH_MOVE;
+    }
+
+    public boolean supportsBatchMove() {
+        return stateMachine.negotiatedMinor() >= SharedWaypointProto.PROTO_MINOR_BATCH_MOVE;
+    }
     public void addListener(final Listener listener) {
         listeners.add(Objects.requireNonNull(listener, "listener"));
     }
@@ -294,67 +511,19 @@ public final class SharedWaypointClient {
         configIo.save(config);
     }
 
-    static boolean canManage(
-        final SharedWaypoint waypoint,
-        final boolean operator,
-        final boolean ownerManagementAllowed,
-        final UUID localPlayerId
-    ) {
-        if (waypoint == null) {
-            return false;
-        }
-        if (operator) {
-            return true;
-        }
-        return ownerManagementAllowed && waypoint.publisherId().equals(localPlayerId);
-    }
-
-    static String createDisabledReasonKey(
-        final SharedWaypointClientState.State state,
-        final boolean synchronizedSnapshot,
-        final boolean operator,
-        final boolean ownerManagementAllowed
-    ) {
-        if (state == SharedWaypointClientState.State.SUPPORTED_DISABLED) {
-            return "confluxmap.shared_waypoints.disabled_by_server";
-        }
-        if (state != SharedWaypointClientState.State.ENABLED || !synchronizedSnapshot) {
-            return "confluxmap.screen.waypoint.public_unavailable";
-        }
-        if (!operator && !ownerManagementAllowed) {
-            return "confluxmap.shared_waypoints.operator_only";
-        }
-        return null;
+    /** Stores (or clears with null) this client's Y override for the public waypoint. */
+    public void setCrossDimensionY(final UUID waypointId, final Double y) {
+        config.setSharedWaypointCrossDimensionY(waypointId, y);
+        configIo.save(config);
     }
 
     private String managementDisabledReasonKey(final SharedWaypoint waypoint) {
         final SharedWaypointClientState.View view = stateMachine.view();
         final UUID localPlayerId = client.player == null ? null : client.player.getUUID();
-        return managementDisabledReasonKey(
+        return SharedWaypointListModel.managementDisabledReasonKey(
             view.state(), view.synchronizedSnapshot(), view.operator(),
             stateMachine.ownerManagementAllowed(), waypoint, localPlayerId
         );
-    }
-
-    static String managementDisabledReasonKey(
-        final SharedWaypointClientState.State state,
-        final boolean synchronizedSnapshot,
-        final boolean operator,
-        final boolean ownerManagementAllowed,
-        final SharedWaypoint waypoint,
-        final UUID localPlayerId
-    ) {
-        final String createReasonKey = createDisabledReasonKey(
-            state, synchronizedSnapshot, operator, ownerManagementAllowed
-        );
-        if (createReasonKey != null || waypoint == null) {
-            return createReasonKey == null
-                ? "confluxmap.screen.waypoint.public_unavailable"
-                : createReasonKey;
-        }
-        return canManage(waypoint, operator, ownerManagementAllowed, localPlayerId)
-            ? null
-            : "confluxmap.shared_waypoints.owner_only";
     }
 
     static DeleteC2S deleteMessage(final UUID operationId, final SharedWaypoint waypoint) {
@@ -373,10 +542,39 @@ public final class SharedWaypointClient {
         );
     }
 
+    private UpdateC2S updateMessage(
+        final UUID operationId,
+        final SharedWaypoint original,
+        final EditDraft draft,
+        final UUID groupId
+    ) {
+        if (supportsGroupSelection()) {
+            return new UpdateC2S(
+                operationId, original.id(), original.revision(), draft.name(), draft.dimensionId(),
+                draft.x(), draft.y(), draft.z(), draft.colorArgb(), draft.type(),
+                draft.iconItemId(), draft.markerLabel(), groupId, true
+            );
+        }
+        return new UpdateC2S(
+            operationId, original.id(), original.revision(), draft.name(), draft.dimensionId(),
+            draft.x(), draft.y(), draft.z(), draft.colorArgb(), draft.type(),
+            draft.iconItemId(), draft.markerLabel()
+        );
+    }
+
+    static SetWaypointGroupC2S setWaypointGroupMessage(
+        final UUID operationId,
+        final SharedWaypoint waypoint,
+        final UUID groupId
+    ) {
+        return new SetWaypointGroupC2S(operationId, waypoint.id(), waypoint.revision(), groupId);
+    }
+
     private void onJoin() {
         final SharedWaypointClientState.View before = stateMachine.view();
         pendingOperations.clear();
         pendingCrossDimensionPreferences.clear();
+        pendingCrossDimensionYPreferences.clear();
         stateMachine.beginConnection(true);
         notifyChanges(before, stateMachine.view());
         if (!send(new HelloC2S(SharedWaypointProto.PROTO_MAJOR, SharedWaypointProto.PROTO_MINOR))) {
@@ -400,6 +598,7 @@ public final class SharedWaypointClient {
             final SharedWaypointClientState.View before = stateMachine.view();
             pendingOperations.clear();
             pendingCrossDimensionPreferences.clear();
+            pendingCrossDimensionYPreferences.clear();
             stateMachine.reset();
             notifyChanges(before, stateMachine.view());
         });
@@ -477,6 +676,10 @@ public final class SharedWaypointClient {
             action = stateMachine.onUpsert(upsert);
         } else if (message instanceof final RemoveS2C remove) {
             action = stateMachine.onRemove(remove);
+        } else if (message instanceof final GroupUpsertS2C groupUpsert) {
+            action = stateMachine.onGroupUpsert(groupUpsert);
+        } else if (message instanceof final GroupRemoveS2C groupRemove) {
+            action = stateMachine.onGroupRemove(groupRemove);
         } else {
             ConfluxMapMod.LOGGER.warn(
                 "shared-waypoint: unexpected S2C {}",
@@ -519,6 +722,11 @@ public final class SharedWaypointClient {
         if (applied && pending.kind() == OperationKind.CREATE
             && pending.crossDimensionVisible()) {
             pendingCrossDimensionPreferences.add(pending.createLocation());
+            if (pending.crossDimensionY() != null) {
+                pendingCrossDimensionYPreferences.put(
+                    pending.createLocation(), pending.crossDimensionY()
+                );
+            }
             applyPendingCrossDimensionPreferences(stateMachine.view().list());
         }
         if (!applied && !rejected) {
@@ -625,7 +833,8 @@ public final class SharedWaypointClient {
         }
         if (before.revision() != after.revision()
             || before.synchronizedSnapshot() != after.synchronizedSnapshot()
-            || !before.list().equals(after.list())) {
+            || !before.list().equals(after.list())
+            || !before.groups().equals(after.groups())) {
             applyPendingCrossDimensionPreferences(after.list());
             for (final Listener listener : listeners) {
                 try {
@@ -639,7 +848,7 @@ public final class SharedWaypointClient {
 
     private void applyPendingCrossDimensionPreferences(final List<SharedWaypoint> waypoints) {
         if (applyPendingCrossDimensionPreferences(
-            pendingCrossDimensionPreferences, waypoints, config
+            pendingCrossDimensionPreferences, pendingCrossDimensionYPreferences, waypoints, config
         )) {
             configIo.save(config);
         }
@@ -647,6 +856,7 @@ public final class SharedWaypointClient {
 
     static boolean applyPendingCrossDimensionPreferences(
         final Set<SharedWaypointLocationKey> pending,
+        final Map<SharedWaypointLocationKey, Double> pendingY,
         final List<SharedWaypoint> waypoints,
         final ConfluxConfig config
     ) {
@@ -654,6 +864,9 @@ public final class SharedWaypointClient {
         for (final SharedWaypoint waypoint : waypoints) {
             if (pending.remove(SharedWaypointLocationKey.from(waypoint))) {
                 config.setSharedWaypointCrossDimensionVisible(waypoint.id(), true);
+                config.setSharedWaypointCrossDimensionY(
+                    waypoint.id(), pendingY.remove(SharedWaypointLocationKey.from(waypoint))
+                );
                 changed = true;
             }
         }

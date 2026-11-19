@@ -1,9 +1,9 @@
 package cn.net.rms.confluxmap.compat;
 
 import cn.net.rms.confluxmap.core.model.DimensionId;
-import net.minecraft.resources.Identifier;
 import net.minecraft.server.MinecraftServer;
 import net.minecraft.server.level.ServerLevel;
+import net.minecraft.resources.Identifier;
 import net.minecraft.world.level.Level;
 
 /**
@@ -27,10 +27,10 @@ public final class Dimensions {
     }
 
     /**
-     * Position of {@code dimension} in {@code server.getAllLevels()} iteration order. That
-     * order is the wire contract: {@code HelloPolicyS2C} dimension descriptors and every
-     * indexed dimension field are built from the same loop, so all index lookups must match
-     * it. Returns -1 when the server does not hold the dimension.
+     * Position of {@code dimension} in {@code server.getAllLevels()} iteration order. That order
+     * is the wire contract: {@code HelloPolicyS2C} dimension descriptors and every indexed
+     * dimension field are built from the same loop, so all index lookups must match it.
+     * Returns -1 when the server does not hold the dimension.
      */
     public static int indexOf(final MinecraftServer server, final DimensionId dimension) {
         int index = 0;

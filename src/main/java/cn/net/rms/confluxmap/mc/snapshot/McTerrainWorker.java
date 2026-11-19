@@ -7,6 +7,7 @@ import cn.net.rms.confluxmap.core.terrain.TerrainDelta;
 import cn.net.rms.confluxmap.core.terrain.TerrainResult;
 import cn.net.rms.confluxmap.core.terrain.TerrainView;
 import cn.net.rms.confluxmap.core.terrain.TerrainWorker;
+import cn.net.rms.confluxmap.core.util.ChunkKeys;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.Map;
@@ -112,7 +113,7 @@ final class McTerrainWorker implements AutoCloseable {
         if (paused || worker == null) {
             return false;
         }
-        final long chunkKey = key(chunk.chunkX(), chunk.chunkZ());
+        final long chunkKey = ChunkKeys.pack(chunk.chunkX(), chunk.chunkZ());
         final EncodedChunk previous = replay.put(chunkKey, chunk);
         if (previous != null) {
             replayBytes -= previous.estimatedBytes();
@@ -132,11 +133,11 @@ final class McTerrainWorker implements AutoCloseable {
     }
 
     boolean hasFreshChunk(final int chunkX, final int chunkZ) {
-        return replay.containsKey(key(chunkX, chunkZ));
+        return replay.containsKey(ChunkKeys.pack(chunkX, chunkZ));
     }
 
     void invalidate(final int chunkX, final int chunkZ) {
-        final long chunkKey = key(chunkX, chunkZ);
+        final long chunkKey = ChunkKeys.pack(chunkX, chunkZ);
         final EncodedChunk removed = replay.remove(chunkKey);
         staleReplay.remove(chunkKey);
         if (removed != null) {
@@ -158,7 +159,7 @@ final class McTerrainWorker implements AutoCloseable {
         final int blockZ,
         final int stateId
     ) {
-        final long chunkKey = key(blockX >> 4, blockZ >> 4);
+        final long chunkKey = ChunkKeys.pack(blockX >> 4, blockZ >> 4);
         if (replay.containsKey(chunkKey)) {
             staleReplay.add(chunkKey);
         }
@@ -327,10 +328,6 @@ final class McTerrainWorker implements AutoCloseable {
         if (!worker.pause()) {
             handleFault(worker.fault());
         }
-    }
-
-    private static long key(final int x, final int z) {
-        return ((long) x << 32) ^ (z & 0xFFFFFFFFL);
     }
 
     private void trimReplay() {

@@ -6,7 +6,6 @@ import java.util.function.DoubleFunction;
 import java.util.regex.Pattern;
 import net.minecraft.client.gui.Font;
 import net.minecraft.client.gui.components.AbstractWidget;
-import net.minecraft.client.gui.components.AbstractSliderButton;
 import net.minecraft.client.gui.components.EditBox;
 import net.minecraft.network.chat.Component;
 
@@ -26,7 +25,7 @@ final class DecimalSliderInput {
     private boolean synchronizingInput;
 
     DecimalSliderInput(
-        final Font textRenderer,
+        final Font font,
         final int x,
         final int y,
         final int width,
@@ -49,7 +48,7 @@ final class DecimalSliderInput {
         final int sliderWidth = Math.max(1, width - CONTROL_GAP - inputWidth);
         this.slider = new ValueSlider(x, y, sliderWidth, height, message);
         this.input = new EditBox(
-            textRenderer,
+            font,
             x + sliderWidth + CONTROL_GAP,
             y,
             inputWidth,
@@ -58,7 +57,7 @@ final class DecimalSliderInput {
         );
         this.input.setMaxLength(MAX_DECIMAL_LENGTH);
         this.lastAcceptedText = this.value.text();
-        Widgets.setText(this.input, this.lastAcceptedText);
+        Widgets.setValue(this.input, this.lastAcceptedText);
         Widgets.setChangedListener(this.input, this::onInputChanged);
     }
 
@@ -106,13 +105,13 @@ final class DecimalSliderInput {
         lastAcceptedText = text;
         synchronizingInput = true;
         try {
-            Widgets.setText(input, text);
+            Widgets.setValue(input, text);
         } finally {
             synchronizingInput = false;
         }
     }
 
-    private final class ValueSlider extends AbstractSliderButton {
+    private final class ValueSlider extends RevealedSlider {
         private final DoubleFunction<Component> message;
 
         private ValueSlider(
@@ -122,7 +121,7 @@ final class DecimalSliderInput {
             final int height,
             final DoubleFunction<Component> message
         ) {
-            super(x, y, width, height, Component.nullToEmpty(""), DecimalSliderInput.this.value.position());
+            super(x, y, width, height, DecimalSliderInput.this.value.position());
             this.message = message;
             updateMessage();
         }

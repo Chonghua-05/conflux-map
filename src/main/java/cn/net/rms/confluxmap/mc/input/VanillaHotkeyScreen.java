@@ -1,5 +1,6 @@
 package cn.net.rms.confluxmap.mc.input;
-import net.minecraft.client.gui.screens.options.controls.KeyBindsScreen;
+
+import net.minecraft.client.gui.screens.options.controls.ControlsScreen;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.gui.screens.Screen;
 
@@ -9,6 +10,6 @@ final class VanillaHotkeyScreen {
     }
 
     static Screen create(final Screen parent, final Minecraft client) {
-        return new KeyBindsScreen(parent, client.options);
+        return new ControlsScreen(parent, client.options);
     }
 }

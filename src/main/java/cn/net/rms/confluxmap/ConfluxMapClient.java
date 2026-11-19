@@ -1,7 +1,26 @@
 package cn.net.rms.confluxmap;
 
 import cn.net.rms.confluxmap.bridge.GameBridge;
+import cn.net.rms.confluxmap.api.ConfluxMapApi;
 import cn.net.rms.confluxmap.core.annotation.AnnotationService;
+import cn.net.rms.confluxmap.core.api.ConfluxMapApiImpl;
+import cn.net.rms.confluxmap.core.api.CustomMarkerService;
+import cn.net.rms.confluxmap.core.backfill.McaBackfillService;
+import cn.net.rms.confluxmap.core.measure.MeasureState;
+import cn.net.rms.confluxmap.core.model.DimensionId;
+import cn.net.rms.confluxmap.core.portal.PortalService;
+import cn.net.rms.confluxmap.core.waypoint.CrossWorldWaypointService;
+import cn.net.rms.confluxmap.core.waypoint.list.LocalWaypointListModel;
+import cn.net.rms.confluxmap.core.waypoint.list.SharedWaypointListModel;
+import cn.net.rms.confluxmap.core.waypoint.list.ConfigWaypointPersonalPreferences;
+import cn.net.rms.confluxmap.core.xaeroimport.XaeroImportService;
+import cn.net.rms.confluxmap.compat.Texts;
+import cn.net.rms.confluxmap.mc.snapshot.XaeroSnapshotBaker;
+import cn.net.rms.confluxmap.mc.mapbackfill.ClientMcaRegionScanner;
+import cn.net.rms.confluxmap.mc.snapshot.McaSnapshotBaker;
+import cn.net.rms.confluxmap.mc.portal.PortalScanHandler;
+import cn.net.rms.confluxmap.mc.portal.PortalScanService;
+import java.util.OptionalInt;
 import cn.net.rms.confluxmap.core.cache.RegionCacheService;
 import cn.net.rms.confluxmap.core.color.DaylightModel;
 import cn.net.rms.confluxmap.core.config.ConfigIo;
@@ -110,6 +129,16 @@ public final class ConfluxMapClient implements ClientModInitializer {
     private EntityIconManager entityIconManager;
     private PlayerTrail playerTrail;
     private PlayerTrailTracker playerTrailTracker;
+    private PortalService portalService;
+    private PortalScanService portalScanService;
+    private MeasureState measureState;
+    private CustomMarkerService customMarkerService;
+    private McaBackfillService mcaBackfillService;
+    private ConfluxMapApiImpl api;
+    private CrossWorldWaypointService crossWorldWaypoints;
+    private LocalWaypointListModel localWaypointListModel;
+    private SharedWaypointListModel sharedWaypointListModel;
+    private XaeroImportService xaeroImportService;
     private MinimapHudRenderer minimapHudRenderer;
     private UiResourceTheme uiResourceTheme;
     private FullscreenMapViewState fullscreenMapViewState;
@@ -178,6 +207,7 @@ public final class ConfluxMapClient implements ClientModInitializer {
         );
         final Path waypointRoot = confluxRoot.resolve("waypoints");
         final Path annotationRoot = confluxRoot.resolve("annotations");
+        final Path portalRoot = confluxRoot.resolve("portals");
         final ServerAliasIo serverAliasIo = new ServerAliasIo(
             FMLPaths.CONFIGDIR.get().resolve(ConfluxMapMod.ID).resolve("server_aliases.json"),
             ConfluxMapMod.LOGGER
@@ -201,7 +231,8 @@ public final class ConfluxMapClient implements ClientModInitializer {
         final List<NamespaceAdoption.Store> adoptableStores = List.of(
             new NamespaceAdoption.Store(cacheRoot, ""),
             new NamespaceAdoption.Store(cacheRoot.resolve("prediction"), ""),
-            new NamespaceAdoption.Store(waypointRoot, ".json")
+            new NamespaceAdoption.Store(waypointRoot, ".json"),
+            new NamespaceAdoption.Store(portalRoot, ".json")
         );
         sessionTracker.bindNamespaceAdopter(identity -> NamespaceAdoption.adopt(
             adoptableStores, identity, companionSession.companionWorldId(), ConfluxMapMod.LOGGER
@@ -235,14 +266,15 @@ public final class ConfluxMapClient implements ClientModInitializer {
             cacheRoot.resolve("prediction")
         );
         predictionTileService.bindCorrectionStore(correctionStore);
-        predictionBootstrap = new PredictionBootstrap(
-            client, predictionState, companionSession, config.predictionManualSeeds
-        );
-        clientNetworking = new ClientNetworking(companionSession);
         syncedMaterialResolver = new SyncedMaterialResolver(
             client, spriteColorSampler, biomeTintResolver,
             predictionTileService.syncedMaterials()
         );
+        predictionBootstrap = new PredictionBootstrap(
+            client, predictionState, companionSession, config.predictionManualSeeds,
+            syncedMaterialResolver::register
+        );
+        clientNetworking = new ClientNetworking(companionSession);
         mapSyncClient = new MapSyncClient(
             companionSession, clientNetworking, correctionStore, predictionTileService,
             config, syncedMaterialResolver::register
@@ -262,13 +294,16 @@ public final class ConfluxMapClient implements ClientModInitializer {
             )
         );
         ClientTickEvents.END_CLIENT_TICK.register(ignored -> mapExportService.tick());
+        xaeroImportService = new XaeroImportService(
+            mapWorlds, regionCache, tileService, cacheRoot, new XaeroSnapshotBaker(client), ConfluxMapMod.LOGGER
+        );
         clientNetworking.bindMapSync(mapSyncClient);
         clientNetworking.bindChunkLoadStates(chunkLoadStateClient);
         clientNetworking.bindPlayerRadar(serverPlayerRadar);
         clientNetworking.register();
         sharedWaypoints = new SharedWaypointClient(client, config, configIo);
         sharedWaypoints.register();
-        groundTeleportService = new ClientGroundTeleportService(client, config);
+        groundTeleportService = new ClientGroundTeleportService(client, config, this::resolveUnknownLanding);
 
         predictionPaletteBuilder = new PredictionPaletteBuilder(client, predictionState, spriteColorSampler);
         tileTextureManager = new TileTextureManager(config, tileService, predictionTileService, daylightModel);
@@ -299,6 +334,12 @@ public final class ConfluxMapClient implements ClientModInitializer {
         );
         clientMultiworldService.bindChunkCapture(chunkCapture);
         radarViewRange = new RadarViewRange();
+        customMarkerService = new CustomMarkerService(ConfluxMapMod.LOGGER);
+        ClientTickEvents.END_CLIENT_TICK.register(ignored -> customMarkerService.tick());
+        mcaBackfillService = new McaBackfillService(
+            mapWorlds, regionCache, tileService, executors, config,
+            new ClientMcaRegionScanner(client), new McaSnapshotBaker(client), ConfluxMapMod.LOGGER
+        );
         radarScanner = new EntityRadarScanner(
             client, config, radarViewRange, companionSession::entityRadarAllowed
         );
@@ -306,16 +347,44 @@ public final class ConfluxMapClient implements ClientModInitializer {
         playerTrail = new PlayerTrail();
         playerTrailTracker = new PlayerTrailTracker(client, config, sessionGuard, playerTrail);
         waypointService = new WaypointService(waypointRoot, executors, ConfluxMapMod.LOGGER);
+        portalService = new PortalService(portalRoot, executors, ConfluxMapMod.LOGGER);
+        portalScanService = new PortalScanService(client, config, portalService);
+        PortalScanHandler.bind(portalScanService);
         annotationService = new AnnotationService(annotationRoot, executors, ConfluxMapMod.LOGGER);
-        waypointRenderCatalog = new WaypointRenderCatalog(waypointService, sharedWaypoints::list, config);
-        waypointHighlightState = new WaypointHighlightState();
-        deathWatcher = new DeathWatcher(gameBridge, config, waypointService);
-        uiResourceTheme = new UiResourceTheme();
+        crossWorldWaypoints = new CrossWorldWaypointService(
+            waypointRoot, clientWorldProfiles, config,
+            () -> configIo.save(config), ConfluxMapMod.LOGGER
+        );
+        waypointRenderCatalog = new WaypointRenderCatalog(
+            waypointService, sharedWaypoints::list, crossWorldWaypoints::siblings, config,
+            companionSession::waypointsAllowed
+        );
+        localWaypointListModel = new LocalWaypointListModel(
+            waypointService::current,
+            crossWorldWaypoints::siblings,
+            () -> config.localWaypointsVisible && config.crossWorldWaypointsVisible,
+            (key, args) -> Texts.translatable(key, args).getString()
+        );
+        sharedWaypointListModel = new SharedWaypointListModel(
+            sharedWaypoints::view,
+            sharedWaypoints::negotiatedMinor,
+            sharedWaypoints::ownerManagementAllowed,
+            () -> client.player == null ? null : client.player.getUUID(),
+            new ConfigWaypointPersonalPreferences(config, configIo),
+            sharedWaypoints,
+            (key, args) -> Texts.translatable(key, args).getString()
+        );
+        waypointHighlightState = new WaypointHighlightState(
+            () -> config.highlightCrossDimensionVisible
+        );
+        measureState = new MeasureState();
+        deathWatcher = new DeathWatcher(gameBridge, config, waypointService, companionSession::waypointsAllowed);
+        uiResourceTheme = new UiResourceTheme(() -> config.controlStyle);
         minimapHudRenderer = new MinimapHudRenderer(
             client, config, gameBridge, tileService, tileTextureManager, radarScanner, entityIconManager,
             serverPlayerRadar, playerTrail, annotationService, layerSelector, waypointRenderCatalog,
-            radarViewRange, uiResourceTheme, chunkCapture::setMinimapViewport,
-            chunkCapture::liveTerrainPaused
+            portalService, radarViewRange, uiResourceTheme, customMarkerService, chunkCapture::setMinimapViewport,
+            chunkCapture::liveTerrainPaused, companionSession::minimapAllowed
         );
         waypointItemHudRenderer = new WaypointItemHudRenderer(client, config, entityIconManager);
         waypointWorldRenderer = new WaypointWorldRenderer(
@@ -346,7 +415,15 @@ public final class ConfluxMapClient implements ClientModInitializer {
         sessionTracker.addListener(playerTrailTracker::onSessionChanged);
         sessionTracker.addListener(fullscreenMapViewState::onSessionChanged);
         sessionTracker.addListener(waypointService::onSessionChanged);
+        sessionTracker.addListener(portalService::onSessionChanged);
+        sessionTracker.addListener(portalScanService::onSessionChanged);
+        sessionTracker.addListener(session -> crossWorldWaypoints.update(
+            session.active() ? session.world() : null,
+            clientMultiworldService.currentSeedHash()
+        ));
         sessionTracker.addListener(waypointHighlightState::onSessionChanged);
+        sessionTracker.addListener(measureState::onSessionChanged);
+        sessionTracker.addListener(mcaBackfillService::onSessionChanged);
         sessionTracker.addListener(annotationService::onSessionChanged);
         sessionTracker.addListener(correctionStore::onSessionChanged);
         sessionTracker.addListener(session -> mapSyncClient.reset());
@@ -399,6 +476,27 @@ public final class ConfluxMapClient implements ClientModInitializer {
 
         keybinds = new Keybinds(config, configIo, layerSelector);
         clientMultiworldService.bindOpenMapKeyDisplayName(keybinds::openMapKeyDisplayName);
+        api = new ConfluxMapApiImpl(
+            ConfluxMapMod.getVersion(),
+            gameBridge,
+            waypointService,
+            sessionGuard,
+            mapWorlds,
+            tileService,
+            predictionTileService,
+            daylightModel,
+            customMarkerService,
+            new cn.net.rms.confluxmap.mc.api.FabricActionApi(
+                client, gameBridge, config, configIo, keybinds, waypointService,
+                groundTeleportService, layerSelector, sessionGuard, companionSession
+            ),
+            sharedWaypoints::list,
+            sharedWaypoints::availability
+        );
+        api.install();
+        // Last in the listener chain: plugins observe a session only after the mod's own listeners.
+        sessionTracker.addListener(api::onSessionChanged);
+        waypointService.addChangeListener(api::onWaypointsChanged);
         ClientLifecycleEvents.CLIENT_STOPPING.register(client2 -> shutdown());
         ConfluxMapMod.LOGGER.info("Conflux Map client services started ({} workers)", executors.workerCount());
     }
@@ -413,6 +511,19 @@ public final class ConfluxMapClient implements ClientModInitializer {
         entityIconManager.close();
         chunkCapture.close();
         executors.shutdown(5000L);
+    }
+
+    /** Rerouted to the public API's landing resolver for the ground-teleport feature. */
+    private OptionalInt resolveUnknownLanding(
+        final int blockX,
+        final int blockZ,
+        final DimensionId dimension,
+        final boolean voidColumn
+    ) {
+        final ConfluxMapApiImpl current = api;
+        return current == null ? OptionalInt.empty() : current.resolveTeleportLanding(
+            blockX, blockZ, dimension, voidColumn
+        );
     }
 
     public ConfluxConfig config() {
@@ -607,5 +718,61 @@ public final class ConfluxMapClient implements ClientModInitializer {
 
     public ClientGroundTeleportService groundTeleportService() {
         return groundTeleportService;
+    }
+
+    /** Invalidates predicted planes after the void-column colour changes. */
+    public void onVoidColumnColorChanged() {
+        predictionTileService.setVoidColumnColor(config.voidColumnColor);
+        predictionTileService.reloadAll();
+        tileService.invalidateCompositions();
+        gameBridge.runOnRenderThread(tileTextureManager::releaseAll);
+        ConfluxMapMod.LOGGER.info("Void column color changed to {}", config.voidColumnColor);
+    }
+
+    /** Invalidates terrain planes after the Nether ceiling bedrock thickness toggle changes. */
+    public void onNetherCeilingBedrockThicknessChanged() {
+        // Predicted bedrock is flat regardless of this toggle, so only captured planes reload.
+        tileService.invalidateCompositions();
+        gameBridge.runOnRenderThread(tileTextureManager::releaseAll);
+        if (chunkCapture != null) {
+            chunkCapture.recaptureCurrentView();
+        }
+        ConfluxMapMod.LOGGER.info("Nether ceiling bedrock thickness shading toggled to {}", config.showNetherCeilingBedrockThickness);
+    }
+
+    public PortalService portalService() {
+        return portalService;
+    }
+
+    public PortalScanService portalScanService() {
+        return portalScanService;
+    }
+
+    public MeasureState measureState() {
+        return measureState;
+    }
+
+    public CustomMarkerService customMarkers() {
+        return customMarkerService;
+    }
+
+    public McaBackfillService mcaBackfillService() {
+        return mcaBackfillService;
+    }
+
+    public ConfluxMapApiImpl api() {
+        return api;
+    }
+
+    public LocalWaypointListModel localWaypointListModel() {
+        return localWaypointListModel;
+    }
+
+    public SharedWaypointListModel sharedWaypointListModel() {
+        return sharedWaypointListModel;
+    }
+
+    public XaeroImportService xaeroImportService() {
+        return xaeroImportService;
     }
 }
