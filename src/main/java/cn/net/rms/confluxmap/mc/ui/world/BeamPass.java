@@ -7,11 +7,6 @@ import cn.net.rms.confluxmap.mc.render.WorldMatrices;
 import com.mojang.blaze3d.vertex.DefaultVertexFormat;
 
 import com.mojang.blaze3d.systems.RenderSystem;
-import com.mojang.blaze3d.vertex.VertexConsumer;
-import cn.net.rms.confluxmap.neoforge.compat.FabricOrderedSubmitNodeCollector;
-import cn.net.rms.confluxmap.neoforge.compat.SubmitRenderPhases;
-import net.minecraft.client.renderer.feature.CustomFeatureRenderer;
-import net.minecraft.client.renderer.rendertype.RenderTypes;
 import com.mojang.blaze3d.vertex.PoseStack;
 import net.minecraft.client.renderer.RenderPipelines;
 
@@ -42,6 +37,9 @@ final class BeamPass implements WaypointBeamPainter.Sink {
 
     void beginPass(final OverlayFrame frame) {
         this.frame = frame;
+        // The 26.1 RETURN draw runs after vanilla popped the world view but before anything
+        // swapped the world projection away, so only the view snapshot gets reinstalled.
+        WorldMatrices.pushWorldViewSnapshot();
         beginAdditiveTriangles();
     }
 
@@ -75,48 +73,17 @@ final class BeamPass implements WaypointBeamPainter.Sink {
         final float bottom, final float top,
         final int color
     ) {
-        submitBeamSide(frame.beamSubmits, matrices.last().copy(), x0, z0, x1, z1, bottom, top, color);
+        fillTriangle3D(matrices, x0, bottom, z0, x1, bottom, z1, x1, top, z1, color);
+        fillTriangle3D(matrices, x0, bottom, z0, x1, top, z1, x0, top, z0, color);
     }
 
     void endPass() {
         restoreDefaultBlend();
+        WorldMatrices.popModelView();
         frame = null;
     }
 
 
-    private static void submitBeamSide(
-        final FabricOrderedSubmitNodeCollector beamSubmits,
-        final PoseStack.Pose pose,
-        final float x0, final float z0,
-        final float x1, final float z1,
-        final float bottom, final float top,
-        final int color
-    ) {
-        beamSubmits.submitCustom(SubmitRenderPhases.AFTER_TERRAIN, new CustomFeatureRenderer.Submit(
-            pose, RenderTypes.dragonRays(),
-            (transform, vertices) -> {
-                emitBeamTriangle(transform, vertices, x0, bottom, z0, x1, bottom, z1, x1, top, z1, color);
-                emitBeamTriangle(transform, vertices, x0, bottom, z0, x1, top, z1, x0, top, z0, color);
-            }
-        ));
-    }
-    
-    /** One triangle written twice with opposite winding, the double-sided emission the immediate path uses. */
-    private static void emitBeamTriangle(
-        final PoseStack.Pose pose,
-        final VertexConsumer vertices,
-        final float x0, final float y0, final float z0,
-        final float x1, final float y1, final float z1,
-        final float x2, final float y2, final float z2,
-        final int color
-    ) {
-        vertices.addVertex(pose, x0, y0, z0).setColor(color);
-        vertices.addVertex(pose, x1, y1, z1).setColor(color);
-        vertices.addVertex(pose, x2, y2, z2).setColor(color);
-        vertices.addVertex(pose, x2, y2, z2).setColor(color);
-        vertices.addVertex(pose, x1, y1, z1).setColor(color);
-        vertices.addVertex(pose, x0, y0, z0).setColor(color);
-    }
 
     /**
      * Selects the flat position+color shader and additive-ish blending

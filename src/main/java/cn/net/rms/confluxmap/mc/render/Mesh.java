@@ -1,14 +1,15 @@
 package cn.net.rms.confluxmap.mc.render;
 
-import com.mojang.renderpearl.api.pipeline.PrimitiveTopology;
-import com.mojang.renderpearl.api.pipeline.BindGroupLayout;
-import com.mojang.renderpearl.api.pipeline.RenderPipeline;
-import com.mojang.renderpearl.api.commands.RenderPass;
+import com.mojang.blaze3d.buffers.GpuBuffer;
+import com.mojang.blaze3d.pipeline.RenderPipeline;
+import com.mojang.blaze3d.systems.RenderPass;
 import com.mojang.blaze3d.systems.RenderSystem;
-import com.mojang.renderpearl.api.vertex.VertexFormat;
-import java.util.Optional;
+import com.mojang.blaze3d.vertex.VertexFormat;
 import java.util.OptionalDouble;
-import net.minecraft.client.renderer.StagedVertexBuffer;
+import java.util.OptionalInt;
+import com.mojang.blaze3d.vertex.MeshData;
+import com.mojang.blaze3d.vertex.BufferBuilder;
+import com.mojang.blaze3d.vertex.Tesselator;
 import com.mojang.blaze3d.vertex.DefaultVertexFormat;
 
 import net.minecraft.client.gui.navigation.ScreenRectangle;
@@ -45,23 +46,19 @@ public final class Mesh {
         QUADS
     }
 
-    private static final StagedVertexBuffer IMMEDIATE =
-        new StagedVertexBuffer(() -> "Conflux Map immediate geometry", 1 << 20);
 
     /** Captured vertex layout: x, y, z, u, v, r, g, b, a. */
     private static final int STRIDE = 9;
 
-    private final VertexConsumer buffer;
-    private final StagedVertexBuffer.Draw stagedDraw;
+    private final BufferBuilder buffer;
     private final GuiRenderState guiState;
     private final boolean textured;
     private final float[] pending;
     private float[] vertices;
     private int vertexCount;
 
-    private Mesh(final VertexConsumer buffer, final StagedVertexBuffer.Draw stagedDraw) {
+    private Mesh(final BufferBuilder buffer) {
         this.buffer = buffer;
-        this.stagedDraw = stagedDraw;
         this.guiState = null;
         this.textured = false;
         this.pending = null;
@@ -69,7 +66,6 @@ public final class Mesh {
 
     private Mesh(final GuiRenderState guiState, final boolean textured) {
         this.buffer = null;
-        this.stagedDraw = null;
         this.guiState = guiState;
         this.textured = textured;
         this.pending = new float[STRIDE];
@@ -78,16 +74,15 @@ public final class Mesh {
 
     /** Starts a batch in {@code format}; finish it with {@link #draw()}. */
     public static Mesh begin(final Mode mode, final VertexFormat format) {
-        final StagedVertexBuffer.Draw draw = IMMEDIATE.appendDraw(format, topology(mode));
-        return new Mesh(IMMEDIATE.getVertexBuilder(draw), draw);
+        return new Mesh(Tesselator.getInstance().begin(legacyMode(mode), format));
     }
 
-    private static PrimitiveTopology topology(final Mode mode) {
+    private static VertexFormat.Mode legacyMode(final Mode mode) {
         return switch (mode) {
-            case TRIANGLES -> PrimitiveTopology.TRIANGLES;
-            case TRIANGLE_STRIP -> PrimitiveTopology.TRIANGLE_STRIP;
-            case TRIANGLE_FAN -> PrimitiveTopology.TRIANGLE_FAN;
-            case QUADS -> PrimitiveTopology.QUADS;
+            case TRIANGLES -> VertexFormat.Mode.TRIANGLES;
+            case TRIANGLE_STRIP -> VertexFormat.Mode.TRIANGLE_STRIP;
+            case TRIANGLE_FAN -> VertexFormat.Mode.TRIANGLE_FAN;
+            case QUADS -> VertexFormat.Mode.QUADS;
         };
     }
 
@@ -128,7 +123,7 @@ public final class Mesh {
             pending[2] = position.z;
             return this;
         }
-        buffer.addVertex(model, x, y, z);
+        buffer.vertex(model, x, y, z);
         return this;
     }
 
@@ -138,7 +133,7 @@ public final class Mesh {
             pending[4] = v;
             return this;
         }
-        buffer.setUv(u, v);
+        buffer.texture(u, v);
         return this;
     }
 
@@ -150,7 +145,7 @@ public final class Mesh {
             pending[8] = a;
             return this;
         }
-        buffer.setColor(r, g, b, a);
+        buffer.color(r, g, b, a);
         return this;
     }
 
@@ -203,45 +198,51 @@ public final class Mesh {
     
     /** Uploads and draws the batch through the pipeline-based renderer. */
     public void draw(final RenderPipeline pipeline) {
-        try {
-            IMMEDIATE.upload();
-            final StagedVertexBuffer.ExecuteInfo info = IMMEDIATE.getExecuteInfo(stagedDraw);
+        try (MeshData built = buffer.build()) {
+            if (built == null) {
+                return;
+            }
+            final MeshData.DrawState drawState = built.drawState();
+            final GpuDevice device = RenderSystem.getDevice();
+            final GpuBuffer vertexBuffer = device.createBuffer(
+                () -> "Conflux Map immediate vertices",
+                GpuBuffer.USAGE_VERTEX,
+                built.vertexBuffer()
+            );
+            final RenderSystem.AutoStorageIndexBuffer sequential =
+                RenderSystem.getSequentialBuffer(drawState.mode());
+            final GpuBuffer indexBuffer = sequential.getBuffer(drawState.indexCount());
+            final VertexFormat.IndexType indexType = sequential.type();
             final var target = RenderTargetState.drawTarget();
             final var dynamicTransforms = RenderSystem.getDynamicUniforms().writeTransform(
-                RenderSystem.getModelViewMatrixCopy()
+                RenderSystem.getModelViewMatrix(),
+                new Vector4f(1f, 1f, 1f, 1f),
+                new Vector3f(),
+                new Matrix4f()
             );
-            try (RenderPass pass = RenderSystem.getDevice().createCommandEncoder().createRenderPass(
+            try (RenderPass pass = device.createCommandEncoder().createRenderPass(
                 () -> "Conflux Map immediate " + pipeline.getLocation(),
                 target.getColorTextureView(),
-                Optional.empty(),
-                // 26.3 replaced RenderTarget.useDepth with hasDepth(); the pipeline must be
-                // compiled through the game's fallback cache before setPipeline accepts it,
-                // flattenSamplers became flattenUniforms, and bindTexture became setUniform.
-                target.hasDepth() ? target.getDepthTextureView() : null,
+                OptionalInt.empty(),
+                target.useDepthAttachment ? target.getDepthTextureView() : null,
                 OptionalDouble.empty()
             )) {
-                pass.setPipeline(RenderTargetState.compiled(pipeline));
+                pass.setPipeline(pipeline);
                 RenderSystem.bindDefaultUniforms(pass);
                 pass.setUniform("DynamicTransforms", dynamicTransforms);
-                pass.setVertexBuffer(0, info.vertexBuffer().slice());
+                pass.setVertexBuffer(0, vertexBuffer);
                 RenderTargetState.applyScissor(pass);
-                if (BindGroupLayout.flattenUniforms(pipeline.getBindGroupLayouts()).stream()
-                        .anyMatch(layout -> layout.name().equals("Sampler0"))
+                if (pipeline.getSamplers().contains("Sampler0")
                     && TextureBinds.boundTexture() != null
                     && TextureBinds.boundSampler() != null) {
-                    pass.setUniform("Sampler0", TextureBinds.boundTexture(), TextureBinds.boundSampler());
+                    pass.bindTexture("Sampler0", TextureBinds.boundTexture(), TextureBinds.boundSampler());
                 }
-                pass.setIndexBuffer(info.indexBuffer(), info.indexType());
-                pass.drawIndexed(info.indexCount(), 1, info.firstIndex(), info.baseVertex(), 0);
+                pass.setIndexBuffer(indexBuffer, indexType);
+                pass.drawIndexed(0, 0, drawState.indexCount(), 1);
+            } finally {
+                vertexBuffer.close();
             }
-        } finally {
-            IMMEDIATE.endFrame();
         }
-    }
-    
-    /** Releases the reusable immediate vertex buffers during client shutdown. */
-    public static void close() {
-        IMMEDIATE.close();
     }
 
     /**

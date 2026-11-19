@@ -14,11 +14,11 @@ import net.minecraft.world.level.block.Blocks;
 import net.minecraft.world.level.block.WebBlock;
 import net.minecraft.world.level.block.DoorBlock;
 import net.minecraft.world.level.block.LadderBlock;
-import net.minecraft.world.level.block.RedstoneWireBlock;
+import net.minecraft.world.level.block.RedStoneWireBlock;
 import net.minecraft.world.level.block.SnowLayerBlock;
 import net.minecraft.world.level.block.VineBlock;
 import net.minecraft.client.Minecraft;
-import net.minecraft.client.renderer.block.dispatch.BlockStateModel;
+import net.minecraft.client.render.model.BakedModel;
 import net.minecraft.client.resources.model.geometry.BakedQuad;
 import net.minecraft.client.renderer.block.dispatch.BlockStateModelPart;
 import net.minecraft.client.renderer.texture.MissingTextureAtlasSprite;
@@ -37,7 +37,7 @@ import net.minecraft.world.level.BlockGetter;
  * block-texture atlas (via each sprite's own un-stitched frame-0 source image) -
  * never from Minecraft's built-in map-item palette.
  *
- * <p>Main-thread only (touches {@link BlockStateModel}s); the returned colors are
+ * <p>Main-thread only (touches {@link BakedModel}s); the returned colors are
  * plain ints safe to hand to worker threads afterward.
  */
 public final class SpriteColorSampler {
@@ -192,11 +192,11 @@ public final class SpriteColorSampler {
 
     private SampledMaterial compute(final BlockState state, final BlockGetter world, final BlockPos pos) {
         final Block block = state.getBlock();
-        if (block instanceof RedstoneWireBlock) {
+        if (block instanceof RedStoneWireBlock) {
             // §2: baked in unconditionally via the power-level color function, no texture sampling at all.
-            final int level = state.getValue(RedstoneWireBlock.POWER);
+            final int level = state.getValue(RedStoneWireBlock.POWER);
             return new SampledMaterial(
-                0xFF000000 | (RedstoneWireBlock.getColorForPower(level) & 0xFFFFFF),
+                0xFF000000 | (RedStoneWireBlock.getColorForPower(level) & 0xFFFFFF),
                 MaterialDetailProfile.flat(),
                 state.toString().hashCode()
             );

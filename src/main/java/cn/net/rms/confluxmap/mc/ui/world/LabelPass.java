@@ -1,22 +1,15 @@
 package cn.net.rms.confluxmap.mc.ui.world;
 
+import cn.net.rms.confluxmap.mc.render.GuiShapes;
 import cn.net.rms.confluxmap.mc.render.WorldMatrices;
 
 import cn.net.rms.confluxmap.core.config.ConfluxConfig;
 import cn.net.rms.confluxmap.core.waypoint.WaypointRenderEntry;
 import cn.net.rms.confluxmap.core.waypoint.WaypointVerticalRelation;
 import com.mojang.blaze3d.systems.RenderSystem;
-import cn.net.rms.confluxmap.neoforge.compat.FabricOrderedSubmitNodeCollector;
-import cn.net.rms.confluxmap.neoforge.compat.SubmitRenderPhases;
-import com.mojang.blaze3d.vertex.VertexConsumer;
-import net.minecraft.client.renderer.feature.CustomFeatureRenderer;
-import net.minecraft.client.renderer.feature.TextFeatureRenderer;
-import net.minecraft.client.renderer.rendertype.RenderTypes;
-import net.minecraft.network.chat.Component;
-import org.joml.Matrix4f;
-import net.minecraft.client.gui.Font;
-import net.minecraft.client.renderer.OrderedSubmitNodeCollector;
 import net.minecraft.client.Minecraft;
+import net.minecraft.client.gui.Font;
+import net.minecraft.client.renderer.MultiBufferSource;
 import com.mojang.blaze3d.vertex.PoseStack;
 
 /**
@@ -37,8 +30,6 @@ final class LabelPass implements WaypointLabelPainter.Sink {
     private final WaypointLabelPainter labelPainter;
     /** The pass frame, valid between {@link #beginPass} and {@link #endPass}. */
     private OverlayFrame frame;
-    private OrderedSubmitNodeCollector plateSubmits;
-    private OrderedSubmitNodeCollector textSubmits;
 
     static LabelPass of(final Minecraft client, final ConfluxConfig config) {
         return new LabelPass(client, config);
@@ -51,13 +42,10 @@ final class LabelPass implements WaypointLabelPainter.Sink {
 
     void beginPass(final OverlayFrame frame) {
         this.frame = frame;
+        WorldMatrices.pushWorldHudModelView();
     }
 
     void beginLabels() {
-        // The collector records instead of drawing: plates go into order(0) and text into
-        // order(1) so both render this frame, matching the painter's layering.
-        plateSubmits = frame.labelSubmits.order(0);
-        textSubmits = frame.labelSubmits.order(1);
     }
 
     void drawLabel(
@@ -87,13 +75,13 @@ final class LabelPass implements WaypointLabelPainter.Sink {
      */
     @Override
     public void billboard(final PoseStack matrices, final float scale) {
-        matrices.mulPose(new org.joml.Matrix4f().rotation(frame.cameraRotation));
+        matrices.multiply(frame.camera.getRotation());
         matrices.scale(scale, -scale, scale);
     }
 
     @Override
     public void rect(final PoseStack matrices, final float x, final float y, final float width, final float height, final int color) {
-        submitRect(matrices, x, y, width, height, color);
+        GuiShapes.fillRect3D(matrices, x, y, width, height, color);
     }
 
     /**
@@ -110,71 +98,41 @@ final class LabelPass implements WaypointLabelPainter.Sink {
         final float x2, final float y2,
         final int color
     ) {
-        plateSubmits.submitCustomGeometry(
-            matrices, RenderTypes.debugQuads(),
-            (pose, vertices) -> emitWoundTriangle(pose, vertices, x0, y0, x1, y1, x2, y2, color)
-        );
+        GuiShapes.fillTriangle(matrices, x0, y0, x1, y1, x2, y2, color);
     }
 
     @Override
     public void text(final PoseStack matrices, final String text, final float x, final float y, final int color) {
-        submitText(matrices, text, x, y, color);
+        drawSeeThroughText(
+            client.font, text, x, y, color, matrices, frame.immediate,
+            WaypointLabelStyle.LABEL_LIGHT
+        );
     }
 
     void endLabels() {
+        frame.immediate.draw();
     }
 
     void endPass() {
+        WorldMatrices.popModelView();
         frame = null;
     }
 
-    /** One triangle as two degenerate quads with opposite winding (QUADS topology). */
-    private static void emitWoundTriangle(
-        final PoseStack.Pose pose,
-        final VertexConsumer vertices,
-        final float x0, final float y0,
-        final float x1, final float y1,
-        final float x2, final float y2,
-        final int color
-    ) {
-        vertices.addVertex(pose, x0, y0, 0f).setColor(color).setLight(WaypointLabelStyle.LABEL_LIGHT);
-        vertices.addVertex(pose, x1, y1, 0f).setColor(color).setLight(WaypointLabelStyle.LABEL_LIGHT);
-        vertices.addVertex(pose, x2, y2, 0f).setColor(color).setLight(WaypointLabelStyle.LABEL_LIGHT);
-        vertices.addVertex(pose, x2, y2, 0f).setColor(color).setLight(WaypointLabelStyle.LABEL_LIGHT);
-        vertices.addVertex(pose, x2, y2, 0f).setColor(color).setLight(WaypointLabelStyle.LABEL_LIGHT);
-        vertices.addVertex(pose, x1, y1, 0f).setColor(color).setLight(WaypointLabelStyle.LABEL_LIGHT);
-        vertices.addVertex(pose, x0, y0, 0f).setColor(color).setLight(WaypointLabelStyle.LABEL_LIGHT);
-        vertices.addVertex(pose, x0, y0, 0f).setColor(color).setLight(WaypointLabelStyle.LABEL_LIGHT);
-    }
-    
-    private void submitRect(
-        final PoseStack matrices,
-        final float x,
-        final float y,
-        final float width,
-        final float height,
-        final int color
-    ) {
-        // 26.3 removed RenderTypes.textBackgroundSeeThrough and rebuilt the text Submit
-        // records around Content objects; the collector's own background submit replaces
-        // the custom-geometry path entirely.
-        plateSubmits.submitTextBackground(
-            matrices, x, y, x + width, y + height, color,
-            Font.DisplayMode.SEE_THROUGH, WaypointLabelStyle.LABEL_LIGHT
-        );
-    }
-    
-    private void submitText(
-        final PoseStack matrices,
+
+    /** Draws fully-lit marker text through the versioned text-layer argument. */
+    private static void drawSeeThroughText(
+        final Font font,
         final String text,
         final float x,
         final float y,
-        final int color
+        final int color,
+        final PoseStack matrices,
+        final MultiBufferSource.Immediate immediate,
+        final int light
     ) {
-        textSubmits.submitText(
-            matrices, x, y, Component.literal(text).getVisualOrderText(),
-            false, Font.DisplayMode.SEE_THROUGH, WaypointLabelStyle.LABEL_LIGHT, color, 0, 0
+        font.draw(
+            text, x, y, color, false, matrices.last().pose(), immediate,
+            Font.TextLayerType.SEE_THROUGH, 0, light
         );
     }
-
 }

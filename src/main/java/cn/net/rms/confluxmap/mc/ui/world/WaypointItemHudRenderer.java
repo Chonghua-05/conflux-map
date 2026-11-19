@@ -2,15 +2,11 @@ package cn.net.rms.confluxmap.mc.ui.world;
 
 import cn.net.rms.confluxmap.core.config.ConfluxConfig;
 import cn.net.rms.confluxmap.core.waypoint.WaypointRenderEntry;
-import cn.net.rms.confluxmap.core.waypoint.WaypointVerticalRelation;
-import cn.net.rms.confluxmap.compat.MinecraftAccess;
-import cn.net.rms.confluxmap.mc.render.WaypointHudFrameMatrices;
 import cn.net.rms.confluxmap.mc.ui.GuiDraw;
 import cn.net.rms.confluxmap.mc.ui.WaypointMarkerRenderer;
 import cn.net.rms.confluxmap.mc.radar.EntityIconManager;
 import cn.net.rms.confluxmap.mc.radar.RadarMarkerRenderer;
 import java.util.List;
-import java.util.Optional;
 import java.util.UUID;
 import cn.net.rms.confluxmap.neoforge.compat.HudElementRegistry;
 import cn.net.rms.confluxmap.neoforge.compat.VanillaHudElements;
@@ -62,76 +58,47 @@ public final class WaypointItemHudRenderer {
     List<Label> snapshot() {
         return labels;
     }
-
     private void render(final GuiGraphicsExtractor context, final DeltaTracker tickCounter) {
         draw(GuiDraw.of(context), 0f);
     }
 
     private void draw(final GuiDraw draw, final float tickDelta) {
-        // On versions where this rides the crosshair render, vanilla's own hideGui guard keeps
-        // this from firing under F1; on the Fabric HUD-element paths (1.21.6+) it must check.
-        if (MinecraftAccess.isHudHidden(client)) {
-            return;
-        }
         final Camera camera = camera();
         final Vec3 cameraPos = cameraPosition(camera);
         final float cameraYaw = cameraYaw(camera);
         final float cameraPitch = cameraPitch(camera);
         final double verticalFov = verticalFov(camera, tickDelta);
-        final WaypointHudFrameMatrices.Snapshot frame = WaypointHudFrameMatrices.current();
         final int screenWidth = client.getWindow().getGuiScaledWidth();
         final int screenHeight = client.getWindow().getGuiScaledHeight();
 
-        // The label geometry below draws immediately, so buffered context fills (1.20-1.21.7)
-        // queued before this callback would otherwise paint over it.
-        if (!labels.isEmpty()) {
-            draw.flushGui();
-        }
         for (final Label label : labels) {
             final WaypointRenderEntry waypoint = label.waypoint();
             final double dx = waypoint.x() - cameraPos.x;
-            final double dy = waypoint.y() + WaypointLabelMetrics.LABEL_Y_OFFSET - cameraPos.y;
+            final double dy = waypoint.y() + WaypointWorldRenderer.LABEL_Y_OFFSET - cameraPos.y;
             final double dz = waypoint.z() - cameraPos.z;
             final double anchorDistance = Math.sqrt(dx * dx + dy * dy + dz * dz);
-            final double renderedDistance = WaypointLabelMetrics.projectedLabelDistance(
+            final double renderedDistance = WaypointWorldRenderer.projectedLabelDistance(
                 anchorDistance, label.projectionDistance()
             );
             final float easedProgress = WaypointHudMotion.smoothStep(label.animationProgress());
             final float iconSize = Mth.lerp(
                 easedProgress,
-                WaypointLabelStyle.LABEL_ICON_COLLAPSED_SIZE,
-                WaypointLabelStyle.LABEL_ICON_EXPANDED_SIZE
+                WaypointWorldRenderer.LABEL_ICON_COLLAPSED_SIZE,
+                WaypointWorldRenderer.LABEL_ICON_EXPANDED_SIZE
             );
-            // Prefer the world pass's captured matrices - they carry the nausea sway exactly
-            // like the 3D labels; without a capture this frame, fall back to the camera basis.
-            final Optional<WaypointHudItemProjection.Placement> placement = frame != null
-                ? WaypointHudItemProjection.project(
-                    frame,
-                    dx,
-                    dy,
-                    dz,
-                    screenWidth,
-                    screenHeight,
-                    renderedDistance,
-                    easedProgress,
-                    iconSize,
-                    config.waypointLabelScalePercent
-                )
-                : WaypointHudItemProjection.project(
-                    cameraYaw,
-                    cameraPitch,
-                    dx,
-                    dy,
-                    dz,
-                    screenWidth,
-                    screenHeight,
-                    verticalFov,
-                    renderedDistance,
-                    easedProgress,
-                    iconSize,
-                    config.waypointLabelScalePercent
-                );
-            placement.ifPresent(value -> drawLabel(draw, label, value, easedProgress));
+            WaypointHudItemProjection.project(
+                cameraYaw,
+                cameraPitch,
+                dx,
+                dy,
+                dz,
+                screenWidth,
+                screenHeight,
+                verticalFov,
+                renderedDistance,
+                iconSize,
+                config.waypointLabelScalePercent
+            ).ifPresent(placement -> drawLabel(draw, label, placement, easedProgress));
         }
     }
 
@@ -143,7 +110,7 @@ public final class WaypointItemHudRenderer {
     ) {
         final WaypointRenderEntry waypoint = label.waypoint();
         final float nearFade = (float) Mth.clamp(
-            label.distance3d() / WaypointLabelStyle.LABEL_NEAR_FADE_BLOCKS,
+            label.distance3d() / WaypointWorldRenderer.LABEL_NEAR_FADE_BLOCKS,
             0.0,
             1.0
         );
@@ -152,171 +119,133 @@ public final class WaypointItemHudRenderer {
         }
         final float unitScale = placement.unitScale();
         final float iconSize = placement.size();
+        final float iconHalfSize = iconSize / 2f;
         final float centerX = placement.centerX();
         final float centerY = placement.centerY();
-        final Font font = font();
-        final WaypointLabelStyle.Panel panel = WaypointLabelStyle.Panel.of(
-            font, waypoint, label.distance3d(), easedProgress
+        final String name = waypoint.name();
+        final String distanceText = Math.round(label.distance3d()) + " m";
+        final Font textRenderer = textRenderer();
+        final int nameWidth = textRenderer.width(name);
+        final int distanceWidth = textRenderer.width(distanceText);
+        final float panelFullWidth = Math.max(nameWidth, distanceWidth)
+            + WaypointWorldRenderer.LABEL_PANEL_PADDING * 2f;
+        final float panelReveal = Mth.clamp(
+            easedProgress / WaypointWorldRenderer.LABEL_TEXT_REVEAL_START, 0f, 1f
         );
-        // Everything below is label-local (origin at the icon center, GUI units), so plate,
-        // icon, portrait and text all ride one float transform instead of stepping whole GUI
-        // pixels.
-        final float panelWidth = panel.width();
-        final float innerHalf = iconSize / (2f * unitScale);
-        final float gap = WaypointLabelStyle.LABEL_PANEL_GAP;
+        final float panelWidth = panelFullWidth * panelReveal * unitScale;
+        final float panelX = centerX + iconHalfSize
+            + WaypointWorldRenderer.LABEL_PANEL_GAP * unitScale;
         final float visibilityAlpha = nearFade * label.visibilityAlpha();
-        final float labelOpacity = WaypointLabelStyle.labelOpacityFactor(config);
-        final float plateAlpha = visibilityAlpha * labelOpacity;
-
-        draw.pushTransform();
-        try {
-            draw.translate(centerX, centerY);
-            draw.scale(unitScale, unitScale);
-            if (panelWidth * unitScale > 0.5f) {
-                draw.fillRect(
-                    innerHalf + gap,
-                    -WaypointLabelStyle.LABEL_PANEL_HEIGHT / 2f,
-                    innerHalf + gap + panelWidth,
-                    WaypointLabelStyle.LABEL_PANEL_HEIGHT / 2f,
-                    WaypointLabelStyle.withAlpha(
-                        WaypointLabelStyle.LABEL_BACKGROUND_COLOR, visibilityAlpha * labelOpacity
-                    )
-                );
-            }
-
-            final PlateFrame plate = plateFrame(innerHalf, unitScale);
-            final int ringColor = WaypointLabelStyle.withAlpha(
-                label.selected() ? 0xFFFFE066 : WaypointLabelStyle.outlineColor(waypoint),
-                plateAlpha
+        if (panelWidth > 0.5f) {
+            fill(
+                draw,
+                panelX,
+                centerY - WaypointWorldRenderer.LABEL_PANEL_HEIGHT * unitScale / 2f,
+                panelX + panelWidth,
+                centerY + WaypointWorldRenderer.LABEL_PANEL_HEIGHT * unitScale / 2f,
+                WaypointWorldRenderer.withAlpha(
+                    WaypointWorldRenderer.LABEL_BACKGROUND_COLOR, visibilityAlpha
+                )
             );
-            for (final Quad quad : ringQuads(plate)) {
-                draw.fillRect(quad.x0(), quad.y0(), quad.x1(), quad.y1(), ringColor);
-            }
-            draw.fillRect(
-                plate.left(),
-                plate.top(),
-                plate.right(),
-                plate.bottom(),
-                WaypointLabelStyle.withAlpha(waypoint.colorArgb() | 0xFF000000, plateAlpha)
-            );
-            final float iconLocalSize = iconSize / unitScale;
-            if (label.playerId() != null) {
-                RadarMarkerRenderer.drawPlayerPortrait(
-                    draw,
-                    client,
-                    iconManager,
-                    label.playerId(),
-                    0f,
-                    0f,
-                    iconLocalSize,
-                    plateAlpha,
-                    label.selected()
-                );
-            } else {
-                final ItemStack stack = WaypointMarkerRenderer.itemIcon(waypoint.iconItemId());
-                if (!stack.isEmpty()) {
-                    draw.drawItemIcon(client, stack, 0f, 0f, iconLocalSize);
-                }
-            }
-            WaypointMarkerRenderer.drawHeightBadge(
-                draw.matrices(), label.verticalRelation(), 0f, 0f, iconLocalSize / 2f, plateAlpha
-            );
-            WaypointMarkerRenderer.drawTemporaryBadge(draw, font, waypoint, 0f, 0f, innerHalf, plateAlpha);
-
-            if (panel.textReveal() > 0.01f) {
-                final float textX = panel.textX(innerHalf + gap);
-                final float textAlpha = panel.textAlpha(plateAlpha);
-                draw.drawTextWithShadow(
-                    font,
-                    panel.name(),
-                    textX,
-                    WaypointLabelStyle.LABEL_NAME_TEXT_Y,
-                    WaypointLabelStyle.withAlpha(WaypointLabelStyle.LABEL_NAME_COLOR, textAlpha)
-                );
-                if (!panel.nameSuffix().isEmpty()) {
-                    // Plain locals: the mapping engine misses chained accessor args (see WaypointListScreen).
-                    final String panelName = panel.name();
-                    final int panelNameWidth = font.width(panelName);
-                    draw.pushTransform();
-                    draw.translate(
-                        textX + panelNameWidth + 1f,
-                        WaypointLabelStyle.LABEL_NAME_TEXT_Y
-                    );
-                    draw.scale(0.5f, 0.5f);
-                    draw.drawTextWithShadow(
-                        font,
-                        panel.nameSuffix(),
-                        0f,
-                        0f,
-                        WaypointLabelStyle.withAlpha(WaypointLabelStyle.LABEL_DISTANCE_COLOR, textAlpha)
-                    );
-                    draw.popTransform();
-                }
-                draw.drawTextWithShadow(
-                    font,
-                    panel.distanceText(),
-                    textX,
-                    WaypointLabelStyle.LABEL_DISTANCE_TEXT_Y,
-                    WaypointLabelStyle.withAlpha(WaypointLabelStyle.LABEL_DISTANCE_COLOR, textAlpha)
-                );
-            }
-        } finally {
-            draw.popTransform();
         }
-    }
 
-    /**
-     * Plate geometry in label-local units: the inner square plus a ring emitted as four edge
-     * quads extending outward from that square by {@code border}. Every edge derives from the
-     * same floats, so the band around the square survives any sub-pixel label position - the
-     * previous version rounded two overlapping rects independently, which let the under-one-pixel
-     * ring collapse onto the square and flicker while the label moved.
-     */
-    record PlateFrame(float left, float top, float right, float bottom, float border) {
-    }
-
-    static PlateFrame plateFrame(final float halfSize, final float unitScale) {
-        return new PlateFrame(
-            -halfSize,
-            -halfSize,
-            halfSize,
-            halfSize,
-            Math.max(1f, unitScale) / unitScale
+        final float plateAlpha = visibilityAlpha * config.waypointIconOpacity
+            / (float) ConfluxConfig.MAX_WAYPOINT_ICON_OPACITY;
+        fill(
+            draw,
+            centerX - iconHalfSize - unitScale,
+            centerY - iconHalfSize - unitScale,
+            centerX + iconHalfSize + unitScale,
+            centerY + iconHalfSize + unitScale,
+            WaypointWorldRenderer.withAlpha(
+                label.selected() ? 0xFFFFE066 : WaypointWorldRenderer.outlineColor(waypoint),
+                plateAlpha
+            )
         );
+        fill(
+            draw,
+            centerX - iconHalfSize,
+            centerY - iconHalfSize,
+            centerX + iconHalfSize,
+            centerY + iconHalfSize,
+            WaypointWorldRenderer.withAlpha(waypoint.colorArgb() | 0xFF000000, plateAlpha)
+        );
+        if (label.playerId() != null) {
+            RadarMarkerRenderer.drawPlayerPortrait(
+                draw,
+                client,
+                iconManager,
+                label.playerId(),
+                centerX,
+                centerY,
+                iconSize,
+                plateAlpha,
+                label.selected()
+            );
+        } else {
+            final ItemStack stack = WaypointMarkerRenderer.itemIcon(waypoint.iconItemId());
+            if (!stack.isEmpty()) {
+                draw.drawItemIcon(client, stack, centerX, centerY, iconSize);
+            }
+        }
+
+        final float textReveal = Mth.clamp(
+            (easedProgress - WaypointWorldRenderer.LABEL_TEXT_REVEAL_START)
+                / (1f - WaypointWorldRenderer.LABEL_TEXT_REVEAL_START),
+            0f,
+            1f
+        );
+        if (textReveal <= 0.01f) {
+            return;
+        }
+        final float textX = iconSize / (2f * unitScale)
+            + WaypointWorldRenderer.LABEL_PANEL_GAP
+            + WaypointWorldRenderer.LABEL_PANEL_PADDING
+            + (1f - textReveal) * 4f;
+        final float textAlpha = visibilityAlpha * textReveal;
+        draw.pushTransform();
+        draw.translate(centerX, centerY);
+        draw.scale(unitScale, unitScale);
+        draw.drawTextWithShadow(
+            textRenderer,
+            name,
+            textX,
+            -9f,
+            WaypointWorldRenderer.withAlpha(WaypointWorldRenderer.LABEL_NAME_COLOR, textAlpha)
+        );
+        draw.drawTextWithShadow(
+            textRenderer,
+            distanceText,
+            textX,
+            1f,
+            WaypointWorldRenderer.withAlpha(WaypointWorldRenderer.LABEL_DISTANCE_COLOR, textAlpha)
+        );
+        draw.popTransform();
     }
 
-    /** One axis-aligned ring-quad fill in label-local units. */
-    record Quad(float x0, float y0, float x1, float y1) {
-    }
-
-    static Quad[] ringQuads(final PlateFrame plate) {
-        final float border = plate.border();
-        return new Quad[] {
-            new Quad(
-                plate.left() - border, plate.top() - border,
-                plate.right() + border, plate.top()
-            ),
-            new Quad(
-                plate.left() - border, plate.bottom(),
-                plate.right() + border, plate.bottom() + border
-            ),
-            new Quad(
-                plate.left() - border, plate.top(),
-                plate.left(), plate.bottom()
-            ),
-            new Quad(
-                plate.right(), plate.top(),
-                plate.right() + border, plate.bottom()
-            ),
-        };
-    }
-
-    private Font font() {
+    private Font textRenderer() {
         return client.font;
     }
 
+    private static void fill(
+        final GuiDraw draw,
+        final float x1,
+        final float y1,
+        final float x2,
+        final float y2,
+        final int color
+    ) {
+        draw.fill(
+            Mth.floor(x1),
+            Mth.floor(y1),
+            Mth.ceil(x2),
+            Mth.ceil(y2),
+            color
+        );
+    }
+
     private Camera camera() {
-        return client.gameRenderer.mainCamera();
+        return client.gameRenderer.getMainCamera();
     }
 
     private static Vec3 cameraPosition(final Camera camera) {
@@ -342,8 +271,7 @@ public final class WaypointItemHudRenderer {
         float animationProgress,
         float visibilityAlpha,
         boolean selected,
-        UUID playerId,
-        WaypointVerticalRelation verticalRelation
+        UUID playerId
     ) {
         public Label(
             final WaypointRenderEntry waypoint,
@@ -355,24 +283,7 @@ public final class WaypointItemHudRenderer {
         ) {
             this(
                 waypoint, distance3d, projectionDistance,
-                animationProgress, visibilityAlpha, selected, null,
-                WaypointVerticalRelation.NONE
-            );
-        }
-
-        public Label(
-            final WaypointRenderEntry waypoint,
-            final double distance3d,
-            final double projectionDistance,
-            final float animationProgress,
-            final float visibilityAlpha,
-            final boolean selected,
-            final UUID playerId
-        ) {
-            this(
-                waypoint, distance3d, projectionDistance,
-                animationProgress, visibilityAlpha, selected, playerId,
-                WaypointVerticalRelation.NONE
+                animationProgress, visibilityAlpha, selected, null
             );
         }
     }

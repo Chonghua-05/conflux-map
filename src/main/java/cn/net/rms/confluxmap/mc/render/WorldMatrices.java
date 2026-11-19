@@ -11,6 +11,10 @@ import com.mojang.blaze3d.vertex.PoseStack;
  * shader packs, and the HUD-scope ModelView bracket for the in-pass phases.
  */
 public final class WorldMatrices {
+    // Private copy: the live matrix RenderSystem.getModelViewMatrix() returns is a stack
+    // slot the next frame's world pass mutates in place, so the snapshot must not alias it.
+    private static final org.joml.Matrix4f worldViewMatrix = new org.joml.Matrix4f();
+    private static boolean worldViewCaptured;
 
     // HUD item-label frame staging: the projection arrives where vanilla installs it (the
     // LAST context before 1.21.9, the GameRenderer renderWorld/renderLevel capture on later
@@ -35,7 +39,7 @@ public final class WorldMatrices {
      * that runs after the projection is installed and before the HUD phase of the same frame.
      */
     public static void captureHudView() {
-        writeRowMajor(RenderSystem.getModelViewMatrixCopy(), hudViewFrame);
+        writeRowMajor(RenderSystem.getModelViewMatrix(), hudViewFrame);
         if (hudProjectionCaptured) {
             WaypointHudFrameMatrices.update(hudProjectionFrame, hudViewFrame);
         }
@@ -69,9 +73,43 @@ public final class WorldMatrices {
         out[15] = matrix.m33();
     }
 
+    /**
+     * Captures the world pass's global ModelView: vanilla installs the view matrix (camera
+     * rotation, plus view bobbing/hurt tilt) on the global stack at the start of world
+     * rendering and pops it again right before the render method returns - which is exactly
+     * where {@code WorldRenderEvents.END} fires. A read-only listener (still inside the world
+     * pass) calls this so the post-pass draws can reinstall the exact matrix.
+     */
+    public static void snapshotWorldViewModelView() {
+        worldViewMatrix.set(RenderSystem.getModelViewMatrix());
+        worldViewCaptured = true;
+    }
+
+    /**
+     * Installs the view matrix captured by {@link #snapshotWorldViewModelView()} as the global
+     * ModelView. Level-anchored waypoint geometry drawn at {@code WorldRenderEvents.END}
+     * transforms through it, so without this the view rotation is missing and the geometry
+     * lands in the wrong place on screen. Falls back to identity before the first capture.
+     * Pairs with {@link #popModelView()}.
+     */
+    public static void pushWorldViewSnapshot() {
+        RenderSystem.getModelViewStack().pushMatrix().identity();
+        if (worldViewCaptured) {
+            RenderSystem.getModelViewStack().mul(worldViewMatrix);
+        }
+    }
 
 
 
+    /**
+     * Saves the global ModelView around the in-pass label phase so the billboard keeps
+     * the world view rotation vanilla installed. The pre-1.21.9 lines never reach this:
+     * their END pass reinstalls the captured view through {@link #pushWorldViewSnapshot()}
+     * instead. Pairs with {@link #popModelView()}.
+     */
+    public static void pushWorldHudModelView() {
+        RenderSystem.getModelViewStack().pushMatrix();
+    }
 
     /** Restores the global model-view saved by the matching pushPose bracket (view snapshot or HUD scope). */
     public static void popModelView() {

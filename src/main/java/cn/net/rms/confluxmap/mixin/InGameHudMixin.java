@@ -15,7 +15,7 @@ import cn.net.rms.confluxmap.mc.ui.hud.ScoreboardHudBounds;
 import cn.net.rms.confluxmap.mc.ui.screen.FullscreenMapScreen;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.gui.GuiGraphicsExtractor;
-import net.minecraft.client.gui.Hud;
+import net.minecraft.client.gui.Gui;
 import net.minecraft.world.scores.Objective;
 import org.spongepowered.asm.mixin.Mixin;
 import org.spongepowered.asm.mixin.Unique;
@@ -32,7 +32,7 @@ import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
  * directly, so a mod that rescales the sidebar (TweakerMore's scoreboard scale, for example) is
  * measured at its rendered size instead of vanilla's.
  */
-@Mixin(Hud.class)
+@Mixin(Gui.class)
 public abstract class InGameHudMixin {
     @Unique
     private boolean confluxmap$scoreboardTransformed;

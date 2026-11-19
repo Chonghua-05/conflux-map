@@ -15,7 +15,9 @@ import cn.net.rms.confluxmap.mc.ui.screen.FullscreenMapScreen;
 import com.llamalad7.mixinextras.injector.wrapmethod.WrapMethod;
 import com.llamalad7.mixinextras.injector.wrapoperation.Operation;
 import net.minecraft.client.Minecraft;
-import net.minecraft.client.gui.Hud;
+import net.minecraft.client.gui.Gui;
+import net.minecraft.client.gui.GuiGraphicsExtractor;
+import net.minecraft.client.DeltaTracker;
 import net.minecraft.client.gui.GuiGraphicsExtractor;
 import net.minecraft.client.DeltaTracker;
 import net.minecraft.world.effect.MobEffectInstance;
@@ -23,7 +25,7 @@ import org.spongepowered.asm.mixin.Mixin;
 import org.spongepowered.asm.mixin.Unique;
 
 /** Moves vanilla status-effect icons while leaving the configured minimap position untouched. */
-@Mixin(Hud.class)
+@Mixin(Gui.class)
 public abstract class StatusEffectHudMixin {
     /** Per-frame while effects show; the first fault disables the shift for the session. */
     @Unique

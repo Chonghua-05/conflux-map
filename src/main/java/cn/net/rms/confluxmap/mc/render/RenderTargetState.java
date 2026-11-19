@@ -1,8 +1,8 @@
 package cn.net.rms.confluxmap.mc.render;
 
 import com.mojang.blaze3d.systems.RenderSystem;
-import com.mojang.renderpearl.api.pipeline.RenderPipeline;
-import com.mojang.renderpearl.api.commands.RenderPass;
+import com.mojang.blaze3d.pipeline.RenderPipeline;
+import com.mojang.blaze3d.systems.RenderPass;
 import com.mojang.blaze3d.pipeline.RenderTarget;
 import net.minecraft.client.gui.navigation.ScreenRectangle;
 import net.minecraft.client.renderer.state.gui.GuiRenderState;
@@ -36,9 +36,7 @@ public final class RenderTargetState {
     }
 
     static RenderTarget drawTarget() {
-        return drawTarget == null
-            ? Minecraft.getInstance().gameRenderer.mainRenderTarget()
-            : drawTarget;
+        return drawTarget == null ? Minecraft.getInstance().getFramebuffer() : drawTarget;
     }
     
     static void setDrawTarget(final RenderTarget target) {
@@ -70,13 +68,6 @@ public final class RenderTargetState {
             : null;
     }
 
-    /**
-     * 26.3 pipelines must be compiled before a render pass accepts them; the game's
-     * fallback cache owns the live compiler and is refreshed on every shader reload.
-     */
-    static com.mojang.renderpearl.api.pipeline.CompiledRenderPipeline compiled(final RenderPipeline pipeline) {
-        return RenderSystem.getCompiledPipeline(pipeline);
-    }
 
     /**
      * Enables the GL scissor test for a rectangle given in GUI (scaled) coordinates,

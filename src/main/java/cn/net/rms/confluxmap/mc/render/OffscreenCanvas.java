@@ -7,13 +7,11 @@ import net.minecraft.client.Minecraft;
 import com.mojang.blaze3d.pipeline.RenderTarget;
 import com.mojang.blaze3d.pipeline.TextureTarget;
 import com.mojang.blaze3d.platform.Window;
-import com.mojang.blaze3d.resource.GraphicsResourceAllocator;
-import net.minecraft.client.renderer.LevelTargetBundle;
-import net.minecraft.client.renderer.PostChain;
+import net.minecraft.client.gl.PostEffectProcessor;
+import net.minecraft.client.render.DefaultFramebufferSet;
+import net.minecraft.client.util.memory.ObjectAllocator;
 
 import com.mojang.blaze3d.ProjectionType;
-import com.mojang.renderpearl.api.GpuFormat;
-import org.joml.Vector4f;
 import net.minecraft.client.renderer.ProjectionMatrixBuffer;
 import org.joml.Matrix4f;
 
@@ -59,10 +57,7 @@ public final class OffscreenCanvas {
             || framebuffer.height != heightPx;
         if (created) {
             close();
-            // 26.3 RenderTargets describe both attachments as formats; null depth means none.
-            framebuffer = new TextureTarget(
-                "Conflux Map canvas", widthPx, heightPx, GpuFormat.RGBA8_UNORM, null
-            );
+            framebuffer = new TextureTarget("Conflux Map canvas", widthPx, heightPx, false);
             this.widthPx = widthPx;
             this.heightPx = heightPx;
         }
@@ -71,7 +66,7 @@ public final class OffscreenCanvas {
         }
         if (created || clear) {
             RenderSystem.getDevice().createCommandEncoder().clearColorTexture(
-                framebuffer.getColorTexture(), new Vector4f(0f, 0f, 0f, 0f)
+                framebuffer.getColorTexture(), 0
             );
         }
         RenderTargetState.setDrawTarget(framebuffer);
@@ -131,10 +126,10 @@ public final class OffscreenCanvas {
         TextureBinds.bindTexture(
             framebuffer.getColorTextureView(),
             RenderSystem.getSamplerCache().getSampler(
-                com.mojang.renderpearl.api.textures.AddressMode.CLAMP_TO_EDGE,
-                com.mojang.renderpearl.api.textures.AddressMode.CLAMP_TO_EDGE,
-                com.mojang.renderpearl.api.textures.FilterMode.LINEAR,
-                com.mojang.renderpearl.api.textures.FilterMode.LINEAR,
+                com.mojang.blaze3d.textures.AddressMode.CLAMP_TO_EDGE,
+                com.mojang.blaze3d.textures.AddressMode.CLAMP_TO_EDGE,
+                com.mojang.blaze3d.textures.FilterMode.LINEAR,
+                com.mojang.blaze3d.textures.FilterMode.LINEAR,
                 false
             )
         );
@@ -142,13 +137,14 @@ public final class OffscreenCanvas {
 
     /** Applies Minecraft's menu-style separable box blur to this canvas in place. */
     public boolean applyMenuBlur(final Minecraft client) throws IOException {
-        final PostChain blur = client.getShaderManager().getPostChain(
-            Ids.of("minecraft", "blur"), LevelTargetBundle.MAIN_TARGETS
+        final PostEffectProcessor blur = client.getShaderLoader().loadPostEffect(
+            Ids.of("minecraft", "blur"), DefaultFramebufferSet.MAIN_ONLY
         );
         if (blur == null) {
             return false;
         }
-        blur.process(framebuffer, GraphicsResourceAllocator.UNPOOLED);
+        final float radius = client.options.getMenuBackgroundBlurrinessValue();
+        blur.render(framebuffer, ObjectAllocator.TRIVIAL);
         return true;
     }
 
