@@ -155,12 +155,27 @@ final class LabelPass implements WaypointLabelPainter.Sink {
         final float height,
         final int color
     ) {
-        // 26.3 removed RenderTypes.textBackgroundSeeThrough and rebuilt the text Submit
-        // records around Content objects; the collector's own background submit replaces
-        // the custom-geometry path entirely.
-        plateSubmits.submitTextBackground(
-            matrices, x, y, x + width, y + height, color,
-            Font.DisplayMode.SEE_THROUGH, WaypointLabelStyle.LABEL_LIGHT
+        // 26.2 has no background submit yet: the plate rides the vanilla text-background
+        // render type through the custom-geometry path 26.3 replaced.
+        plateSubmits.submitCustomGeometry(
+            matrices,
+            net.minecraft.client.renderer.rendertype.RenderTypes.textBackgroundSeeThrough(),
+            (pose, buffer) -> {
+                final float x1 = x + width;
+                final float y1 = y + height;
+                buffer.addVertex(pose, x, y, 0f).setColor(color)
+                    .setLight(WaypointLabelStyle.LABEL_LIGHT);
+                buffer.addVertex(pose, x, y1, 0f).setColor(color)
+                    .setLight(WaypointLabelStyle.LABEL_LIGHT);
+                buffer.addVertex(pose, x1, y1, 0f).setColor(color)
+                    .setLight(WaypointLabelStyle.LABEL_LIGHT);
+                buffer.addVertex(pose, x1, y1, 0f).setColor(color)
+                    .setLight(WaypointLabelStyle.LABEL_LIGHT);
+                buffer.addVertex(pose, x1, y, 0f).setColor(color)
+                    .setLight(WaypointLabelStyle.LABEL_LIGHT);
+                buffer.addVertex(pose, x, y, 0f).setColor(color)
+                    .setLight(WaypointLabelStyle.LABEL_LIGHT);
+            }
         );
     }
     

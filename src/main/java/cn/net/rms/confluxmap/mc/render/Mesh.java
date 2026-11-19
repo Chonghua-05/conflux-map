@@ -1,11 +1,11 @@
 package cn.net.rms.confluxmap.mc.render;
 
-import com.mojang.renderpearl.api.pipeline.PrimitiveTopology;
-import com.mojang.renderpearl.api.pipeline.BindGroupLayout;
-import com.mojang.renderpearl.api.pipeline.RenderPipeline;
-import com.mojang.renderpearl.api.commands.RenderPass;
+import com.mojang.blaze3d.PrimitiveTopology;
+import com.mojang.blaze3d.pipeline.BindGroupLayout;
+import com.mojang.blaze3d.pipeline.RenderPipeline;
+import com.mojang.blaze3d.systems.RenderPass;
 import com.mojang.blaze3d.systems.RenderSystem;
-import com.mojang.renderpearl.api.vertex.VertexFormat;
+import com.mojang.blaze3d.vertex.VertexFormat;
 import java.util.Optional;
 import java.util.OptionalDouble;
 import net.minecraft.client.renderer.StagedVertexBuffer;
@@ -217,10 +217,10 @@ public final class Mesh {
                 // 26.3 replaced RenderTarget.useDepth with hasDepth(); the pipeline must be
                 // compiled through the game's fallback cache before setPipeline accepts it,
                 // flattenSamplers became flattenUniforms, and bindTexture became setUniform.
-                target.hasDepth() ? target.getDepthTextureView() : null,
+                target.useDepth ? target.getDepthTextureView() : null,
                 OptionalDouble.empty()
             )) {
-                pass.setPipeline(RenderTargetState.compiled(pipeline));
+                pass.setPipeline(pipeline);
                 RenderSystem.bindDefaultUniforms(pass);
                 pass.setUniform("DynamicTransforms", dynamicTransforms);
                 pass.setVertexBuffer(0, info.vertexBuffer().slice());
@@ -229,7 +229,7 @@ public final class Mesh {
                         .anyMatch(layout -> layout.name().equals("Sampler0"))
                     && TextureBinds.boundTexture() != null
                     && TextureBinds.boundSampler() != null) {
-                    pass.setUniform("Sampler0", TextureBinds.boundTexture(), TextureBinds.boundSampler());
+                    pass.bindTexture("Sampler0", TextureBinds.boundTexture(), TextureBinds.boundSampler());
                 }
                 pass.setIndexBuffer(info.indexBuffer(), info.indexType());
                 pass.drawIndexed(info.indexCount(), 1, info.firstIndex(), info.baseVertex(), 0);

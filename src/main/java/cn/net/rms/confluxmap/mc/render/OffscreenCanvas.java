@@ -12,7 +12,7 @@ import net.minecraft.client.renderer.LevelTargetBundle;
 import net.minecraft.client.renderer.PostChain;
 
 import com.mojang.blaze3d.ProjectionType;
-import com.mojang.renderpearl.api.GpuFormat;
+import com.mojang.blaze3d.GpuFormat;
 import org.joml.Vector4f;
 import net.minecraft.client.renderer.ProjectionMatrixBuffer;
 import org.joml.Matrix4f;
@@ -61,7 +61,7 @@ public final class OffscreenCanvas {
             close();
             // 26.3 RenderTargets describe both attachments as formats; null depth means none.
             framebuffer = new TextureTarget(
-                "Conflux Map canvas", widthPx, heightPx, GpuFormat.RGBA8_UNORM, null
+                "Conflux Map canvas", widthPx, heightPx, false, GpuFormat.RGBA8_UNORM
             );
             this.widthPx = widthPx;
             this.heightPx = heightPx;
@@ -131,10 +131,10 @@ public final class OffscreenCanvas {
         TextureBinds.bindTexture(
             framebuffer.getColorTextureView(),
             RenderSystem.getSamplerCache().getSampler(
-                com.mojang.renderpearl.api.textures.AddressMode.CLAMP_TO_EDGE,
-                com.mojang.renderpearl.api.textures.AddressMode.CLAMP_TO_EDGE,
-                com.mojang.renderpearl.api.textures.FilterMode.LINEAR,
-                com.mojang.renderpearl.api.textures.FilterMode.LINEAR,
+                com.mojang.blaze3d.textures.AddressMode.CLAMP_TO_EDGE,
+                com.mojang.blaze3d.textures.AddressMode.CLAMP_TO_EDGE,
+                com.mojang.blaze3d.textures.FilterMode.LINEAR,
+                com.mojang.blaze3d.textures.FilterMode.LINEAR,
                 false
             )
         );

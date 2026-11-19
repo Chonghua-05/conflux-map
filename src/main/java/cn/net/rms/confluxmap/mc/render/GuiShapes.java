@@ -4,8 +4,8 @@ import cn.net.rms.confluxmap.core.util.Argb;
 import com.mojang.blaze3d.systems.RenderSystem;
 import java.util.List;
 import java.util.Optional;
-import com.mojang.renderpearl.api.pipeline.ColorTargetState;
-import com.mojang.renderpearl.api.pipeline.RenderPipeline;
+import com.mojang.blaze3d.pipeline.ColorTargetState;
+import com.mojang.blaze3d.pipeline.RenderPipeline;
 import net.minecraft.client.renderer.RenderPipelines;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.renderer.GameRenderer;
@@ -577,13 +577,13 @@ public final class GuiShapes {
         final RenderPipeline gui = RenderPipelines.GUI;
         final RenderPipeline.Builder builder = RenderPipeline.builder()
             .withLocation("pipeline/confluxmap_gui_preserve_destination_alpha")
-            .withVertexShader(gui.getShaders().get(com.mojang.renderpearl.api.pipeline.ShaderType.VERTEX))
-            .withFragmentShader(gui.getShaders().get(com.mojang.renderpearl.api.pipeline.ShaderType.FRAGMENT))
+            .withVertexShader(gui.getVertexShader())
+            .withFragmentShader(gui.getFragmentShader())
             .withCull(gui.isCull())
             .withColorTargetState(new ColorTargetState(
                 // 26.3 dropped the singular accessor; the list holds one entry for GUI.
-                gui.getColorTargetStates().get(0).blendFunction(),
-                gui.getColorTargetStates().get(0).format(),
+                gui.getColorTargetStates()[0].blendFunction(),
+                gui.getColorTargetStates()[0].format(),
                 ColorTargetState.WRITE_COLOR
             ))
             .withVertexBinding(0, gui.getVertexFormatBinding(0))
@@ -598,11 +598,11 @@ public final class GuiShapes {
         final RenderPipeline gui = RenderPipelines.GUI;
         final RenderPipeline.Builder builder = RenderPipeline.builder()
             .withLocation("pipeline/confluxmap_gui_replace")
-            .withVertexShader(gui.getShaders().get(com.mojang.renderpearl.api.pipeline.ShaderType.VERTEX))
-            .withFragmentShader(gui.getShaders().get(com.mojang.renderpearl.api.pipeline.ShaderType.FRAGMENT))
+            .withVertexShader(gui.getVertexShader())
+            .withFragmentShader(gui.getFragmentShader())
             .withCull(gui.isCull())
             .withColorTargetState(new ColorTargetState(
-                Optional.empty(), gui.getColorTargetStates().get(0).format(), ColorTargetState.WRITE_ALL
+                Optional.empty(), gui.getColorTargetStates()[0].format(), ColorTargetState.WRITE_ALL
             ))
             .withVertexBinding(0, gui.getVertexFormatBinding(0))
             .withPrimitiveTopology(gui.getPrimitiveTopology());

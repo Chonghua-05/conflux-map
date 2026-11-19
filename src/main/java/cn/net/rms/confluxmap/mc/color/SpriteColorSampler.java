@@ -14,7 +14,7 @@ import net.minecraft.world.level.block.Blocks;
 import net.minecraft.world.level.block.WebBlock;
 import net.minecraft.world.level.block.DoorBlock;
 import net.minecraft.world.level.block.LadderBlock;
-import net.minecraft.world.level.block.RedstoneWireBlock;
+import net.minecraft.world.level.block.RedStoneWireBlock;
 import net.minecraft.world.level.block.SnowLayerBlock;
 import net.minecraft.world.level.block.VineBlock;
 import net.minecraft.client.Minecraft;
@@ -192,11 +192,11 @@ public final class SpriteColorSampler {
 
     private SampledMaterial compute(final BlockState state, final BlockGetter world, final BlockPos pos) {
         final Block block = state.getBlock();
-        if (block instanceof RedstoneWireBlock) {
+        if (block instanceof RedStoneWireBlock) {
             // §2: baked in unconditionally via the power-level color function, no texture sampling at all.
-            final int level = state.getValue(RedstoneWireBlock.POWER);
+            final int level = state.getValue(RedStoneWireBlock.POWER);
             return new SampledMaterial(
-                0xFF000000 | (RedstoneWireBlock.getColorForPower(level) & 0xFFFFFF),
+                0xFF000000 | (RedStoneWireBlock.getColorForPower(level) & 0xFFFFFF),
                 MaterialDetailProfile.flat(),
                 state.toString().hashCode()
             );

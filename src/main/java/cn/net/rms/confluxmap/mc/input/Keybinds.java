@@ -23,7 +23,7 @@ public final class Keybinds {
         event.registerCategory(CATEGORY);
         for (final KeybindAction action : KeybindAction.values()) {
             final KeyMapping mapping = new KeyMapping(
-                action.translationKey(), InputConstants.Type.KEYBOARD, action.vanillaDefaultKey(), CATEGORY
+                action.translationKey(), InputConstants.Type.KEYSYM, action.vanillaDefaultKey(), CATEGORY
             );
             MAPPINGS[action.ordinal()] = mapping;
             event.register(mapping);
