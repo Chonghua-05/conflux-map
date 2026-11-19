@@ -1,5 +1,6 @@
 package cn.net.rms.confluxmap.core.predict;
 
+import cn.net.rms.confluxmap.core.model.SurfaceKind;
 import java.util.Arrays;
 
 /**
@@ -33,6 +34,17 @@ public record FlatBaseline(
 
     public FlatBaseline {
         topMaterialId = topMaterialId == null ? "" : topMaterialId;
+        // Server-synced values feed the packing planes and grid fills directly; a hostile or
+        // broken companion must fail loudly at this trust boundary instead of throwing from a
+        // worker's first compose forever.
+        if (surfaceY < -2048 || surfaceY > 2047
+            || kind < 0 || kind >= SurfaceKind.values().length
+            || fluidDepth < 0 || fluidDepth > 255) {
+            throw new IllegalArgumentException(
+                "flat baseline out of range: surfaceY=" + surfaceY
+                    + " kind=" + kind + " fluidDepth=" + fluidDepth
+            );
+        }
     }
 
     public FlatBaseline(
@@ -56,7 +68,10 @@ public record FlatBaseline(
     /** A margin-inclusive derived grid where every cell is this surface's kind/height/fluid. */
     public DerivedGrid toDerivedGrid() {
         final DerivedGrid derived = new DerivedGrid();
-        Arrays.fill(derived.surfaceY, surfaceY);
+        // A VOID top layer is "known, no surface" - the sentinel the deriver writes - so packed
+        // round-trips and teleport staging agree with sampled dimensions instead of seeing Y=0.
+        Arrays.fill(derived.surfaceY,
+            kind == SurfaceKind.VOID.ordinal() ? BaselineGrid.NO_SURFACE : surfaceY);
         Arrays.fill(derived.kind, (byte) kind);
         Arrays.fill(derived.fluidDepth, fluidDepth);
         return derived;

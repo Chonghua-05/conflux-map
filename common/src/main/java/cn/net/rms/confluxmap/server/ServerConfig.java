@@ -2,6 +2,7 @@ package cn.net.rms.confluxmap.server;
 
 import cn.net.rms.confluxmap.core.net.Proto;
 import cn.net.rms.confluxmap.core.net.shared.SharedWaypointProto;
+import cn.net.rms.confluxmap.nativepredict.PredictionBackend;
 import cn.net.rms.confluxmap.server.shared.SharedWaypointService;
 import cn.net.rms.confluxmap.server.web.WebMapConfig;
 
@@ -14,12 +15,19 @@ import cn.net.rms.confluxmap.server.web.WebMapConfig;
  * boundaries make that safe. Settings that reveal sensitive server state still default OFF.
  */
 public final class ServerConfig {
-    public static final int SCHEMA_VERSION = 6;
+    public static final int SCHEMA_VERSION = 7;
 
     public int schemaVersion = SCHEMA_VERSION;
 
     /** Master toggle for the companion. When false, no handshake replies are sent. */
     public boolean enabled = true;
+    /**
+     * Whether operators may push the full generated-region manifest so cooperating clients can
+     * bulk-pull the entire explored map of a dimension. This discloses every generated area of
+     * the world - far beyond the viewport-scoped data {@link #shareCorrections} leaks - so it is
+     * a deliberate opt-in independent of that flag and defaults OFF.
+     */
+    public boolean fullSyncEnabled = false;
     /** Dedicated-server startup GitHub release probe; a newer version is announced on the console. */
     public boolean checkForUpdates = true;
     /**
@@ -49,6 +57,28 @@ public final class ServerConfig {
      * every online player's position; disabling it stops that stream and hides the client radar.
      */
     public boolean allowEntityRadar = true;
+    /**
+     * Whether cooperating clients may render the HUD minimap. Honest-client enforcement only,
+     * like {@link #allowEntityRadar}: a modified client can ignore it.
+     */
+    public boolean allowMinimap = true;
+    /**
+     * Whether cooperating clients may open the fullscreen world map (including map export,
+     * annotations, and map markers reached through it).
+     */
+    public boolean allowWorldMap = true;
+    /**
+     * Whether cooperating clients may use local waypoints: the list and editor screens plus
+     * in-world beam/label rendering. Independent of {@link #shareWaypoints}, which governs the
+     * server-owned shared catalog.
+     */
+    public boolean allowWaypoints = true;
+    /**
+     * Whether cooperating clients may display the seed-prediction underlay. Disabling this hides
+     * predicted tiles even on servers that share the seed for map-sync corrections.
+     */
+    public boolean allowPrediction = true;
+    public String restrictionMessage = "";
     /** Whether the server-owned shared waypoint catalog is enabled. */
     public boolean shareWaypoints = true;
     /** Whether non-operators may create and manage shared waypoints they published. */
@@ -72,8 +102,31 @@ public final class ServerConfig {
     /** Loopback-only HTTP map by default; remote exposure still requires an explicit safe setup. */
     public WebMapConfig webMap = new WebMapConfig();
 
+    /**
+     * Engine for the companion's own prediction baseline (patch generation and seed-derived
+     * features). GPU uses the OpenCL executor when the host has a working device and serves
+     * the exact CPU reference otherwise. Both backends produce the same residual baseline.
+     * Integrated servers use the client's backend because the native engine is process-global.
+     */
+    public PredictionBackend predictionBackend = PredictionBackend.GPU;
+
     /** Clamp out-of-range values loaded from a hand-edited file. */
     public void normalize() {
+        if (predictionBackend == null) {
+            predictionBackend = PredictionBackend.GPU;
+        }
+        restrictionMessage = restrictionMessage == null ? "" : restrictionMessage.strip();
+        int messageEnd = 0;
+        int messageBytes = 0;
+        while (messageEnd < restrictionMessage.length()) {
+            final int codePoint = restrictionMessage.codePointAt(messageEnd);
+            messageBytes += codePoint <= 0x7F ? 1 : codePoint <= 0x7FF ? 2 : codePoint <= 0xFFFF ? 3 : 4;
+            if (messageBytes > Proto.MAX_UTF8_BYTES) {
+                break;
+            }
+            messageEnd += Character.charCount(codePoint);
+        }
+        restrictionMessage = restrictionMessage.substring(0, messageEnd);
         if (webMap == null) {
             webMap = new WebMapConfig();
         }

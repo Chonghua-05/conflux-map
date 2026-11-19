@@ -92,8 +92,8 @@ public final class SharedWaypointNetworking {
         for (final SharedWaypointMessage direct : dispatch.direct()) {
             send(player, direct);
         }
-        if (dispatch.broadcast() != null) {
-            broadcast(server, dispatch.broadcast());
+        for (final SharedWaypointMessage delta : dispatch.broadcasts()) {
+            broadcast(server, delta);
         }
     }
 
@@ -165,8 +165,7 @@ public final class SharedWaypointNetworking {
         final MinecraftServer server,
         final SharedWaypointService.MutationResult mutation
     ) {
-        final SharedWaypointMessage delta = SharedWaypointSessionHandler.deltaMessage(mutation);
-        if (delta != null) {
+        for (final SharedWaypointMessage delta : SharedWaypointSessionHandler.deltaMessages(mutation)) {
             broadcast(server, delta);
         }
     }

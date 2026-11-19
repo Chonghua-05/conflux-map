@@ -5,11 +5,13 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNotEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
+import cn.net.rms.confluxmap.core.config.ConfluxConfig;
 import cn.net.rms.confluxmap.core.color.MapColorStyle;
 import cn.net.rms.confluxmap.core.color.XaeroMapStyle;
 import cn.net.rms.confluxmap.core.color.LightTint;
 import cn.net.rms.confluxmap.core.color.MaterialDetailProfile;
 import cn.net.rms.confluxmap.core.color.ShadingPipeline;
+import cn.net.rms.confluxmap.core.model.ChunkSnapshot;
 import cn.net.rms.confluxmap.core.model.SurfaceKind;
 import cn.net.rms.confluxmap.core.net.PatchCodec;
 import cn.net.rms.confluxmap.core.net.Proto;
@@ -91,6 +93,55 @@ class PredictedTileComposerTest {
         )[0];
 
         assertArrayEquals(expected, composed);
+    }
+
+    /** A synchronized void column must erase the predicted terrain instead of showing it. */
+    @Test
+    void synchronizedVoidErasesThePredictedTerrainUnderneath() {
+        final BaselineGrid grid = flatGrid(1);
+        final DerivedGrid derived = flatDerived(80);
+        final byte[] evaluated = new byte[PatchCodec.MASK_BYTES];
+        Arrays.fill(evaluated, (byte) 0xFF);
+        final CorrectionTile corrections = new CorrectionTile();
+        corrections.applyPatch(
+            1L,
+            new byte[Proto.PATCH_PRESENCE_BYTES],
+            new PatchCodec.Patch(evaluated, java.util.List.of(
+                new PatchCodec.Sample(
+                    0, 1, ChunkSnapshot.NO_SURFACE, SurfaceKind.VOID.ordinal(), Proto.MAP_COLOR_NONE, 0
+                )
+            ))
+        );
+
+        final int[] composed = PredictedTileComposer.compose(
+            derived, grid, PredictionPalette.defaults(), corrections,
+            PredictionViewMode.EVERYWHERE, 0, Proto.MAP_COLOR_NONE,
+            derived, grid, Proto.MAP_COLOR_NONE
+        );
+
+        assertEquals(Argb.TRANSPARENT, composed[0]);
+        assertNotEquals(Argb.TRANSPARENT, composed[1], "uncorrected pixels keep the prediction");
+    }
+
+    /** Seam guard: predicted void must match the captured map's configured void paint exactly. */
+    @Test
+    void voidPaintsTheSameColorAsTheCapturedMapWhileUnknownStaysTransparent() {
+        final BaselineGrid grid = flatGrid(1);
+        final DerivedGrid derived = flatDerived(80);
+        derived.kind[BaselineGrid.index(0, 0)] = (byte) SurfaceKind.VOID.ordinal();
+        derived.kind[BaselineGrid.index(1, 0)] = (byte) SurfaceKind.UNKNOWN.ordinal();
+
+        final int[] pixels = PredictedTileComposer.compose(
+            derived, grid, PredictionPalette.defaults(), null,
+            PredictionViewMode.EVERYWHERE, 0, Proto.MAP_COLOR_NONE,
+            derived, grid, Proto.MAP_COLOR_NONE,
+            true, 0xFFFFFFFF, null,
+            MapColorStyle.CONFLUX, XaeroMapStyle.Shadow.OVERWORLD, null, null,
+            ConfluxConfig.VoidColumnColor.DARK_INDIGO.argb()
+        );
+
+        assertEquals(ConfluxConfig.VoidColumnColor.DARK_INDIGO.argb(), pixels[0]);
+        assertEquals(Argb.TRANSPARENT, pixels[1], "unexplored stays transparent");
     }
 
     private static BaselineGrid flatGrid(final int biome) {
@@ -288,11 +339,12 @@ class PredictedTileComposerTest {
     }
 
     @Test
-    void xaeroStyleHidesGlassOverlaysButKeepsDecorations() {
+    void xaeroStyleHidesTorchOverlaysButKeepsGlassAndDecorations() {
         final BaselineGrid grid = flatGrid(1);
         final DerivedGrid derived = flatDerived(ShadingPipeline.REFERENCE_HEIGHT);
         final int glassPixel = 10 * 256 + 10;
         final int rosePixel = 20 * 256 + 20;
+        final int torchPixel = 30 * 256 + 30;
         final CorrectionTile corrections = new CorrectionTile();
         corrections.applyPatch(
             1L,
@@ -305,6 +357,10 @@ class PredictedTileComposerTest {
                 new PatchCodec.Sample(
                     rosePixel, 1, ShadingPipeline.REFERENCE_HEIGHT, SurfaceKind.LAND.ordinal(),
                     4, 0, 255, "minecraft:glowstone", "", "minecraft:wither_rose"
+                ),
+                new PatchCodec.Sample(
+                    torchPixel, 1, ShadingPipeline.REFERENCE_HEIGHT, SurfaceKind.LAND.ordinal(),
+                    4, 0, 255, "minecraft:glowstone", "", "minecraft:torch"
                 )
             )),
             Proto.PATCH_MODE_ABSOLUTE,
@@ -336,6 +392,14 @@ class PredictedTileComposerTest {
             0xFFFFFFFF,
             3
         ));
+        final int sampledTorch = 0xFFC8A030;
+        materials.put("minecraft:torch", new SyncedMaterialPalette.Sample(
+            sampledTorch,
+            MaterialDetailProfile.flat(),
+            SyncedMaterialPalette.Tint.NONE,
+            0xFFFFFFFF,
+            4
+        ));
 
         final int[] composed = PredictedTileComposer.compose(
             derived, grid, PredictionPalette.defaults(), corrections,
@@ -358,6 +422,10 @@ class PredictedTileComposerTest {
                 new PatchCodec.Sample(
                     rosePixel, 1, ShadingPipeline.REFERENCE_HEIGHT, SurfaceKind.LAND.ordinal(),
                     4, 0, 255, "minecraft:glowstone", ""
+                ),
+                new PatchCodec.Sample(
+                    torchPixel, 1, ShadingPipeline.REFERENCE_HEIGHT, SurfaceKind.LAND.ordinal(),
+                    4, 0, 255, "minecraft:glowstone", ""
                 )
             )),
             Proto.PATCH_MODE_ABSOLUTE,
@@ -371,8 +439,90 @@ class PredictedTileComposerTest {
             MapColorStyle.XAERO, XaeroMapStyle.Shadow.OVERWORLD
         );
 
-        assertEquals(bare[glassPixel], composed[glassPixel]);
+        // Measured against the real Xaero mod: glass is drawn even in its style (issue #130),
+        // flowers draw, and only the torch family stays hidden.
+        assertNotEquals(bare[glassPixel], composed[glassPixel]);
         assertNotEquals(bare[rosePixel], composed[rosePixel]);
+        assertEquals(bare[torchPixel], composed[torchPixel]);
+    }
+
+    @Test
+    void xaeroStyleWaterColumnsComposeGlassButHideTorchOverlays() {
+        final BaselineGrid grid = new BaselineGrid();
+        final DerivedGrid derived = new DerivedGrid();
+        Arrays.fill(grid.biomeId, 0);
+        Arrays.fill(derived.kind, (byte) SurfaceKind.WATER.ordinal());
+        Arrays.fill(derived.surfaceY, BaselineDeriver.WATER_LEVEL);
+        Arrays.fill(derived.fluidDepth, 10);
+        final int waterPixel = 40 * 256 + 20;
+        // A torch standing on a glass bridge over water is the one marker shape the water
+        // branch must still hide: the overlay slot carries the top-most crossed block.
+        final int torchWaterPixel = 40 * 256 + 60;
+        final CorrectionTile corrections = new CorrectionTile();
+        corrections.applyPatch(
+            1L,
+            new byte[Proto.PATCH_PRESENCE_BYTES],
+            new PatchCodec.Patch(java.util.List.of(
+                new PatchCodec.Sample(
+                    waterPixel, 0, BaselineDeriver.WATER_LEVEL, SurfaceKind.WATER.ordinal(),
+                    4, 10, 255, "minecraft:water", "", "minecraft:white_stained_glass"
+                ),
+                new PatchCodec.Sample(
+                    torchWaterPixel, 0, BaselineDeriver.WATER_LEVEL, SurfaceKind.WATER.ordinal(),
+                    4, 10, 255, "minecraft:water", "", "minecraft:torch"
+                )
+            )),
+            Proto.PATCH_MODE_ABSOLUTE,
+            "",
+            1_000L
+        );
+        final SyncedMaterialPalette materials = new SyncedMaterialPalette();
+        final int sampledGlass = 0xAAE6E9EC;
+        materials.put("minecraft:white_stained_glass", new SyncedMaterialPalette.Sample(
+            sampledGlass,
+            MaterialDetailProfile.flat(),
+            SyncedMaterialPalette.Tint.NONE,
+            0xFFFFFFFF,
+            2
+        ));
+
+        final int[] composed = PredictedTileComposer.compose(
+            derived, grid, PredictionPalette.defaults(), corrections,
+            PredictionViewMode.EVERYWHERE, 0, Proto.MAP_COLOR_NONE,
+            derived, grid, Proto.MAP_COLOR_NONE, true, 0xFFFFFFFF, materials,
+            MapColorStyle.XAERO, XaeroMapStyle.Shadow.OVERWORLD
+        );
+
+        // The control: the same water column with the overlay material cleared.
+        final CorrectionTile withoutOverlay = new CorrectionTile();
+        withoutOverlay.applyPatch(
+            1L,
+            new byte[Proto.PATCH_PRESENCE_BYTES],
+            new PatchCodec.Patch(java.util.List.of(
+                new PatchCodec.Sample(
+                    waterPixel, 0, BaselineDeriver.WATER_LEVEL, SurfaceKind.WATER.ordinal(),
+                    4, 10, 255, "minecraft:water", ""
+                )
+            )),
+            Proto.PATCH_MODE_ABSOLUTE,
+            "",
+            1_000L
+        );
+        final int[] bare = PredictedTileComposer.compose(
+            derived, grid, PredictionPalette.defaults(), withoutOverlay,
+            PredictionViewMode.EVERYWHERE, 0, Proto.MAP_COLOR_NONE,
+            derived, grid, Proto.MAP_COLOR_NONE, true, 0xFFFFFFFF, materials,
+            MapColorStyle.XAERO, XaeroMapStyle.Shadow.OVERWORLD
+        );
+
+        assertNotEquals(
+            bare[waterPixel], composed[waterPixel],
+            "xaero-style water must compose the glass cover over the water surface"
+        );
+        assertEquals(
+            bare[torchWaterPixel], composed[torchWaterPixel],
+            "xaero-style water must keep hiding the torch marker family"
+        );
     }
 
     @Test
@@ -920,91 +1070,5 @@ class PredictedTileComposerTest {
         );
 
         assertEquals(baseline[pixel], corrected[pixel], "an incomplete server summary must not erase a valid predicted pixel");
-    }
-
-    private static int[] composeRiverStripeTile(final int lod) {
-        final RiverStripeFakeSampler sampler = new RiverStripeFakeSampler(1 << lod);
-        final BaselineGrid grid = LodSampling.sample(sampler, false, lod, 0, 0);
-        final DerivedGrid derived = BaselineDeriver.derive(grid);
-        CanopyStylizer.apply(derived, grid, 7L, lod, 0, 0);
-        return PredictedTileComposer.compose(derived, grid, PredictionPalette.defaults());
-    }
-
-    /**
-     * The whole point of biome supersampling: a river that every pixel centre misses must still
-     * tint the output. Before supersampling this tile came out uniformly dry, which is what made
-     * a meandering river collapse into a broken straight line when zoomed out.
-     */
-    @Test
-    void aRiverBetweenPixelCentresStillTintsCoarseLodPixels() {
-        for (final int lod : new int[] {3, 4}) {
-            final int[] withRiver = composeRiverStripeTile(lod);
-            final int[] dryReference = composeDryPlainsTile(lod);
-            assertNotEquals(
-                dryReference[0], withRiver[0],
-                "LOD" + lod + " must not render a river-crossed pixel identically to dry plains"
-            );
-            // The stripe is half of each pixel's sub-samples, so the blend has to sit strictly
-            // between dry land and open water rather than snapping to either.
-            final int blended = withRiver[0];
-            assertTrue(
-                Argb.blue(blended) > Argb.blue(dryReference[0]),
-                "a river sub-sample must pull the pixel toward water, got "
-                    + Integer.toHexString(blended) + " vs dry " + Integer.toHexString(dryReference[0])
-            );
-        }
-    }
-
-    /** Same fixture with the river moved onto the pixel centres, so every sub-sample is plains. */
-    private static int[] composeDryPlainsTile(final int lod) {
-        final BaselineSampler plainsOnly = new BaselineSampler() {
-            private final RiverStripeFakeSampler delegate = new RiverStripeFakeSampler(1 << lod);
-
-            @Override
-            public boolean biomes(final int scale, final int x, final int z, final int w, final int h, final int[] out) {
-                return false;
-            }
-
-            @Override
-            public boolean heights(final int x4, final int z4, final int w, final int h, final int[] outY) {
-                return false;
-            }
-
-            @Override
-            public boolean overviewHeights(
-                final int blockX, final int blockZ, final int w, final int h, final int stride,
-                final int[] outTerrainY
-            ) {
-                return delegate.overviewHeights(blockX, blockZ, w, h, stride, outTerrainY);
-            }
-
-            @Override
-            public boolean surfaceColumns(
-                final int blockX, final int blockZ, final int w, final int h, final int stride,
-                final int[] outSolidY, final int[] outFluidY, final int[] outSurfaceY, final int[] outFlags
-            ) {
-                return delegate.surfaceColumns(
-                    blockX, blockZ, w, h, stride, outSolidY, outFluidY, outSurfaceY, outFlags
-                );
-            }
-
-            @Override
-            public boolean surfaceBiomes(
-                final int blockX, final int blockZ, final int w, final int h, final int stride,
-                final int[] terrainY, final int[] outBiomeIds
-            ) {
-                Arrays.fill(outBiomeIds, 0, w * h, RiverStripeFakeSampler.PLAINS);
-                return true;
-            }
-
-            @Override
-            public boolean endHeights(final int x4, final int z4, final int w, final int h, final int[] outY) {
-                return false;
-            }
-        };
-        final BaselineGrid grid = LodSampling.sample(plainsOnly, false, lod, 0, 0);
-        final DerivedGrid derived = BaselineDeriver.derive(grid);
-        CanopyStylizer.apply(derived, grid, 7L, lod, 0, 0);
-        return PredictedTileComposer.compose(derived, grid, PredictionPalette.defaults());
     }
 }

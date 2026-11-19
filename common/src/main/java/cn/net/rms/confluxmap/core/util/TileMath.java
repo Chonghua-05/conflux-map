@@ -52,11 +52,26 @@ public final class TileMath {
      * that otherwise occurs immediately after crossing an LOD boundary.
      */
     public static int lodForScale(final double blocksPerScreenPixel) {
+        return lodForScale(blocksPerScreenPixel, cn.net.rms.confluxmap.core.config.ConfluxConfig.MapQuality.BALANCED);
+    }
+
+    /**
+     * Chooses LOD for the given scale taking into account player's {@link ConfluxConfig.MapQuality}.
+     * When zoomed in (blocksPerScreenPixel <= 1.0), the result is strictly clamped to LOD 0 regardless
+     * of quality setting, ensuring pixel-perfect fidelity when zooming close.
+     * When zoomed out (blocksPerScreenPixel > 1.0), the quality setting scales the slope (loadline)
+     * of the logarithmic decay curve.
+     */
+    public static int lodForScale(
+        final double blocksPerScreenPixel,
+        final cn.net.rms.confluxmap.core.config.ConfluxConfig.MapQuality quality
+    ) {
         if (!Double.isFinite(blocksPerScreenPixel) || blocksPerScreenPixel <= 1.0) {
             return 0;
         }
+        final double slope = quality != null ? quality.slope() : 1.0;
         final double exact = Math.log(blocksPerScreenPixel) / Math.log(2.0);
-        final int lod = (int) Math.floor(exact + 1.0e-10);
+        final int lod = (int) Math.floor(exact * slope + 1.0e-10);
         return Math.max(0, Math.min(MAX_LOD, lod));
     }
 
@@ -68,6 +83,45 @@ public final class TileMath {
     /** Pixel offset of a block within its LOD tile, in [0, 255]. */
     public static int blockToPixelInTile(final int block, final int lod) {
         return (block >> lod) & (TILE_SIZE - 1);
+    }
+
+    /**
+     * Parent tile coordinate one LOD coarser than {@code childTile}. Arithmetic right shift keeps
+     * negative tiles in the correct parent: tile -1 and tile -2 both belong to parent -1.
+     */
+    public static int parentTile(final int childTile) {
+        return childTile >> 1;
+    }
+
+    /** Child tile coordinate one LOD finer, for the half of {@code parentTile} selected by {@code quadrant}. */
+    public static int childTile(final int parentTile, final int quadrant) {
+        return (parentTile << 1) + (quadrant & 1);
+    }
+
+    /**
+     * Which half of its parent tile {@code childTile} occupies: 0 for the negative-coordinate half
+     * (west / north), 1 for the positive-coordinate half (east / south).
+     */
+    public static int quadrantInParent(final int childTile) {
+        return childTile & 1;
+    }
+
+    /**
+     * UV rectangle of {@code childTile} inside its parent tile, written into {@code uvOut} as
+     * {@code [u0, v0, u1, v1]}. Each axis covers exactly half the parent, so a missing finer tile
+     * can be covered by stretching the matching quadrant of the coarser texture.
+     */
+    public static void parentUv(
+        final int childTileX,
+        final int childTileZ,
+        final float[] uvOut
+    ) {
+        final float u0 = (childTileX & 1) * 0.5f;
+        final float v0 = (childTileZ & 1) * 0.5f;
+        uvOut[0] = u0;
+        uvOut[1] = v0;
+        uvOut[2] = u0 + 0.5f;
+        uvOut[3] = v0 + 0.5f;
     }
 
     /** Whether two aligned LOD tiles overlap when expressed in LOD-0 tile coordinates. */

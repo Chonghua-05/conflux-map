@@ -1,6 +1,5 @@
 package cn.net.rms.confluxmap.server;
 
-import cn.net.rms.confluxmap.ConfluxMapMod;
 import com.google.gson.Gson;
 import com.google.gson.GsonBuilder;
 import com.google.gson.JsonParseException;
@@ -13,12 +12,10 @@ import java.nio.file.StandardCopyOption;
 import org.apache.logging.log4j.Logger;
 
 /**
- * Atomic JSON loader/saver for {@link ServerConfig}. Pattern mirrors {@code core.config.ConfigIo}:
- * tmp-file + atomic move, quarantine a corrupt file as {@code *.bad}, never wedge the mod on a
- * broken edit, and load-time upgrade of the on-disk document (missing fields persisted with
- * defaults; a newer-schema file is left intact). Lives in {@code server/} (MC-aware side) because
- * it runs on the dedicated server where the {@code core.config.ConfigIo} (client-only) is not
- * loaded.
+ * Atomic JSON loader/saver for {@link ServerConfig}, shared by the Fabric and Paper companions.
+ * Pattern mirrors {@code core.config.ConfigIo}: tmp-file + atomic move, quarantine a corrupt file
+ * as {@code *.bad}, never wedge the companion on a broken edit, and load-time upgrade of the
+ * on-disk document (missing fields persisted with defaults; a newer-schema file is left intact).
  */
 public final class ServerConfigIo {
     private static final Gson GSON = new GsonBuilder().setPrettyPrinting().create();
@@ -60,7 +57,7 @@ public final class ServerConfigIo {
             upgradeOnDisk(json, config);
             return config;
         } catch (final IOException | JsonParseException e) {
-            logger.warn("Server config {} unreadable ({}), quarantining and using defaults", file, e.toString());
+            logger.warn("[ConfluxMap] Server config {} unreadable ({}), quarantining and using defaults", file, e.toString());
             quarantine();
             final ServerConfig fresh = new ServerConfig();
             save(fresh);
@@ -68,7 +65,7 @@ public final class ServerConfigIo {
         }
     }
 
-    /** Preserves the original fire-and-log API for existing callers. */
+    /** Fire-and-log save for callers that only need the config persisted eventually. */
     public void save(final ServerConfig config) {
         saveAtomically(config);
     }
@@ -82,21 +79,9 @@ public final class ServerConfigIo {
             move(tmp);
             return true;
         } catch (final IOException | RuntimeException e) {
-            logger.error("Failed to save server config to {}", file, e);
+            logger.error("[ConfluxMap] Failed to save server config to {}", file, e);
             return false;
         }
-    }
-
-    public static ServerConfig loadDefault() {
-        return new ServerConfig();
-    }
-
-    /** Convenience factory bound to the mod's standard config location. */
-    public static ServerConfigIo atDefault(final Path configDir) {
-        return new ServerConfigIo(
-            configDir.resolve(ConfluxMapMod.ID).resolve("server.json"),
-            ConfluxMapMod.LOGGER
-        );
     }
 
     /** Upgrades only untouched legacy defaults; operator-tuned limits remain authoritative. */
@@ -124,14 +109,14 @@ public final class ServerConfigIo {
     private void upgradeOnDisk(final String onDisk, final ServerConfig config) {
         if (config.schemaVersion > ServerConfig.SCHEMA_VERSION) {
             logger.warn(
-                "Server config {} has schema {} newer than this build's {}; leaving the file untouched",
+                "[ConfluxMap] Server config {} has schema {} newer than this build's {}; leaving the file untouched",
                 file, config.schemaVersion, ServerConfig.SCHEMA_VERSION
             );
             return;
         }
         config.schemaVersion = ServerConfig.SCHEMA_VERSION;
         if (!GSON.toJson(config).equals(onDisk)) {
-            logger.info("Updating server config {} to the current schema (missing fields added)", file);
+            logger.info("[ConfluxMap] Updating server config {} to the current schema (missing fields added)", file);
             saveAtomically(config);
         }
     }
@@ -148,7 +133,7 @@ public final class ServerConfigIo {
         try {
             Files.move(file, file.resolveSibling(file.getFileName() + ".bad"), StandardCopyOption.REPLACE_EXISTING);
         } catch (final IOException e) {
-            logger.warn("Could not quarantine {}", file, e);
+            logger.warn("[ConfluxMap] Could not quarantine {}", file, e);
         }
     }
 }

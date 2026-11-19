@@ -7,15 +7,82 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.util.UUID;
 import cn.net.rms.confluxmap.core.portal.PortalKind;
+import cn.net.rms.confluxmap.nativepredict.PredictionBackend;
 import org.junit.jupiter.api.Test;
 
 final class ConfluxConfigTest {
+    @Test
+    void mapQualityPredictionTileCacheLimitsMatchExpectedSteps() {
+        assertEquals(64, ConfluxConfig.MapQuality.ULTRA_PERFORMANCE.predictionTileCacheLimit());
+        assertEquals(128, ConfluxConfig.MapQuality.PERFORMANCE.predictionTileCacheLimit());
+        assertEquals(256, ConfluxConfig.MapQuality.BALANCED.predictionTileCacheLimit());
+        assertEquals(512, ConfluxConfig.MapQuality.QUALITY.predictionTileCacheLimit());
+        assertEquals(1024, ConfluxConfig.MapQuality.ULTRA_QUALITY.predictionTileCacheLimit());
+    }
+
     @Test
     void playerFacingFeaturesAreEnabledByDefault() {
         final ConfluxConfig config = new ConfluxConfig();
 
         assertTrue(config.radarShowPassive);
         assertTrue(config.radarShowOther);
+    }
+
+    @Test
+    void teleportAndWaypointListDefaultsSurviveCopy() {
+        final ConfluxConfig config = new ConfluxConfig();
+
+        assertFalse(config.teleportCloseMap);
+        assertEquals(ConfluxConfig.WaypointListTab.LOCAL, config.waypointListDefaultTab);
+        assertEquals(ConfluxConfig.WaypointListDefaultDimension.CURRENT, config.waypointListDefaultDimension);
+
+        config.teleportCloseMap = true;
+        config.waypointListDefaultTab = ConfluxConfig.WaypointListTab.PUBLIC;
+        config.waypointListDefaultDimension = ConfluxConfig.WaypointListDefaultDimension.ALL;
+
+        final ConfluxConfig copy = config.copy();
+        assertTrue(copy.teleportCloseMap);
+        assertEquals(ConfluxConfig.WaypointListTab.PUBLIC, copy.waypointListDefaultTab);
+        assertEquals(ConfluxConfig.WaypointListDefaultDimension.ALL, copy.waypointListDefaultDimension);
+    }
+
+    @Test
+    void controlStyleDefaultsToAutoAndSurvivesCopyAndNormalize() {
+        final ConfluxConfig config = new ConfluxConfig();
+        assertEquals(ConfluxConfig.ControlStyle.AUTO, config.controlStyle);
+
+        config.controlStyle = ConfluxConfig.ControlStyle.CONFLUX;
+        final ConfluxConfig copy = config.copy();
+        assertEquals(ConfluxConfig.ControlStyle.CONFLUX, copy.controlStyle);
+
+        copy.controlStyle = null;
+        copy.normalize();
+        assertEquals(ConfluxConfig.ControlStyle.AUTO, copy.controlStyle);
+    }
+
+    @Test
+    void predictionBackendDefaultsToGpuSurvivesCopyAndNormalizesNull() {
+        final ConfluxConfig config = new ConfluxConfig();
+        assertEquals(PredictionBackend.GPU, config.predictionBackend);
+
+        config.predictionBackend = null;
+        config.normalize();
+        assertEquals(PredictionBackend.GPU, config.predictionBackend);
+
+        config.predictionBackend = PredictionBackend.CPU;
+        assertEquals(PredictionBackend.CPU, config.copy().predictionBackend);
+    }
+
+    @Test
+    void waypointListDefaultsNormalizeNullEnumsBackToDefaults() {
+        final ConfluxConfig config = new ConfluxConfig();
+        config.waypointListDefaultTab = null;
+        config.waypointListDefaultDimension = null;
+
+        config.normalize();
+
+        assertEquals(ConfluxConfig.WaypointListTab.LOCAL, config.waypointListDefaultTab);
+        assertEquals(ConfluxConfig.WaypointListDefaultDimension.CURRENT, config.waypointListDefaultDimension);
     }
 
     @Test
@@ -59,6 +126,33 @@ final class ConfluxConfigTest {
 
         assertNull(config.sharedWaypointCrossDimensionYById.get("broken"));
         assertEquals(64.0, config.sharedWaypointCrossDimensionYById.get("kept"));
+    }
+
+    @Test
+    void workerThreadDefaultsAreAutoAndSurviveCopy() {
+        final ConfluxConfig config = new ConfluxConfig();
+
+        assertEquals(ConfluxConfig.WorkerThreadMode.AUTO, config.workerThreadMode);
+        assertEquals(ConfluxConfig.DEFAULT_CUSTOM_WORKER_THREADS, config.workerThreadCount);
+
+        config.workerThreadMode = ConfluxConfig.WorkerThreadMode.ALL_THREADS;
+        config.workerThreadCount = 12;
+
+        final ConfluxConfig copy = config.copy();
+        assertEquals(ConfluxConfig.WorkerThreadMode.ALL_THREADS, copy.workerThreadMode);
+        assertEquals(12, copy.workerThreadCount);
+    }
+
+    @Test
+    void normalizeRestoresWorkerThreadModeAndClampsCount() {
+        final ConfluxConfig config = new ConfluxConfig();
+        config.workerThreadMode = null;
+        config.workerThreadCount = 999;
+
+        config.normalize();
+
+        assertEquals(ConfluxConfig.WorkerThreadMode.AUTO, config.workerThreadMode);
+        assertEquals(ConfluxConfig.MAX_WORKER_THREADS, config.workerThreadCount);
     }
 
     @Test
@@ -239,6 +333,7 @@ final class ConfluxConfigTest {
         config.portalChunkHighlightEnabled = false;
         config.portalHighlightColor = ConfluxConfig.PortalHighlightColor.GOLD;
         config.portalIconHideZoom = 1.0;
+        config.voidColumnColor = ConfluxConfig.VoidColumnColor.DARK_SLATE;
 
         final ConfluxConfig copy = config.copy();
 
@@ -253,6 +348,51 @@ final class ConfluxConfigTest {
         assertFalse(copy.portalChunkHighlightEnabled);
         assertEquals(ConfluxConfig.PortalHighlightColor.GOLD, copy.portalHighlightColor);
         assertEquals(1.0, copy.portalIconHideZoom);
+        assertEquals(ConfluxConfig.VoidColumnColor.DARK_SLATE, copy.voidColumnColor);
+    }
+
+    @Test
+    void minimapBackgroundOpacityDefaultsToHistoricHalfAlphaSurvivesCopyAndClamps() {
+        final ConfluxConfig config = new ConfluxConfig();
+
+        assertEquals(ConfluxConfig.DEFAULT_MINIMAP_BACKGROUND_OPACITY, config.minimapBackgroundOpacity);
+        config.minimapBackgroundOpacity = 30;
+        assertEquals(30, config.copy().minimapBackgroundOpacity);
+
+        final ConfluxConfig overMax = new ConfluxConfig();
+        overMax.minimapBackgroundOpacity = 150;
+        overMax.normalize();
+        assertEquals(ConfluxConfig.MAX_MINIMAP_BACKGROUND_OPACITY, overMax.minimapBackgroundOpacity);
+
+        final ConfluxConfig underMin = new ConfluxConfig();
+        underMin.minimapBackgroundOpacity = -5;
+        underMin.normalize();
+        assertEquals(ConfluxConfig.MIN_MINIMAP_BACKGROUND_OPACITY, underMin.minimapBackgroundOpacity);
+    }
+
+    @Test
+    void uiTransitionDefaultsSurviveCopyAndMigrateFromSchema12() {
+        final ConfluxConfig config = new ConfluxConfig();
+
+        assertTrue(config.uiTransitionsEnabled);
+        assertEquals(ConfluxConfig.UiTransitionSpeed.STANDARD, config.uiTransitionSpeed);
+
+        config.uiTransitionsEnabled = false;
+        config.uiTransitionSpeed = ConfluxConfig.UiTransitionSpeed.RELAXED;
+        final ConfluxConfig copy = config.copy();
+        assertFalse(copy.uiTransitionsEnabled);
+        assertEquals(ConfluxConfig.UiTransitionSpeed.RELAXED, copy.uiTransitionSpeed);
+
+        // A v12 file predates both fields and Gson keeps the constructor default for
+        // absent ones; the null-normalize still guards hand-edited files and must settle
+        // the tier without touching the deliberately disabled toggle.
+        final ConfluxConfig legacy = new ConfluxConfig();
+        legacy.schemaVersion = 12;
+        legacy.uiTransitionsEnabled = false;
+        legacy.uiTransitionSpeed = null;
+        legacy.normalize();
+        assertFalse(legacy.uiTransitionsEnabled);
+        assertEquals(ConfluxConfig.UiTransitionSpeed.STANDARD, legacy.uiTransitionSpeed);
     }
 
     @Test
@@ -262,6 +402,7 @@ final class ConfluxConfigTest {
         config.portalIconOpacity = -5;
         config.portalIconHideZoom = Double.NaN;
         config.portalHighlightColor = null;
+        config.voidColumnColor = null;
         config.portalIconTextureNether = "  pack:textures/nether.png  ";
         config.portalIconTextureEnd = null;
 
@@ -271,6 +412,7 @@ final class ConfluxConfigTest {
         assertEquals(ConfluxConfig.MIN_PORTAL_ICON_OPACITY, config.portalIconOpacity);
         assertEquals(ConfluxConfig.MIN_PORTAL_ICON_HIDE_ZOOM, config.portalIconHideZoom);
         assertEquals(ConfluxConfig.PortalHighlightColor.PURPLE, config.portalHighlightColor);
+        assertEquals(ConfluxConfig.VoidColumnColor.DARK_INDIGO, config.voidColumnColor);
         assertEquals("pack:textures/nether.png", config.portalIconTextureNether);
         assertEquals("", config.portalIconTextureEnd);
     }

@@ -33,21 +33,16 @@ async function predict(request) {
   const heights = copyInt32(instance, instance.exports.cfxWebHeightData(), cells);
   const surfaces = copyInt32(instance, instance.exports.cfxWebSurfaceData(), cells);
   const canopies = copyInt32(instance, instance.exports.cfxWebCanopyData(), cells);
-  const subCells = request.lod >= 3 && request.dimension !== 1 ? cells * 4 : 0;
-  const subBiomes = copyInt32(instance, instance.exports.cfxWebSubBiomeData(), subCells);
-  const subSurfaces = copyInt32(instance, instance.exports.cfxWebSubSurfaceData(), subCells);
-  const subCanopies = copyInt32(instance, instance.exports.cfxWebSubCanopyData(), subCells);
   self.postMessage({
     id: request.id,
     biomes: biomes.buffer,
     heights: heights.buffer,
     surfaces: surfaces.buffer,
     canopies: canopies.buffer,
-    subBiomes: subBiomes.buffer,
-    subSurfaces: subSurfaces.buffer,
-    subCanopies: subCanopies.buffer
-  }, [biomes.buffer, heights.buffer, surfaces.buffer, canopies.buffer,
-    subBiomes.buffer, subSurfaces.buffer, subCanopies.buffer]);
+    subBiomes: new ArrayBuffer(0),
+    subSurfaces: new ArrayBuffer(0),
+    subCanopies: new ArrayBuffer(0)
+  }, [biomes.buffer, heights.buffer, surfaces.buffer, canopies.buffer]);
 }
 
 function copyInt32(instance, address, length) {

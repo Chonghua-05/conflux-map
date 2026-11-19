@@ -32,6 +32,9 @@ public interface ConfluxMapApi {
     /** Waypoint read/write access and the waypoints-changed event surface. */
     WaypointApi waypoints();
 
+    /** Read-only access to the server-published ("shared") waypoints. */
+    SharedWaypointApi sharedWaypoints();
+
     /** Read-only queries against the current map session's captured and predicted data. */
     MapDataApi mapData();
 

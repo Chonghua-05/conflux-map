@@ -5,11 +5,14 @@ import static org.junit.jupiter.api.Assertions.assertNotEquals;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
+import cn.net.rms.confluxmap.core.model.ChunkSnapshot;
 import cn.net.rms.confluxmap.core.model.SurfaceKind;
 import cn.net.rms.confluxmap.core.net.ChunkPatchCodec;
 import cn.net.rms.confluxmap.core.net.CorrectionProfile;
 import cn.net.rms.confluxmap.core.net.Proto;
 import cn.net.rms.confluxmap.core.net.SummaryCodec;
+import cn.net.rms.confluxmap.core.predict.BaselineDeriver;
+import cn.net.rms.confluxmap.core.predict.BaselineGrid;
 import cn.net.rms.confluxmap.core.predict.FlatBaseline;
 import cn.net.rms.confluxmap.core.util.ChunkRegionSlice;
 import java.util.Arrays;
@@ -100,6 +103,32 @@ class RegionPatchBuilderTest {
         assertEquals(0, unchanged.body().length);
     }
 
+    /** An empty generated column diffed against predicted land must publish an evaluated VOID sample. */
+    @Test
+    void voidColumnsErasePredictedTerrainAtTheRegionSeam() throws Exception {
+        final SummaryCodec.SampledChunk[] chunks = emptyChunks(16);
+        chunks[0] = voidChunk(16);
+        final SummaryCodec.SampledRegion region = new SummaryCodec.SampledRegion(
+            0, 0, 1L, 16, chunks
+        );
+        final BaselineGrid baseline = new BaselineGrid();
+        Arrays.fill(baseline.biomeId, 1);
+        Arrays.fill(baseline.terrainY, 70);
+        final PatchBuilder.PreparedBaseline prepared = new PatchBuilder.PreparedBaseline(
+            baseline, BaselineDeriver.derive(baseline), Proto.MAP_COLOR_NONE, false
+        );
+
+        final RegionPatchBuilder.Result result = new RegionPatchBuilder().build(
+            4, new ChunkRegionSlice(0, 0, 0, 0, 0, 0), region, Long.MIN_VALUE, prepared
+        );
+        final ChunkPatchCodec.Patch patch = ChunkPatchCodec.decode(result.body());
+
+        assertEquals(Proto.PATCH_MODE_RESIDUAL, result.mode());
+        assertEquals(1, result.recordCount());
+        assertTrue(patch.evaluatedAt(0));
+        assertEquals(SurfaceKind.VOID.ordinal(), patch.sampleAt(0).kind());
+    }
+
     private static SummaryCodec.SampledChunk[] emptyChunks(final int stride) {
         final SummaryCodec.SampledChunk[] chunks = new SummaryCodec.SampledChunk[SummaryCodec.CHUNKS];
         Arrays.fill(chunks, SummaryCodec.SampledChunk.empty(stride));
@@ -113,5 +142,14 @@ class RegionPatchBuilderTest {
             1, surfaceY, SurfaceKind.LAND.ordinal(), 1, 0, 255, 15
         ));
         return new SummaryCodec.SampledChunk(true, surfaceY, stride, columns);
+    }
+
+    private static SummaryCodec.SampledChunk voidChunk(final int stride) {
+        final int side = 16 / stride;
+        final SummaryCodec.Column[] columns = new SummaryCodec.Column[side * side];
+        Arrays.fill(columns, new SummaryCodec.Column(
+            1, ChunkSnapshot.NO_SURFACE, SurfaceKind.VOID.ordinal(), Proto.MAP_COLOR_NONE, 0
+        ));
+        return new SummaryCodec.SampledChunk(true, 1L, stride, columns);
     }
 }

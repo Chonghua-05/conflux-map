@@ -20,6 +20,26 @@ class WaypointIoTest {
     private static final Logger LOGGER = LogManager.getLogger("WaypointIoTest");
 
     @Test
+    void temporaryWaypointsNeverReachDisk(@TempDir final Path tempDir) throws IOException {
+        final Path file = tempDir.resolve("waypoints.json");
+        final Waypoint home = Waypoint.create(
+            "Home", DimensionId.OVERWORLD, 1.0, 64.0, 2.0,
+            0xFF336699, "", Waypoint.Type.NORMAL
+        );
+        final Waypoint stop = Waypoint.create(
+            "Stop", DimensionId.OVERWORLD, 3.0, 64.0, 4.0,
+            0xFF336699, "", Waypoint.Type.TEMPORARY
+        );
+
+        WaypointIo.save(file, List.of(home, stop), LOGGER);
+        final WaypointStore.State loaded = WaypointIo.loadState(file, LOGGER);
+
+        assertEquals(1, loaded.waypoints().size());
+        assertEquals("Home", loaded.waypoints().get(0).name);
+        assertFalse(Files.readString(file).contains("TEMPORARY"));
+    }
+
+    @Test
     void roundTripPreservesEmptyCustomSets(@TempDir final Path tempDir) throws IOException {
         final Path file = tempDir.resolve("waypoints.json");
         final Waypoint waypoint = Waypoint.create(
@@ -46,6 +66,39 @@ class WaypointIoTest {
         assertEquals("minecraft:diamond", loaded.waypoints().get(0).iconItemId);
         assertEquals("\u5bb6\uD83D\uDE80", loaded.waypoints().get(0).markerLabel);
         assertTrue(Files.readString(file).contains("\"schemaVersion\": 2"));
+    }
+
+    @Test
+    void roundTripsCollapsedStateIncludingTheDefaultSet(@TempDir final Path tempDir) throws IOException {
+        final Path file = tempDir.resolve("collapsed.json");
+        final Waypoint unassigned = Waypoint.create(
+            "Home", DimensionId.OVERWORLD, 1.0, 64.0, 2.0,
+            0xFF336699, "", Waypoint.Type.NORMAL
+        );
+        final Waypoint base = Waypoint.create(
+            "Base", DimensionId.OVERWORLD, 3.0, 64.0, 4.0,
+            0xFF336699, "Bases", Waypoint.Type.NORMAL
+        );
+        final Waypoint travel = Waypoint.create(
+            "Trip", DimensionId.OVERWORLD, 5.0, 64.0, 6.0,
+            0xFF336699, "Travel", Waypoint.Type.NORMAL
+        );
+        final WaypointStore.State state = new WaypointStore.State(
+            List.of(new WaypointSet("", true), new WaypointSet("Bases", true), new WaypointSet("Travel")),
+            List.of(unassigned, base, travel)
+        );
+
+        WaypointIo.save(file, state, LOGGER);
+        final WaypointStore.State loaded = WaypointIo.loadState(file, LOGGER);
+
+        assertEquals(
+            List.of(new WaypointSet("", true), new WaypointSet("Bases", true), new WaypointSet("Travel")),
+            loaded.sets()
+        );
+        // Only folded collections need the empty-name entry, so unfolded default sets
+        // keep the pre-collapse on-disk shape.
+        final String json = Files.readString(file);
+        assertEquals(1, json.split("\"name\": \"\"", -1).length - 1);
     }
 
     @Test

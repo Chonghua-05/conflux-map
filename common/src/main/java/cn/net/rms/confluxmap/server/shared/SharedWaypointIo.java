@@ -1,7 +1,9 @@
 package cn.net.rms.confluxmap.server.shared;
 
 import cn.net.rms.confluxmap.core.model.DimensionId;
+import cn.net.rms.confluxmap.core.net.shared.SharedWaypointProto;
 import cn.net.rms.confluxmap.core.shared.SharedWaypoint;
+import cn.net.rms.confluxmap.core.shared.SharedWaypointGroup;
 import cn.net.rms.confluxmap.core.waypoint.Waypoint;
 import com.google.gson.Gson;
 import com.google.gson.GsonBuilder;
@@ -31,10 +33,11 @@ import org.apache.logging.log4j.Logger;
  * Corrupt files are quarantined; future schemas are preserved and explicitly rejected.
  */
 public final class SharedWaypointIo implements SharedWaypointPersistence {
-    public static final int SCHEMA_VERSION = 2;
+    public static final int SCHEMA_VERSION = 3;
 
     private static final long MAX_FILE_BYTES = 8L * 1024L * 1024L;
     private static final int MAX_PERSISTED_WAYPOINTS = 512;
+    private static final int MAX_PERSISTED_GROUPS = SharedWaypointProto.MAX_SNAPSHOT_GROUPS;
     private static final int MAX_PUBLISHER_NAME_CODE_POINTS = 64;
     private static final Pattern DIMENSION_ID = Pattern.compile("[a-z0-9_.-]+:[a-z0-9/._-]+");
     private static final Gson GSON = new GsonBuilder().setPrettyPrinting().create();
@@ -57,6 +60,7 @@ public final class SharedWaypointIo implements SharedWaypointPersistence {
         long revision;
         String ownerInstanceId;
         List<Entry> waypoints;
+        List<GroupEntry> groups;
     }
 
     private static final class Entry {
@@ -72,6 +76,15 @@ public final class SharedWaypointIo implements SharedWaypointPersistence {
         String type;
         String iconItemId;
         String markerLabel;
+        long createdAtEpochMs;
+        long revision;
+        String groupId;
+    }
+
+    private static final class GroupEntry {
+        String id;
+        String creatorId;
+        String name;
         long createdAtEpochMs;
         long revision;
     }
@@ -208,10 +221,24 @@ public final class SharedWaypointIo implements SharedWaypointPersistence {
         if (shape.waypoints.size() > MAX_PERSISTED_WAYPOINTS) {
             throw new JsonParseException("too many persisted shared waypoints");
         }
+        final List<SharedWaypointGroup> groups = new ArrayList<>();
+        final Set<UUID> groupIds = new HashSet<>();
+        if (shape.groups != null) {
+            if (shape.groups.size() > MAX_PERSISTED_GROUPS) {
+                throw new JsonParseException("too many persisted shared waypoint groups");
+            }
+            for (final GroupEntry entry : shape.groups) {
+                final SharedWaypointGroup group = fromGroupEntry(entry, shape.revision);
+                if (!groupIds.add(group.id())) {
+                    throw new JsonParseException("duplicate shared waypoint group id " + group.id());
+                }
+                groups.add(group);
+            }
+        }
         final List<SharedWaypoint> waypoints = new ArrayList<>(shape.waypoints.size());
         final Set<UUID> ids = new HashSet<>();
         for (final Entry entry : shape.waypoints) {
-            final SharedWaypoint waypoint = fromEntry(entry, shape.revision);
+            final SharedWaypoint waypoint = fromEntry(entry, shape.revision, groupIds);
             if (!ids.add(waypoint.id())) {
                 throw new JsonParseException("duplicate shared waypoint id " + waypoint.id());
             }
@@ -220,10 +247,14 @@ public final class SharedWaypointIo implements SharedWaypointPersistence {
         if (shape.revision == 0 && !waypoints.isEmpty()) {
             throw new JsonParseException("revision zero cannot contain waypoints");
         }
-        return new SharedWaypointStore.Snapshot(shape.revision, waypoints);
+        return new SharedWaypointStore.Snapshot(shape.revision, waypoints, groups);
     }
 
-    private static SharedWaypoint fromEntry(final Entry entry, final long globalRevision) {
+    private static SharedWaypoint fromEntry(
+        final Entry entry,
+        final long globalRevision,
+        final Set<UUID> groupIds
+    ) {
         if (entry == null || entry.id == null || entry.publisherId == null || entry.publisherName == null
             || entry.name == null || entry.dimensionId == null || entry.type == null) {
             throw new JsonParseException("shared waypoint contains a missing field");
@@ -239,6 +270,15 @@ public final class SharedWaypointIo implements SharedWaypointPersistence {
             || entry.revision < 1 || entry.revision > globalRevision) {
             throw new JsonParseException("shared waypoint contains an invalid value");
         }
+        final UUID groupId;
+        try {
+            groupId = entry.groupId == null ? null : UUID.fromString(entry.groupId);
+        } catch (final IllegalArgumentException e) {
+            throw new JsonParseException("shared waypoint contains an invalid group id", e);
+        }
+        if (groupId != null && !groupIds.contains(groupId)) {
+            throw new JsonParseException("shared waypoint references an unknown group " + entry.groupId);
+        }
         try {
             return new SharedWaypoint(
                 UUID.fromString(entry.id), UUID.fromString(entry.publisherId), entry.publisherName, entry.name,
@@ -246,10 +286,32 @@ public final class SharedWaypointIo implements SharedWaypointPersistence {
                 Waypoint.Type.valueOf(entry.type),
                 entry.iconItemId == null ? "" : entry.iconItemId,
                 entry.markerLabel == null ? "" : entry.markerLabel,
-                entry.createdAtEpochMs, entry.revision
+                entry.createdAtEpochMs, entry.revision, groupId
             );
         } catch (final IllegalArgumentException e) {
             throw new JsonParseException("shared waypoint contains an invalid identifier or type", e);
+        }
+    }
+
+    private static SharedWaypointGroup fromGroupEntry(
+        final GroupEntry entry,
+        final long globalRevision
+    ) {
+        if (entry == null || entry.id == null || entry.creatorId == null || entry.name == null) {
+            throw new JsonParseException("shared waypoint group contains a missing field");
+        }
+        if (!SharedWaypointValidator.validName(entry.name)
+            || entry.createdAtEpochMs < 0
+            || entry.revision < 1 || entry.revision > globalRevision) {
+            throw new JsonParseException("shared waypoint group contains an invalid value");
+        }
+        try {
+            return new SharedWaypointGroup(
+                UUID.fromString(entry.id), UUID.fromString(entry.creatorId), entry.name,
+                entry.createdAtEpochMs, entry.revision
+            );
+        } catch (final IllegalArgumentException e) {
+            throw new JsonParseException("shared waypoint group contains an invalid identifier", e);
         }
     }
 
@@ -257,17 +319,28 @@ public final class SharedWaypointIo implements SharedWaypointPersistence {
         if (snapshot.waypoints().size() > MAX_PERSISTED_WAYPOINTS) {
             throw new IOException("refusing to persist more than " + MAX_PERSISTED_WAYPOINTS + " shared waypoints");
         }
+        if (snapshot.groups().size() > MAX_PERSISTED_GROUPS) {
+            throw new IOException("refusing to persist more than " + MAX_PERSISTED_GROUPS + " shared waypoint groups");
+        }
         final FileShape shape = new FileShape();
         shape.schemaVersion = SCHEMA_VERSION;
         shape.revision = snapshot.revision();
         shape.ownerInstanceId = ownerInstanceId;
         shape.waypoints = new ArrayList<>(snapshot.waypoints().size());
+        shape.groups = new ArrayList<>(snapshot.groups().size());
         final Set<UUID> ids = new HashSet<>();
         for (final SharedWaypoint waypoint : snapshot.waypoints()) {
             if (!ids.add(waypoint.id())) {
                 throw new IOException("duplicate shared waypoint id " + waypoint.id());
             }
             shape.waypoints.add(toEntry(waypoint, snapshot.revision()));
+        }
+        final Set<UUID> groupIds = new HashSet<>();
+        for (final SharedWaypointGroup group : snapshot.groups()) {
+            if (!groupIds.add(group.id())) {
+                throw new IOException("duplicate shared waypoint group id " + group.id());
+            }
+            shape.groups.add(toGroupEntry(group, snapshot.revision()));
         }
         return shape;
     }
@@ -299,6 +372,25 @@ public final class SharedWaypointIo implements SharedWaypointPersistence {
         entry.markerLabel = waypoint.markerLabel();
         entry.createdAtEpochMs = waypoint.createdAtEpochMs();
         entry.revision = waypoint.revision();
+        entry.groupId = waypoint.groupId() == null ? null : waypoint.groupId().toString();
+        return entry;
+    }
+
+    private static GroupEntry toGroupEntry(
+        final SharedWaypointGroup group,
+        final long globalRevision
+    ) throws IOException {
+        if (!SharedWaypointValidator.validName(group.name())
+            || group.createdAtEpochMs() < 0
+            || group.revision() < 1 || group.revision() > globalRevision) {
+            throw new IOException("refusing to persist an invalid shared waypoint group");
+        }
+        final GroupEntry entry = new GroupEntry();
+        entry.id = group.id().toString();
+        entry.creatorId = group.creatorId().toString();
+        entry.name = group.name();
+        entry.createdAtEpochMs = group.createdAtEpochMs();
+        entry.revision = group.revision();
         return entry;
     }
 

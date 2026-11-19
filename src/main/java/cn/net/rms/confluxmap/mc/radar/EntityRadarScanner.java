@@ -203,7 +203,8 @@ public final class EntityRadarScanner {
         }
 
         final RadarFilter filter = new RadarFilter(
-            config.radarShowPlayers, config.radarShowHostile, config.radarShowPassive, config.radarShowOther, config.radarMaxEntities
+            config.radarShowPlayers, config.radarShowHostile, config.radarShowPassive, config.radarShowOther,
+            config.radarMaxEntities, config.radarEntityTypeVisibility
         );
         return filter.apply(raw, ox, oz);
     }

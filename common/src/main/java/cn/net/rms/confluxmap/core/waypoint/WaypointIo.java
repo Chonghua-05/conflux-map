@@ -49,6 +49,7 @@ public final class WaypointIo {
 
     private static final class SetEntry {
         String name;
+        boolean collapsed;
     }
 
     /** On-disk shape of one waypoint. Field types are all Gson-trivial (String/primitive). */
@@ -105,8 +106,10 @@ public final class WaypointIo {
             final List<WaypointSet> sets = new ArrayList<>();
             if (shape.sets != null) {
                 for (final SetEntry entry : shape.sets) {
-                    if (entry != null && entry.name != null && !entry.name.isEmpty()) {
-                        sets.add(new WaypointSet(entry.name));
+                    // The default collection materializes as a set entry only while it
+                    // is folded (see saveChecked), so an empty name is meaningful there.
+                    if (entry != null && entry.name != null) {
+                        sets.add(new WaypointSet(entry.name, entry.collapsed));
                     }
                 }
             }
@@ -142,9 +145,13 @@ public final class WaypointIo {
         Files.createDirectories(file.getParent());
         final FileShape shape = new FileShape();
         for (final WaypointSet set : state.sets()) {
-            if (!set.isDefault()) {
+            // Custom collections always persist (empty ones included, so they survive
+            // reloads); the default collection persists only while folded, keeping the
+            // pre-collapse on-disk shape identical for everyone who never folds it.
+            if (!set.isDefault() || set.collapsed()) {
                 final SetEntry entry = new SetEntry();
                 entry.name = set.name();
+                entry.collapsed = set.collapsed();
                 shape.sets.add(entry);
             }
         }

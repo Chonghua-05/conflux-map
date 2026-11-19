@@ -2,6 +2,7 @@ package cn.net.rms.confluxmap.core.portal;
 
 import cn.net.rms.confluxmap.core.model.DimensionId;
 import java.util.ArrayList;
+import java.util.Iterator;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -27,9 +28,12 @@ public final class PortalRegistry {
 
     /**
      * Reconciles one chunk with a fresh scan result: markers of other chunks
-     * and dimensions are untouched, while this chunk's markers become exactly
-     * {@code found} (an empty list removes them all). Returns true when
-     * anything changed.
+     * are untouched, while this chunk's markers become exactly {@code found}
+     * (an empty list removes them all). A marker whose chunk, kind, and anchor
+     * all coincide with a freshly scanned one is treated as the same physical
+     * portal registered under the wrong dimension and is pruned; see
+     * {@link #pruneCrossDimensionDuplicates}. Returns true when anything
+     * changed.
      */
     public boolean applyChunkScan(
         final DimensionId dimension,
@@ -55,6 +59,7 @@ public final class PortalRegistry {
                 changed = true;
             }
         }
+        changed |= pruneCrossDimensionDuplicates(dimension, found);
         if (byChunk.isEmpty()) {
             markers.remove(dimension);
         }
@@ -134,5 +139,48 @@ public final class PortalRegistry {
             }
         }
         return null;
+    }
+
+    /**
+     * Removes markers in other dimensions whose chunk, kind, and anchor all
+     * coincide with a freshly scanned marker. That signature means one
+     * physical portal was registered twice, once under each dimension, which
+     * happened whenever a chunk arrived during a dimension-switch window and
+     * was attributed to the dimension the session had not left yet. A genuine
+     * portal in another dimension at the same coordinates would need the same
+     * first tracked block inside the same chunk of both dimensions, and even
+     * that coincidence would heal on the chunk's next visit.
+     */
+    private boolean pruneCrossDimensionDuplicates(
+        final DimensionId dimension,
+        final List<PortalMarker> found
+    ) {
+        if (found.isEmpty() || markers.size() <= 1) {
+            return false;
+        }
+        boolean changed = false;
+        for (final PortalMarker marker : found) {
+            final Iterator<Map.Entry<DimensionId, LinkedHashMap<ChunkKey, PortalMarker>>> it =
+                markers.entrySet().iterator();
+            while (it.hasNext()) {
+                final Map.Entry<DimensionId, LinkedHashMap<ChunkKey, PortalMarker>> entry = it.next();
+                if (entry.getKey().equals(dimension)) {
+                    continue;
+                }
+                final Map<ChunkKey, PortalMarker> byChunk = entry.getValue();
+                final PortalMarker duplicate = byChunk.get(key(marker));
+                if (duplicate == null
+                    || duplicate.anchorX() != marker.anchorX()
+                    || duplicate.anchorZ() != marker.anchorZ()) {
+                    continue;
+                }
+                byChunk.remove(key(marker));
+                if (byChunk.isEmpty()) {
+                    it.remove();
+                }
+                changed = true;
+            }
+        }
+        return changed;
     }
 }

@@ -1,5 +1,6 @@
 package cn.net.rms.confluxmap.core.predict;
 
+import cn.net.rms.confluxmap.core.color.OverlayVisibility;
 import cn.net.rms.confluxmap.core.color.ShadingPipeline;
 import cn.net.rms.confluxmap.core.color.MapColorStyle;
 import cn.net.rms.confluxmap.core.color.XaeroMapStyle;
@@ -252,6 +253,40 @@ public final class PredictedTileComposer {
         final int[] baselineMapColorOverride,
         final String[] flatTopMaterials
     ) {
+        return compose(
+            derived, grid, palette, corrections, viewMode, lod, baselineMapColorId,
+            correctionDerived, correctionGrid, correctionBaselineMapColorId,
+            applyAbsoluteHeight, ambientLightTint, syncedMaterials,
+            mapColorStyle, xaeroShadow, baselineMapColorOverride, flatTopMaterials,
+            Argb.TRANSPARENT
+        );
+    }
+
+    /**
+     * Full form with the configured paint for VOID columns, shared with the captured map so the
+     * scanned and predicted planes cannot seam where they meet. Transparent (the OFF preset)
+     * keeps the previous invisible-void behavior.
+     */
+    public static int[] compose(
+        final DerivedGrid derived,
+        final BaselineGrid grid,
+        final PredictionPalette palette,
+        final CorrectionTile corrections,
+        final PredictionViewMode viewMode,
+        final int lod,
+        final int baselineMapColorId,
+        final DerivedGrid correctionDerived,
+        final BaselineGrid correctionGrid,
+        final int correctionBaselineMapColorId,
+        final boolean applyAbsoluteHeight,
+        final int ambientLightTint,
+        final SyncedMaterialPalette syncedMaterials,
+        final MapColorStyle mapColorStyle,
+        final XaeroMapStyle.Shadow xaeroShadow,
+        final int[] baselineMapColorOverride,
+        final String[] flatTopMaterials,
+        final int voidColor
+    ) {
         final int size = BaselineGrid.PIXELS;
         final int[] out = new int[size * size];
         final int[] surface = derived.surfaceY.clone();
@@ -342,8 +377,12 @@ public final class PredictedTileComposer {
                     continue;
                 }
                 final SurfaceKind kind = SurfaceKind.byOrdinal(kinds[idx]);
-                if (kind == SurfaceKind.UNKNOWN || kind == SurfaceKind.VOID) {
+                if (kind == SurfaceKind.UNKNOWN) {
                     out[outIdx] = Argb.TRANSPARENT;
+                    continue;
+                }
+                if (kind == SurfaceKind.VOID) {
+                    out[outIdx] = voidColor;
                     continue;
                 }
 
@@ -377,19 +416,12 @@ public final class PredictedTileComposer {
                         surface[idx], ShadingPipeline.REFERENCE_HEIGHT
                     )
                     : 0.0;
-                final int composed = corrected[outIdx] || !grid.supersampled()
-                    ? baseColor(kind, biomes[idx], fluids[idx], palette, syncedMaterials,
-                        corrected[outIdx], colors[outIdx], floorColors[outIdx],
-                        effectiveBaseline(baselineMapColorId, baselineMapColorOverride, outIdx),
-                        floorReliefMultiplier, materials[outIdx], floorMaterials[outIdx],
-                        flatTopMaterial(flatTopMaterials, grid.blockX(x), grid.blockZ(z)),
-                        grid.blockX(x), grid.blockZ(z))
-                    : averagedSubColor(
-                        derived, grid, palette, idx,
-                        effectiveBaseline(baselineMapColorId, baselineMapColorOverride, outIdx),
-                        flatTopMaterial(flatTopMaterials, grid.blockX(x), grid.blockZ(z)),
-                        syncedMaterials, grid.blockX(x), grid.blockZ(z)
-                    );
+                final int composed = baseColor(kind, biomes[idx], fluids[idx], palette,
+                    syncedMaterials, corrected[outIdx], colors[outIdx], floorColors[outIdx],
+                    effectiveBaseline(baselineMapColorId, baselineMapColorOverride, outIdx),
+                    floorReliefMultiplier, materials[outIdx], floorMaterials[outIdx],
+                    flatTopMaterial(flatTopMaterials, grid.blockX(x), grid.blockZ(z)),
+                    grid.blockX(x), grid.blockZ(z));
                 final boolean synchronizedMaterial = syncedMaterials != null && (
                     corrected[outIdx] && syncedMaterials.contains(materials[outIdx])
                         || flatPaintsSyncedMaterial(
@@ -492,6 +524,12 @@ public final class PredictedTileComposer {
                 slopeSampleHeight(floorSurface, kinds, x - 1, z - 1),
                 blocksPerPixel, true, shadow
             );
+            // Xaero draws a transparent cover (glass) on water in its own style - measured
+            // against the real mod, flush and air-gap covers render identically - so water
+            // columns compose the overlay too, mirroring the capture decision in
+            // McChunkSnapshotFactory's water branch. The overlay slot still carries the
+            // top-most crossed block, which can be a torch standing on a glass bridge, so the
+            // same marker-hiding rule as the land branch below applies.
             final int waterTop = xaeroHidesOverlay(overlayMaterialId)
                 ? water
                 : applyOverlay(
@@ -554,14 +592,13 @@ public final class PredictedTileComposer {
         );
     }
 
-    /** Mirrors the client snapshot's {@code isXaeroInvisible}: torches and glass vanish from
-     *  the Xaero-style overlay, so that style shows the surface beneath them. */
+    /** The shared {@link OverlayVisibility} policy in Xaero style: the torch marker
+     *  family vanishes from the Xaero-style overlay, so that style shows the surface beneath
+     *  them, matching the client snapshot's own Xaero arrays. */
     private static boolean xaeroHidesOverlay(final String overlayMaterialId) {
-        if (overlayMaterialId == null || overlayMaterialId.isEmpty()) {
-            return false;
-        }
-        return overlayMaterialId.endsWith("torch") || overlayMaterialId.endsWith("glass")
-            || overlayMaterialId.endsWith("glass_pane");
+        return !OverlayVisibility.overlayVisible(
+            OverlayVisibility.categorize(overlayMaterialId), false, true
+        );
     }
 
     /** One column's colour before height shading and relief. */
@@ -634,49 +671,6 @@ public final class PredictedTileComposer {
             return palette.materialBaseColor(kind, MapColorTable.argb(baselineMapColorId));
         }
         return colorFor(kind, biomeId, palette);
-    }
-
-    /**
-     * Box-filters one pixel's biome sub-samples into a single colour, the same operator the
-     * captured map's {@code TileService.downsample} applies when it averages finer pixels into a
-     * coarse tile. This is what keeps a river narrower than one output pixel visible: it survives
-     * as a fraction of the blend instead of being hit or missed by a single point sample.
-     *
-     * <p>Sub-samples never carry corrections - a correction is authoritative for its exact pixel,
-     * so the caller routes corrected pixels through {@link #baseColor} instead.
-     */
-    private static int averagedSubColor(
-        final DerivedGrid derived,
-        final BaselineGrid grid,
-        final PredictionPalette palette,
-        final int idx,
-        final int baselineMapColorId,
-        final String flatTopMaterial,
-        final SyncedMaterialPalette syncedMaterials,
-        final int worldX,
-        final int worldZ
-    ) {
-        int a = 0;
-        int r = 0;
-        int g = 0;
-        int b = 0;
-        final int count = grid.subCount();
-        for (int sz = 0; sz < grid.subPerAxis; sz++) {
-            for (int sx = 0; sx < grid.subPerAxis; sx++) {
-                final int s = grid.subIndex(idx, sx, sz);
-                final int color = baseColor(
-                    SurfaceKind.byOrdinal(derived.subKind[s]), grid.subBiomeId[s],
-                    derived.subFluidDepth[s], palette, syncedMaterials, false,
-                    Proto.MAP_COLOR_NONE, MapPixel.MAP_COLOR_NONE,
-                    baselineMapColorId, 1.0, "", "", flatTopMaterial, worldX, worldZ
-                );
-                a += Argb.alpha(color);
-                r += Argb.red(color);
-                g += Argb.green(color);
-                b += Argb.blue(color);
-            }
-        }
-        return Argb.pack(a / count, r / count, g / count, b / count);
     }
 
     /**

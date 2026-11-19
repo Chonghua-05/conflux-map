@@ -6,7 +6,9 @@ import cn.net.rms.confluxmap.core.loadstate.FullscreenDisplayMode;
 import cn.net.rms.confluxmap.core.portal.PortalKind;
 import cn.net.rms.confluxmap.core.predict.PredictionViewMode;
 import cn.net.rms.confluxmap.core.survey.SurveyReminderSchedule;
+import cn.net.rms.confluxmap.core.util.Argb;
 import cn.net.rms.confluxmap.core.util.TileMath;
+import cn.net.rms.confluxmap.nativepredict.PredictionBackend;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.Map;
@@ -19,10 +21,14 @@ import java.util.UUID;
  * {@link #SCHEMA_VERSION} and adding a migration in {@link ConfigIo}.
  */
 public final class ConfluxConfig {
-    public static final int SCHEMA_VERSION = 11;
+    public static final int SCHEMA_VERSION = 13;
     public static final String DEFAULT_TELEPORT_COMMAND = "execute in {dimension} run tp @s {x} {y} {z}";
     public static final int DEFAULT_MINIMAP_SIZE = 90;
     public static final int MINIMAP_ZOOM_LEVEL_COUNT = 4;
+    public static final int MIN_MINIMAP_BACKGROUND_OPACITY = 0;
+    public static final int MAX_MINIMAP_BACKGROUND_OPACITY = 100;
+    /** Matches the historical hard-coded 0x80 backing plate alpha. */
+    public static final int DEFAULT_MINIMAP_BACKGROUND_OPACITY = 50;
     public static final int MIN_ANNOTATION_ERASER_SIZE = 4;
     public static final int MAX_ANNOTATION_ERASER_SIZE = 64;
     public static final int DEFAULT_ANNOTATION_ERASER_SIZE = 16;
@@ -62,6 +68,9 @@ public final class ConfluxConfig {
     public static final int MIN_PORTAL_ICON_SIZE = 8;
     public static final int MAX_PORTAL_ICON_SIZE = 32;
     public static final int DEFAULT_PORTAL_ICON_SIZE = 14;
+    public static final int MIN_WORKER_THREADS = 1;
+    public static final int MAX_WORKER_THREADS = 32;
+    public static final int DEFAULT_CUSTOM_WORKER_THREADS = 4;
     public static final int MIN_PORTAL_ICON_OPACITY = 0;
     public static final int MAX_PORTAL_ICON_OPACITY = 100;
     public static final int DEFAULT_PORTAL_ICON_OPACITY = 90;
@@ -87,6 +96,43 @@ public final class ConfluxConfig {
 
     public enum PlayerMarkerStyle { TRADITIONAL, MODERN }
 
+    public enum ControlStyle { AUTO, CONFLUX, VANILLA }
+
+    /**
+     * Map quality preset governing the slope (loadline) at which fullscreen and minimap views
+     * transition between LOD levels as scale increases.
+     * Scale <= 1.0 is strictly clamped to LOD 0 regardless of setting.
+     */
+    public enum MapQuality {
+        /*
+         * Tile limits are sized against the planar prediction cache: ~0.33 MB per cached tile
+         * (pure and low-LOD corrected alike), so the 1024-tile top tier pins ~340 MB. The one
+         * exception is a corrected LOD4 tile, whose chunk-granular revision plane grows with LOD
+         * to ~0.83 MB - a session caching nothing but those at ULTRA_QUALITY could reach ~850 MB.
+         */
+        ULTRA_PERFORMANCE(1.60, 64),
+        PERFORMANCE(1.30, 128),
+        BALANCED(1.00, 256),
+        QUALITY(0.75, 512),
+        ULTRA_QUALITY(0.55, 1024);
+
+        private final double slope;
+        private final int predictionTileCacheLimit;
+
+        MapQuality(final double slope, final int predictionTileCacheLimit) {
+            this.slope = slope;
+            this.predictionTileCacheLimit = predictionTileCacheLimit;
+        }
+
+        public double slope() {
+            return slope;
+        }
+
+        public int predictionTileCacheLimit() {
+            return predictionTileCacheLimit;
+        }
+    }
+
     public enum RadarDisplayMode { DOTS, PORTRAITS }
 
     /** Preset portal chunk-highlight fills; the alpha is baked in so a fill stays translucent. */
@@ -109,12 +155,51 @@ public final class ConfluxConfig {
     }
 
     /**
+     * Preset fills for scanned VOID columns (End island surroundings, void-world servers), so
+     * explored void reads differently from never-scanned (UNKNOWN) columns. Every non-OFF preset
+     * is fully opaque: LOD downsampling treats transparent as unexplored and excludes its RGB, so
+     * an opaque void color must stay opaque or composed void would darken terrain averages.
+     */
+    public enum VoidColumnColor {
+        OFF(Argb.TRANSPARENT),
+        DARK_INDIGO(0xFF2A1F45),
+        DARK_SLATE(0xFF1F2E33),
+        XAERO_VIOLET(0xFF0A0017);
+
+        private final int argb;
+
+        VoidColumnColor(final int argb) {
+            this.argb = argb;
+        }
+
+        public int argb() {
+            return argb;
+        }
+    }
+
+    /**
      * Manual layer override cycled by {@code key.confluxmap.cycle_layer}; see
      * {@code mc.world.LayerSelector} for how each dimension interprets these
      * (e.g. FORCE_UNDERGROUND means CAVE_AUTO in the Overworld and NETHER_CEILING
      * in the Nether, while FORCE_SLICE selects that dimension's configured fixed Y).
      */
     public enum LayerOverride { AUTO, FORCE_SURFACE, FORCE_UNDERGROUND, FORCE_SLICE }
+
+    /** Which tab the waypoint list opens on when summoned by the mod's own hotkey. */
+    public enum WaypointListTab { LOCAL, PUBLIC }
+
+    /** Which dimensions the waypoint list shows when summoned by the mod's own hotkey. */
+    public enum WaypointListDefaultDimension { CURRENT, ALL }
+
+    /**
+     * How the shared worker-pool size is chosen (see {@code core.task.WorkerThreadPolicy}).
+     * The pool serves every background pipeline of the mod, not just prediction, so the
+     * setting lives under the general performance group.
+     */
+    public enum WorkerThreadMode { AUTO, ALL_THREADS, CUSTOM }
+
+    /** Reveal duration tier for the interface transitions; names serialize verbatim. */
+    public enum UiTransitionSpeed { FAST, STANDARD, RELAXED }
 
     public boolean minimapEnabled = true;
     /** Legacy schema-v1 field. Null after migration and omitted from newly written JSON. */
@@ -131,6 +216,8 @@ public final class ConfluxConfig {
     public PlayerMarkerStyle playerMarkerStyle = PlayerMarkerStyle.MODERN;
     public int minimapSize = DEFAULT_MINIMAP_SIZE;
     public boolean minimapRotate = true;
+    /** Backing plate opacity percentage under the minimap tiles; the plate RGB stays fixed. */
+    public int minimapBackgroundOpacity = DEFAULT_MINIMAP_BACKGROUND_OPACITY;
     public int minimapZoomIndex = 1;
     public boolean showCoordinates = true;
     public boolean showBiome = true;
@@ -145,6 +232,10 @@ public final class ConfluxConfig {
     public int playerTrailDotSize = DEFAULT_PLAYER_TRAIL_DOT_SIZE;
     /** Fullscreen map only: subtle chunk-border grid with a highlight on the hovered chunk. */
     public boolean fullmapChunkGrid = true;
+    /** Fullscreen map only: chunk-grid line opacity in percent; 25 reproduces the old 0x40 alpha. */
+    public int fullmapChunkGridOpacity = 25;
+    public static final int MIN_FULLMAP_CHUNK_GRID_OPACITY = 0;
+    public static final int MAX_FULLMAP_CHUNK_GRID_OPACITY = 100;
     /** Copy the private annotation layer onto the minimap HUD. Fullscreen annotations remain visible. */
     public boolean annotationsOnHud = true;
     /** Fullscreen annotation eraser diameter in screen pixels. */
@@ -167,11 +258,27 @@ public final class ConfluxConfig {
      * layers always keep their baked light). Off = exactly today's fixed-brightness rendering.
      */
     public boolean dynamicLighting = true;
+    /** Shade Nether ceiling bedrock brightness based on 1–5 layer column thickness. Off = uniform bedrock color. */
+    public boolean showNetherCeilingBedrockThickness = true;
     /** Keeps the historical Conflux renderer by default; XAERO is an explicit presentation choice. */
     public MapColorStyle mapColorStyle = MapColorStyle.CONFLUX;
+    /** Paint for scanned VOID columns; OFF keeps them transparent like unexplored ones. */
+    public VoidColumnColor voidColumnColor = VoidColumnColor.DARK_INDIGO;
+    /** Map quality level controlling LOD scale transition points. */
+    public MapQuality mapQuality = MapQuality.BALANCED;
 
+    /** Visible-capture target per tick; scales the synchronous sampling window (CaptureTickBudget). */
     public int snapshotBudgetPerTick = 8;
+    /** Tick window during which packet-driven marks on a just-captured chunk are deferred; 0 disables. */
+    public int recaptureHoldoffTicks = 10;
     public int gpuTileCacheLimit = 256;
+    /**
+     * Shared worker-pool sizing mode; applied when the client services start, so a
+     * change takes effect on the next game launch.
+     */
+    public WorkerThreadMode workerThreadMode = WorkerThreadMode.AUTO;
+    /** Worker-pool size used while {@link #workerThreadMode} is {@link WorkerThreadMode#CUSTOM}. */
+    public int workerThreadCount = DEFAULT_CUSTOM_WORKER_THREADS;
 
     /** Master toggle for the whole entity-radar overlay (docs/reference-specs/radar-icons.md sec 4). */
     public boolean radarEnabled = true;
@@ -183,6 +290,13 @@ public final class ConfluxConfig {
     public boolean radarShowPassive = true;
     /** Dropped items, vehicles, projectiles, and defensive fallback targets. */
     public boolean radarShowOther = true;
+    /**
+     * Per-entity-type visibility overrides for the entity radar, keyed by registry id
+     * (e.g. {@code minecraft:creeper}). An absent key follows the category toggles
+     * above; {@code true}/{@code false} force that type shown/hidden regardless of
+     * its category toggle. The player type is managed by {@link #radarShowPlayers}.
+     */
+    public Map<String, Boolean> radarEntityTypeVisibility = new LinkedHashMap<>();
     public boolean radarShowPlayerNames = true;
     /**
      * Show player name labels on the minimap without holding the player-list key. The
@@ -205,6 +319,8 @@ public final class ConfluxConfig {
     public int waypointRenderDistance = DEFAULT_WAYPOINT_RENDER_DISTANCE;
     /** Show private, client-owned waypoints on every map/world rendering surface. */
     public boolean localWaypointsVisible = true;
+    /** In singleplayer, scan unexplored map regions straight from the save's .mca files. */
+    public boolean mcaBackfillEnabled = true;
     /** Show server-synchronized public waypoints on every map/world rendering surface. */
     public boolean sharedWaypointsVisible = true;
     /** Public waypoint IDs allowed to render from the portal-linked dimension on this client. */
@@ -215,6 +331,10 @@ public final class ConfluxConfig {
      * cross-dimension allowlist because the override is the same kind of viewer preference.
      */
     public Map<String, Double> sharedWaypointCrossDimensionYById = new LinkedHashMap<>();
+    /** Public waypoint ids this player hid with the list's eye toggle; purely client-side. */
+    public Set<String> hiddenSharedWaypointIds = new LinkedHashSet<>();
+    /** Public group ids (plus the empty ungrouped key) this player folded in the list. */
+    public Set<String> collapsedSharedWaypointGroupIds = new LinkedHashSet<>();
     /**
      * Show this world's seed-sibling sub-world waypoints on every rendering surface. Siblings are
      * other world namespaces under the same server address whose observed hashed seed matches; the
@@ -242,6 +362,12 @@ public final class ConfluxConfig {
     public boolean highlightCrossDimensionVisible = true;
     /** Command template used by the fullscreen map's teleport action. */
     public String teleportCommand = DEFAULT_TELEPORT_COMMAND;
+    /** Close the fullscreen map after its teleport action sends the command. */
+    public boolean teleportCloseMap;
+    /** Which tab the waypoint list opens on when summoned by the mod's own hotkey. */
+    public WaypointListTab waypointListDefaultTab = WaypointListTab.LOCAL;
+    /** Which dimensions the waypoint list shows when summoned by the mod's own hotkey. */
+    public WaypointListDefaultDimension waypointListDefaultDimension = WaypointListDefaultDimension.CURRENT;
     /**
      * Apparent size of the in-world waypoint label, as a percentage of the distance-compensated
      * default. Scales the icon plate, background panel, and both text lines together.
@@ -272,6 +398,12 @@ public final class ConfluxConfig {
     /** Master toggle for the seed-predicted fullscreen-map underlay. */
     public boolean predictionEnabled = true;
     /**
+     * Engine for the predicted underlay: GPU uses the OpenCL executor when the machine has a
+     * working device and silently serves the CPU reference otherwise; CPU never touches the
+     * GPU. Both backends produce the same baseline, so residual patches remain compatible.
+     */
+    public PredictionBackend predictionBackend = PredictionBackend.GPU;
+    /**
      * Client-side opt-out for the companion handshake / correction sync. When false the client
      * skips HELLO_C2S and never sends MAP_VIEW_REQ; the predicted underlay still works in
      * singleplayer. S5's request planner reads this flag; S3 only adds it so the config schema
@@ -299,6 +431,13 @@ public final class ConfluxConfig {
     /** Startup GitHub release probe; drives the chat notice and the fullscreen-map badge. */
     public boolean updateCheckEnabled = true;
 
+    /** Fade-and-scale reveal when the mod's own screens and popups open. */
+    public boolean uiTransitionsEnabled = true;
+    /** Reveal duration tier for {@link #uiTransitionsEnabled}. */
+    public UiTransitionSpeed uiTransitionSpeed = UiTransitionSpeed.STANDARD;
+    /** Visual skin for screen buttons and toolbar controls. */
+    public ControlStyle controlStyle = ControlStyle.AUTO;
+
     /** Permanent local opt-out for the unsupported-platform startup warning. */
     public boolean unsupportedPlatformWarningDismissed;
 
@@ -321,6 +460,7 @@ public final class ConfluxConfig {
         c.playerMarkerStyle = playerMarkerStyle;
         c.minimapSize = minimapSize;
         c.minimapRotate = minimapRotate;
+        c.minimapBackgroundOpacity = minimapBackgroundOpacity;
         c.minimapZoomIndex = minimapZoomIndex;
         c.showCoordinates = showCoordinates;
         c.showBiome = showBiome;
@@ -328,6 +468,7 @@ public final class ConfluxConfig {
         c.playerTrailDurationSeconds = playerTrailDurationSeconds;
         c.playerTrailDotSize = playerTrailDotSize;
         c.fullmapChunkGrid = fullmapChunkGrid;
+        c.fullmapChunkGridOpacity = fullmapChunkGridOpacity;
         c.annotationsOnHud = annotationsOnHud;
         c.annotationEraserSize = annotationEraserSize;
         c.fullscreenDisplayMode = fullscreenDisplayMode;
@@ -337,9 +478,15 @@ public final class ConfluxConfig {
         c.caveSliceY = caveSliceY;
         c.netherSliceY = netherSliceY;
         c.dynamicLighting = dynamicLighting;
+        c.showNetherCeilingBedrockThickness = showNetherCeilingBedrockThickness;
         c.mapColorStyle = mapColorStyle;
+        c.voidColumnColor = voidColumnColor;
+        c.mapQuality = mapQuality;
         c.snapshotBudgetPerTick = snapshotBudgetPerTick;
+        c.recaptureHoldoffTicks = recaptureHoldoffTicks;
         c.gpuTileCacheLimit = gpuTileCacheLimit;
+        c.workerThreadMode = workerThreadMode;
+        c.workerThreadCount = workerThreadCount;
         c.portalMarkersEnabled = portalMarkersEnabled;
         c.portalIconsEnabled = portalIconsEnabled;
         c.portalIconTextureNether = portalIconTextureNether;
@@ -365,6 +512,7 @@ public final class ConfluxConfig {
         c.radarPlayerHighlightGhostSeconds = radarPlayerHighlightGhostSeconds;
         c.waypointRenderDistance = waypointRenderDistance;
         c.localWaypointsVisible = localWaypointsVisible;
+        c.mcaBackfillEnabled = mcaBackfillEnabled;
         c.sharedWaypointsVisible = sharedWaypointsVisible;
         c.sharedWaypointCrossDimensionVisibleIds =
             sharedWaypointCrossDimensionVisibleIds == null
@@ -374,6 +522,15 @@ public final class ConfluxConfig {
             sharedWaypointCrossDimensionYById == null
                 ? new LinkedHashMap<>()
                 : new LinkedHashMap<>(sharedWaypointCrossDimensionYById);
+        c.radarEntityTypeVisibility = radarEntityTypeVisibility == null
+            ? new LinkedHashMap<>()
+            : new LinkedHashMap<>(radarEntityTypeVisibility);
+        c.hiddenSharedWaypointIds = hiddenSharedWaypointIds == null
+            ? new LinkedHashSet<>()
+            : new LinkedHashSet<>(hiddenSharedWaypointIds);
+        c.collapsedSharedWaypointGroupIds = collapsedSharedWaypointGroupIds == null
+            ? new LinkedHashSet<>()
+            : new LinkedHashSet<>(collapsedSharedWaypointGroupIds);
         c.crossWorldWaypointsVisible = crossWorldWaypointsVisible;
         c.crossWorldSeedObservations = crossWorldSeedObservations == null
             ? new CrossWorldSeedObservations()
@@ -386,8 +543,12 @@ public final class ConfluxConfig {
         c.waypointHighlightDimOpacity = waypointHighlightDimOpacity;
         c.highlightCrossDimensionVisible = highlightCrossDimensionVisible;
         c.teleportCommand = teleportCommand;
+        c.teleportCloseMap = teleportCloseMap;
+        c.waypointListDefaultTab = waypointListDefaultTab;
+        c.waypointListDefaultDimension = waypointListDefaultDimension;
         c.waypointLabelScalePercent = waypointLabelScalePercent;
         c.predictionEnabled = predictionEnabled;
+        c.predictionBackend = predictionBackend;
         c.predictionNetworkSync = predictionNetworkSync;
         c.predictionViewMode = predictionViewMode;
         c.predictionShowStructures = predictionShowStructures;
@@ -400,6 +561,9 @@ public final class ConfluxConfig {
             : predictionManualSeeds.copy();
         c.predictionDebounceMs = predictionDebounceMs;
         c.updateCheckEnabled = updateCheckEnabled;
+        c.uiTransitionsEnabled = uiTransitionsEnabled;
+        c.uiTransitionSpeed = uiTransitionSpeed;
+        c.controlStyle = controlStyle;
         c.unsupportedPlatformWarningDismissed = unsupportedPlatformWarningDismissed;
         c.surveyReminderGameOpenMillis = surveyReminderGameOpenMillis;
         c.surveyReminderNextPromptAtMillis = surveyReminderNextPromptAtMillis;
@@ -446,6 +610,38 @@ public final class ConfluxConfig {
         }
     }
 
+    /** True when this player hid the public waypoint with the list's eye toggle. */
+    public boolean isHiddenSharedWaypoint(final UUID waypointId) {
+        return waypointId != null && hiddenSharedWaypointIds.contains(waypointId.toString());
+    }
+
+    public void setHiddenSharedWaypoint(final UUID waypointId, final boolean hidden) {
+        if (waypointId == null) {
+            return;
+        }
+        if (hidden) {
+            hiddenSharedWaypointIds.add(waypointId.toString());
+        } else {
+            hiddenSharedWaypointIds.remove(waypointId.toString());
+        }
+    }
+
+    /** True when this player folded the public group; the empty key is the ungrouped bucket. */
+    public boolean isSharedWaypointGroupCollapsed(final String groupKey) {
+        return groupKey != null && collapsedSharedWaypointGroupIds.contains(groupKey);
+    }
+
+    public void setSharedWaypointGroupCollapsed(final String groupKey, final boolean collapsed) {
+        if (groupKey == null) {
+            return;
+        }
+        if (collapsed) {
+            collapsedSharedWaypointGroupIds.add(groupKey);
+        } else {
+            collapsedSharedWaypointGroupIds.remove(groupKey);
+        }
+    }
+
     /** Advances to the next minimap zoom level, wrapping after the final level. */
     public void cycleMinimapZoom() {
         minimapZoomIndex = (minimapZoomIndex + 1) % MINIMAP_ZOOM_LEVEL_COUNT;
@@ -487,8 +683,17 @@ public final class ConfluxConfig {
         if (playerMarkerStyle == null) {
             playerMarkerStyle = PlayerMarkerStyle.MODERN;
         }
+        if (controlStyle == null) {
+            controlStyle = ControlStyle.AUTO;
+        }
         if (layerOverride == null) {
             layerOverride = LayerOverride.AUTO;
+        }
+        if (waypointListDefaultTab == null) {
+            waypointListDefaultTab = WaypointListTab.LOCAL;
+        }
+        if (waypointListDefaultDimension == null) {
+            waypointListDefaultDimension = WaypointListDefaultDimension.CURRENT;
         }
         if (fullscreenDisplayMode == null) {
             fullscreenDisplayMode = FullscreenDisplayMode.TERRAIN;
@@ -499,8 +704,14 @@ public final class ConfluxConfig {
         if (mapColorStyle == null) {
             mapColorStyle = MapColorStyle.CONFLUX;
         }
+        if (mapQuality == null) {
+            mapQuality = MapQuality.BALANCED;
+        }
         if (radarDisplayMode == null) {
             radarDisplayMode = RadarDisplayMode.PORTRAITS;
+        }
+        if (predictionBackend == null) {
+            predictionBackend = PredictionBackend.GPU;
         }
         if (sharedWaypointCrossDimensionVisibleIds == null) {
             sharedWaypointCrossDimensionVisibleIds = new LinkedHashSet<>();
@@ -508,6 +719,12 @@ public final class ConfluxConfig {
         if (sharedWaypointCrossDimensionYById == null) {
             sharedWaypointCrossDimensionYById = new LinkedHashMap<>();
         }
+        if (radarEntityTypeVisibility == null) {
+            radarEntityTypeVisibility = new LinkedHashMap<>();
+        }
+        radarEntityTypeVisibility.entrySet().removeIf(
+            e -> e.getKey() == null || e.getValue() == null
+        );
         sharedWaypointCrossDimensionYById.values().removeIf(
             y -> y == null || !Double.isFinite(y)
         );
@@ -526,6 +743,9 @@ public final class ConfluxConfig {
         }
         minimapSize = clamp(minimapSize, 64, 256);
         minimapZoomIndex = clamp(minimapZoomIndex, 0, MINIMAP_ZOOM_LEVEL_COUNT - 1);
+        minimapBackgroundOpacity = clamp(
+            minimapBackgroundOpacity, MIN_MINIMAP_BACKGROUND_OPACITY, MAX_MINIMAP_BACKGROUND_OPACITY
+        );
         playerTrailDurationSeconds = clamp(
             playerTrailDurationSeconds,
             MIN_PLAYER_TRAIL_DURATION_SECONDS,
@@ -542,7 +762,12 @@ public final class ConfluxConfig {
         caveSliceY = clamp(caveSliceY, 0, 255);
         netherSliceY = clamp(netherSliceY, 0, 127);
         snapshotBudgetPerTick = clamp(snapshotBudgetPerTick, 1, 64);
+        recaptureHoldoffTicks = clamp(recaptureHoldoffTicks, 0, 100);
         gpuTileCacheLimit = clamp(gpuTileCacheLimit, 16, 2048);
+        if (workerThreadMode == null) {
+            workerThreadMode = WorkerThreadMode.AUTO;
+        }
+        workerThreadCount = clamp(workerThreadCount, MIN_WORKER_THREADS, MAX_WORKER_THREADS);
         radarMaxEntities = clamp(radarMaxEntities, 1, 500);
         radarIconSize = clamp(radarIconSize, MIN_RADAR_ICON_SIZE, MAX_RADAR_ICON_SIZE);
         radarIconOutlineThickness = clamp(
@@ -586,6 +811,11 @@ public final class ConfluxConfig {
         );
         if (portalHighlightColor == null) {
             portalHighlightColor = PortalHighlightColor.PURPLE;
+        }
+        fullmapChunkGridOpacity = Math.max(
+            MIN_FULLMAP_CHUNK_GRID_OPACITY, Math.min(MAX_FULLMAP_CHUNK_GRID_OPACITY, fullmapChunkGridOpacity));
+        if (voidColumnColor == null) {
+            voidColumnColor = VoidColumnColor.DARK_INDIGO;
         }
         portalIconTextureNether = normalizeIconTexture(portalIconTextureNether);
         portalIconTextureEnd = normalizeIconTexture(portalIconTextureEnd);
@@ -631,6 +861,9 @@ public final class ConfluxConfig {
             crossWorldSeedObservations.normalize();
         }
         predictionDebounceMs = clamp(predictionDebounceMs, 100, 2000);
+        if (uiTransitionSpeed == null) {
+            uiTransitionSpeed = UiTransitionSpeed.STANDARD;
+        }
         surveyReminderGameOpenMillis = Math.max(0L, surveyReminderGameOpenMillis);
         if (surveyReminderNextPromptAtMillis <= 0L) {
             surveyReminderNextPromptAtMillis = SurveyReminderSchedule.FIRST_DELAY_MILLIS;

@@ -21,6 +21,18 @@
 #define CFX_WEB_SURFACE_WATER 1
 #define CFX_WEB_SURFACE_VOID 2
 #define CFX_WEB_OVERVIEW_ITERATIONS 2
+#define CFX_WEB_OVERVIEW_INTERPOLATION_MIN (CFX_WEB_WATER_LEVEL + 18)
+#define CFX_WEB_OVERVIEW_INTERPOLATION_MAX_WATER (CFX_WEB_WATER_LEVEL - 6)
+#define CFX_WEB_OVERVIEW_BIOME_GATE (CFX_WEB_WATER_LEVEL + 2)
+#define CFX_WEB_DETAIL_MIN_STRIDE 4
+#define CFX_WEB_JAGGED_KEEP_OCTAVES 4
+/* Waterline protection bands (mirror of CFX_WATERLINE_* in native/shim/confluxnative.c):
+ * CFX_WEB_WATERLINE_ROUND_* guards double->int rounding near sea level, CFX_WEB_WATERLINE_CELL_*
+ * is the integer relief band that forces exact point solves in the adaptive macro grid. */
+#define CFX_WEB_WATERLINE_ROUND_LO 60.5
+#define CFX_WEB_WATERLINE_ROUND_HI 65.5
+#define CFX_WEB_WATERLINE_CELL_LO 61
+#define CFX_WEB_WATERLINE_CELL_HI 65
 #define CFX_WEB_CANOPY_SALT UINT64_C(0x27220A5FA9A9A797)
 #define CFX_WEB_CLEARING_SALT UINT64_C(0x6A09E667F3BCC909)
 #define CFX_WEB_HEIGHT_SALT UINT64_C(0xBB67AE8584CAA73B)
@@ -35,9 +47,6 @@ static int biomeData[CFX_WEB_GRID_CELLS];
 static int heightData[CFX_WEB_GRID_CELLS];
 static int surfaceData[CFX_WEB_GRID_CELLS];
 static int canopyData[CFX_WEB_GRID_CELLS];
-static int subBiomeData[CFX_WEB_GRID_CELLS * 4];
-static int subSurfaceData[CFX_WEB_GRID_CELLS * 4];
-static int subCanopyData[CFX_WEB_GRID_CELLS * 4];
 static uint64_t worldSeed;
 static int ready;
 
@@ -197,102 +206,109 @@ static void cfxWebGenerateCanopy(int blockX, int blockZ, int lod)
         }
 }
 
-static int cfxWebGenerateSubSamples(int blockX, int blockZ, int lod)
+/*
+ * Per-pixel biome cell loop, mirroring LodSampling.runSubBiomeCells with one
+ * sample per pixel: cells of 2x2 output pixels partition the whole sweep, corner
+ * anchors from the odd-pixel biome lattice. A cell whose four corner biomes
+ * agree copies that biome across its pixels, but only when none of the cell's
+ * own four pixel heights sits in the one-block band where the fluid
+ * classification reads the biome id (height == WATER_LEVEL - 1: below it water
+ * is height-decided, at/above sea level land is - so shores, shelves and river
+ * beds keep exact samples). A deep-water cell - every corner a water biome,
+ * every pixel under that band - copies any corner too: all water biomes render
+ * with the same tint and the height alone classifies the column. Every other
+ * cell solves its pixels exactly, each with its own pixel's height -
+ * value-for-value what a dense sweep returns.
+ */
+static inline int cfxWebWaterFreezeClass(int biomeId) {
+    if (biomeId == 10 || biomeId == 11) return 1;
+    if (biomeId == 50) return 2;
+    return 0;
+}
+
+static void cfxWebRunSubBiomeCells(
+    int blockX, int blockZ, int lod,
+    const int *anchorBiomes, int anchorsW
+)
 {
-    memset(subBiomeData, 0, sizeof(subBiomeData));
-    memset(subSurfaceData, 0, sizeof(subSurfaceData));
-    memset(subCanopyData, 0, sizeof(subCanopyData));
-    if (lod < 3 || dimension == DIM_END)
-        return CFX_WEB_OK;
     const int blockStride = 1 << lod;
-    const int subStride = blockStride / 2;
     const int originX = blockX - blockStride;
     const int originZ = blockZ - blockStride;
-
-    if (dimension == DIM_OVERWORLD && mc >= MC_1_18)
-    {
-        int z, x, subZ, subX;
-        for (z = 0; z < CFX_WEB_GRID_SIZE; z++)
-            for (x = 0; x < CFX_WEB_GRID_SIZE; x++)
+    const int cells = CFX_WEB_GRID_SIZE / 2;
+    int cz, cx;
+    for (cz = 0; cz < cells; cz++)
+        for (cx = 0; cx < cells; cx++)
+        {
+            const int corner = anchorBiomes[cz*anchorsW+cx];
+            int copyable;
+            if (corner == anchorBiomes[cz*anchorsW+cx+1]
+                && corner == anchorBiomes[(cz+1)*anchorsW+cx]
+                && corner == anchorBiomes[(cz+1)*anchorsW+cx+1])
             {
-                const int index = z*CFX_WEB_GRID_SIZE+x;
-                const int y = heightData[index] < CFX_WEB_WATER_LEVEL
-                    ? CFX_WEB_WATER_LEVEL : heightData[index];
-                for (subZ = 0; subZ < 2; subZ++)
-                    for (subX = 0; subX < 2; subX++)
+                copyable = 1;
+                int j, i;
+                for (j = 0; j < 2 && copyable; j++)
+                    for (i = 0; i < 2; i++)
+                        if (heightData[(cz*2+j)*CFX_WEB_GRID_SIZE + cx*2+i]
+                            == CFX_WEB_WATER_LEVEL - 1)
+                        {
+                            copyable = 0;
+                            break;
+                        }
+            }
+            else
+            {
+                const int b10 = anchorBiomes[cz*anchorsW+cx+1];
+                const int b01 = anchorBiomes[(cz+1)*anchorsW+cx];
+                const int b11 = anchorBiomes[(cz+1)*anchorsW+cx+1];
+                copyable = cfxWebIsWaterBiome(corner)
+                    && cfxWebIsWaterBiome(b10)
+                    && cfxWebIsWaterBiome(b01)
+                    && cfxWebIsWaterBiome(b11)
+                    && (cfxWebWaterFreezeClass(corner) == cfxWebWaterFreezeClass(b10))
+                    && (cfxWebWaterFreezeClass(corner) == cfxWebWaterFreezeClass(b01))
+                    && (cfxWebWaterFreezeClass(corner) == cfxWebWaterFreezeClass(b11));
+                if (copyable)
+                {
+                    int j, i;
+                    for (j = 0; j < 2 && copyable; j++)
+                        for (i = 0; i < 2; i++)
+                            if (heightData[(cz*2+j)*CFX_WEB_GRID_SIZE + cx*2+i]
+                                >= CFX_WEB_WATER_LEVEL - 1)
+                            {
+                                copyable = 0;
+                                break;
+                            }
+                }
+            }
+            if (copyable)
+            {
+                int z, x;
+                for (z = 0; z < 2; z++)
+                    for (x = 0; x < 2; x++)
+                        biomeData[(cz*2+z)*CFX_WEB_GRID_SIZE + cx*2+x] = corner;
+                continue;
+            }
+            {
+                int z, x;
+                for (z = 0; z < 2; z++)
+                    for (x = 0; x < 2; x++)
                     {
+                        const int index = (cz*2+z)*CFX_WEB_GRID_SIZE + cx*2+x;
+                        const int height = heightData[index];
+                        const int y = height < CFX_WEB_WATER_LEVEL
+                            ? CFX_WEB_WATER_LEVEL : height;
                         int x4, y4, z4;
-                        const int sampleX = originX + x*blockStride + subX*subStride;
-                        const int sampleZ = originZ + z*blockStride + subZ*subStride;
                         voronoiAccess3D(
-                            generator.sha, sampleX, y, sampleZ, &x4, &y4, &z4
+                            generator.sha, originX + (cx*2+x)*blockStride,
+                            y, originZ + (cz*2+z)*blockStride, &x4, &y4, &z4
                         );
-                        subBiomeData[index*4+subZ*2+subX] = sampleBiomeNoise(
+                        biomeData[index] = sampleBiomeNoise(
                             &generator.bn, NULL, x4, y4, z4, NULL, 0
                         );
                     }
             }
-    }
-    else
-    {
-        const int width = CFX_WEB_GRID_SIZE * 2;
-        const int scale = subStride < 4 ? 1 : 4;
-        int *raw = malloc(sizeof(int) * (size_t) width * width);
-        if (raw == NULL)
-            return CFX_WEB_ALLOC;
-        const int err = cfxWebGenerateBiomesStrided(
-            scale, floordiv(originX, scale), floordiv(originZ, scale),
-            width, width, subStride / scale, raw
-        );
-        if (err != CFX_WEB_OK)
-        {
-            free(raw);
-            return err;
         }
-        int z, x, subZ, subX;
-        for (z = 0; z < CFX_WEB_GRID_SIZE; z++)
-            for (x = 0; x < CFX_WEB_GRID_SIZE; x++)
-            {
-                const int index = z*CFX_WEB_GRID_SIZE+x;
-                for (subZ = 0; subZ < 2; subZ++)
-                    for (subX = 0; subX < 2; subX++)
-                        subBiomeData[index*4+subZ*2+subX] =
-                            raw[(z*2+subZ)*width+x*2+subX];
-            }
-        free(raw);
-    }
-
-    int index, sample;
-    for (index = 0; index < CFX_WEB_GRID_CELLS; index++)
-        for (sample = 0; sample < 4; sample++)
-        {
-            const int output = index*4+sample;
-            const int biome = subBiomeData[output];
-            const int water = dimension == DIM_OVERWORLD
-                && heightData[index] < CFX_WEB_WATER_LEVEL
-                && (heightData[index] < CFX_WEB_WATER_LEVEL - 1
-                    || cfxWebIsWaterBiome(biome));
-            int depth = water ? CFX_WEB_WATER_LEVEL - heightData[index] : 0;
-            if (depth < 0) depth = 0;
-            if (depth > 255) depth = 255;
-            subSurfaceData[output] = (water ? CFX_WEB_SURFACE_WATER : 0)
-                | (depth << 8);
-            const double treeCover = cfxWebTreeCover(biome);
-            if (water || biome == 10 || biome == 11 || biome == 50
-                || treeCover <= 0.0)
-                continue;
-            const int pixelX = index % CFX_WEB_GRID_SIZE;
-            const int pixelZ = index / CFX_WEB_GRID_SIZE;
-            const int subX = sample & 1;
-            const int subZ = sample >> 1;
-            subCanopyData[output] = cfxWebCanopyBump(
-                worldSeed,
-                originX + pixelX*blockStride + subX*subStride,
-                originZ + pixelZ*blockStride + subZ*subStride,
-                lod, treeCover
-            );
-        }
-    return CFX_WEB_OK;
 }
 
 static int cfxWebGenerateBiomesStrided(
@@ -308,10 +324,20 @@ static int cfxWebGenerateBiomesStrided(
 
     if (scale == 1)
     {
-        if (rawWidth64 * rawHeight64 > (1 << 20))
+        /* The final Voronoi layer is not query-shape invariant: cubiomes derives
+         * the Voronoi source plane with a "-2 then floor" origin, which for
+         * origins at 2 or 3 mod 4 omits the west/north neighbour cells, so cells
+         * near a query boundary can resolve to the wrong biome in patches. Query
+         * a two-cell margin on every side and read only the interior (mirrors
+         * the JNI shim's cfxGenerateBiomesStrided). */
+        const int margin = 8;
+        const int64_t denseWidth64 = rawWidth64 + 2*margin;
+        const int64_t denseHeight64 = rawHeight64 + 2*margin;
+        if (denseWidth64 * denseHeight64 > (1 << 20))
             return CFX_WEB_BAD_ARGS;
-        const int rawHeight = (int) rawHeight64;
-        Range range = {scale, x, z, rawWidth, rawHeight, 0, 1};
+        const int denseWidth = (int) denseWidth64;
+        const int denseHeight = (int) denseHeight64;
+        Range range = {scale, x - margin, z - margin, denseWidth, denseHeight, 0, 1};
         int *dense = allocCache(&generator, range);
         if (dense == NULL)
             return CFX_WEB_ALLOC;
@@ -326,30 +352,48 @@ static int cfxWebGenerateBiomesStrided(
         int j, i;
         for (j = 0; j < h; j++)
             for (i = 0; i < w; i++)
-                sampled[j*w+i] = dense[(j*stride)*rawWidth + i*stride];
+                sampled[j*w+i] =
+                    dense[(j*stride + margin)*denseWidth + (i*stride + margin)];
         free(dense);
         return CFX_WEB_OK;
     }
 
-    int j;
-    for (j = 0; j < h; j++)
+    /* Scales above the Voronoi zoom are pure zoom/island layer output, which
+     * is query-shape invariant, so the sample rows can share one dense 2D
+     * generation instead of re-running the whole layer stack per row (mirrors
+     * the JNI shim's cfxGenerateBiomesStrided). For a 258x258 LOD4 tile the
+     * per-row form issues 258 full stack traversals over a 1029-cell span;
+     * banded dense generation covers the same cells with bit-identical values
+     * and caps each band at 1M cells. */
+    const int64_t unitsBudget = (int64_t) (1 << 20) / rawWidth64;
+    const int64_t bandRows = (unitsBudget - 1) / stride + 1;
+    int j0 = 0;
+    while (j0 < h)
     {
-        Range range = {scale, x, z + j*stride, rawWidth, 1, 0, 1};
+        const int rows = (int64_t) (h - j0) < bandRows ? h - j0 : (int) bandRows;
+        const int bandUnitsH = (rows - 1) * stride + 1;
+        Range range = {scale, x, z + j0*stride, rawWidth, bandUnitsH, 0, 1};
         if (dimension == DIM_NETHER)
             range.y = CFX_WEB_NETHER_ROOF_Y / 4;
-        int *row = allocCache(&generator, range);
-        if (row == NULL)
+        int *band = allocCache(&generator, range);
+        if (band == NULL)
             return CFX_WEB_ALLOC;
-        const int err = genBiomes(&generator, row, range);
+        const int err = genBiomes(&generator, band, range);
         if (err != 0)
         {
-            free(row);
+            free(band);
             return CFX_WEB_GENERATION;
         }
-        int i;
-        for (i = 0; i < w; i++)
-            sampled[j*w+i] = row[i*stride];
-        free(row);
+        int j, i;
+        for (j = 0; j < rows; j++)
+        {
+            int *dst = sampled + (size_t) (j0 + j) * w;
+            const int *src = band + (size_t) j * stride * rawWidth;
+            for (i = 0; i < w; i++)
+                dst[i] = src[i*stride];
+        }
+        free(band);
+        j0 += rows;
     }
     return CFX_WEB_OK;
 }
@@ -385,8 +429,85 @@ static void cfxWebTerrainParameters(
     values[SP_WEIRDNESS] = weirdness;
 }
 
+/*
+ * Octave truncation for the coarse LOD lattices, mirroring CfxNoiseDetail in the
+ * JNI shim: with the caller's sampling stride known, terrain-noise octaves whose
+ * wavelength is shorter than that stride cannot show up in the output grid except
+ * as aliasing, so the coarse entry point skips them outright. The cut keeps one
+ * octave beyond the strict stride Nyquist limit (octmin/octmax at wavelength >=
+ * stride/2, octmain at >= stride/4) - the strict cut measured 0.38% ocean-to-land
+ * flips on the visual corpus against a 0.3% gate, while this cut measures 0.15%.
+ * Truncation deliberately changes results at strides >= 8 only; the per-pixel
+ * full-detail entry keeps LOD0-1 overviews, the waterline-band solves and the
+ * exact-residual anchors at today's values bit-for-bit.
+ */
+typedef struct {
+    int mainFirst;   /* first octmain octave evaluated */
+    int minMaxFirst; /* first octmin/octmax octave evaluated */
+    int truncated;
+} CfxWebNoiseDetail;
+
+static const CfxWebNoiseDetail CFX_WEB_DETAIL_FULL = {0, 0, 0};
+
+static CfxWebNoiseDetail cfxWebNoiseDetailForStride(
+    const SurfaceNoise *noise, int stride
+)
+{
+    CfxWebNoiseDetail d = CFX_WEB_DETAIL_FULL;
+    if (stride < CFX_WEB_DETAIL_MIN_STRIDE)
+        return d;
+    d.truncated = 1;
+    const double scaledXz = 684.412 * noise->xzScale;
+    double w = 1.0 / scaledXz;
+    while (d.minMaxFirst < 16 && w < (double) stride * 0.5)
+    {
+        w *= 2.0;
+        d.minMaxFirst++;
+    }
+    w = 1.0 / (scaledXz / noise->xzFactor);
+    while (d.mainFirst < 8 && w < (double) stride * 0.25)
+    {
+        w *= 2.0;
+        d.mainFirst++;
+    }
+    return d;
+}
+
+/* sampleDoublePerlin over only the first maxOct octaves (coarsest first). The
+ * jaggedness term's per-octave amplitude halves with xOctaveInit's persistence,
+ * so the first four octaves carry ~94% of its energy. */
+static double cfxWebSampleDoublePerlinPrefix(
+    const DoublePerlinNoise *noise, double x, double y, double z, int maxOct
+)
+{
+    const double f = 337.0 / 331.0;
+    double v = 0.0;
+    int i;
+    for (i = 0; i < maxOct && i < noise->octA.octcnt; i++)
+    {
+        const PerlinNoise *p = noise->octA.octaves + i;
+        const double lf = p->lacunarity;
+        v += p->amplitude * samplePerlin(
+            p, maintainPrecision(x * lf), maintainPrecision(y * lf),
+            maintainPrecision(z * lf), 0, 0);
+    }
+    for (i = 0; i < maxOct && i < noise->octB.octcnt; i++)
+    {
+        const PerlinNoise *p = noise->octB.octaves + i;
+        const double lf = p->lacunarity;
+        const double bx = x * f;
+        const double by = y * f;
+        const double bz = z * f;
+        v += p->amplitude * samplePerlin(
+            p, maintainPrecision(bx * lf), maintainPrecision(by * lf),
+            maintainPrecision(bz * lf), 0, 0);
+    }
+    return v * noise->amplitude;
+}
+
 static double cfxWebModernTerrainNoise(
-    const SurfaceNoise *noise, int x, int y, int z
+    const SurfaceNoise *noise, int x, int y, int z,
+    const CfxWebNoiseDetail *detail
 )
 {
     const double scaledXz = 684.412 * noise->xzScale;
@@ -400,10 +521,10 @@ static double cfxWebModernTerrainNoise(
     const double smearY = scaledY * 8.0;
     const double mainSmearY = smearY / noise->yFactor;
     double interpolation = 0.0;
-    double frequency = 1.0;
+    double frequency = ldexp(1.0, -detail->mainFirst);
     int i;
 
-    for (i = 0; i < 8; i++)
+    for (i = detail->mainFirst; i < 8; i++)
     {
         interpolation += samplePerlin(&noise->octmain.octaves[i],
             cfxWebMaintainPrecision(mainX * frequency),
@@ -417,8 +538,8 @@ static double cfxWebModernTerrainNoise(
     const double blend = (interpolation / 10.0 + 1.0) * 0.5;
     double lower = 0.0;
     double upper = 0.0;
-    frequency = 1.0;
-    for (i = 0; i < 16; i++)
+    frequency = ldexp(1.0, -detail->minMaxFirst);
+    for (i = detail->minMaxFirst; i < 16; i++)
     {
         const double sx = cfxWebMaintainPrecision(dx * frequency);
         const double sy = cfxWebMaintainPrecision(dy * frequency);
@@ -435,7 +556,9 @@ static double cfxWebModernTerrainNoise(
     return clampedLerp(blend, lower / 512.0, upper / 512.0) / 128.0;
 }
 
-static int cfxWebModernOverviewHeight(int x4, int z4)
+static int cfxWebModernOverviewHeight(
+    int x4, int z4, const CfxWebNoiseDetail *detail
+)
 {
     const BiomeNoise *noise = &generator.bn;
     float values[4];
@@ -443,34 +566,304 @@ static int cfxWebModernOverviewHeight(int x4, int z4)
     const double offset = -0.50375F + getSpline(noise->sp, values);
     const double factor = getSpline(noise->factorSp, values);
     const double jaggedness = getSpline(noise->jaggedSp, values);
-    double jagged = sampleDoublePerlin(
-        &noise->jagged, x4 * 4 * 1500.0, 0.0, z4 * 4 * 1500.0
-    );
-    if (jagged < 0.0)
-        jagged *= 0.5;
-    jagged *= jaggedness;
+    double jagged = 0.0;
+    if (!detail->truncated)
+    {
+        jagged = sampleDoublePerlin(
+            &noise->jagged, x4 * 4 * 1500.0, 0.0, z4 * 4 * 1500.0
+        );
+        if (jagged < 0.0)
+            jagged *= 0.5;
+        jagged *= jaggedness;
+    }
+    else if (jaggedness != 0.0F)
+    {
+        /* The jagged spline vanishes outside peak terrain, and the product with
+         * a zero multiplier is zero anyway - so the term is skipped outright
+         * where the spline output is exactly zero. */
+        jagged = cfxWebSampleDoublePerlinPrefix(
+            &noise->jagged, x4 * 4 * 1500.0, 0.0, z4 * 4 * 1500.0,
+            CFX_WEB_JAGGED_KEEP_OCTAVES
+        );
+        if (jagged < 0.0)
+            jagged *= 0.5;
+        jagged *= jaggedness;
+    }
 
     const double base = 1.0 + offset + jagged;
     double y = 128.0 * base;
     if (factor <= 1e-9)
-        return (int) floor(y);
+    {
+        if (y >= CFX_WEB_WATERLINE_ROUND_LO && y <= CFX_WEB_WATERLINE_ROUND_HI) return (int) floor(y);
+        return (int) lround(y);
+    }
     int i;
     for (i = 0; i < CFX_WEB_OVERVIEW_ITERATIONS; i++)
     {
         const double terrain = cfxWebModernTerrainNoise(
-            &noise->terrain, x4 * 4, (int) floor(y), z4 * 4
+            &noise->terrain, x4 * 4, (int) floor(y), z4 * 4, detail
         );
         const double above = 128.0 * (base + terrain / factor);
         const double below = 128.0 * (base + terrain / (4.0 * factor));
         const double next = above >= 128.0 * base ? above : below;
-        if (fabs(next - y) < 0.5)
+        if (fabs(next - y) < 1.5)
         {
             y = next;
             break;
         }
         y = next;
     }
-    return (int) floor(y);
+    if (y >= CFX_WEB_WATERLINE_ROUND_LO && y <= CFX_WEB_WATERLINE_ROUND_HI)
+        return (int) floor(y);
+    return (int) lround(y);
+}
+
+// Strictly symmetric linear interpolation with unbiased rounding.
+// Guarantees algebraic invariant under endpoint exchange:
+// cfxWebLerpSymmetric(y0, y1, x, D) == cfxWebLerpSymmetric(y1, y0, D - x, D)
+static inline int cfxWebLerpSymmetric(int y0, int y1, int x, int D) {
+    const int numer = (D - x) * y0 + x * y1;
+    if (numer >= 0) {
+        return (numer + (D >> 1)) / D;
+    } else {
+        return (numer - (D >> 1)) / D;
+    }
+}
+
+// Second-order discrete Laplacian curvature and saddle-distortion energy metric.
+// Pure integer bitwise arithmetic without additional noise evaluation overhead.
+// Prefixed cfxWeb: test_web_legacy.c compiles this file and the JNI shim into one TU.
+static inline int cfxWebEvaluateCurvatureEnergy(int c00, int c10, int c01, int c11, int cMid) {
+    int min_h = c00, max_h = c00;
+    if (c10 < min_h) min_h = c10;
+    if (c10 > max_h) max_h = c10;
+    if (c01 < min_h) min_h = c01;
+    if (c01 > max_h) max_h = c01;
+    if (c11 < min_h) min_h = c11;
+    if (c11 > max_h) max_h = c11;
+    if (cMid < min_h) min_h = cMid;
+    if (cMid > max_h) max_h = cMid;
+    const int drop = max_h - min_h;
+
+    const int laplacian = abs(4 * cMid - (c00 + c10 + c01 + c11));
+    const int saddle = abs((c00 + c11) - (c10 + c01));
+
+    int energy = drop;
+    if (((laplacian + 1) >> 1) > energy) energy = (laplacian + 1) >> 1;
+    if (saddle > energy) energy = saddle;
+    return energy;
+}
+
+// MIRROR of native/shim/adaptive_macro.h: same subdivision gate, 5-point topology, waterline
+// band and rounding. Any change there MUST land here in the same commit, or the web preview map
+// diverges from the in-game rendering.
+static inline int cfxWebEvaluateAdaptiveMacroGrid(
+    int *macro, int gridW, int gridH,
+    int minX4, int minZ4, const CfxWebNoiseDetail *detail
+)
+{
+    const int W = gridW;
+    const int H = gridH;
+    /* Empty queries are a caller bug, not a success. */
+    if (W <= 0 || H <= 0) return CFX_WEB_BAD_ARGS;
+
+    const int startCellX = floordiv(minX4, 4);
+    const int endCellX   = floordiv(minX4 + W - 1, 4);
+    const int startCellZ = floordiv(minZ4, 4);
+    const int endCellZ   = floordiv(minZ4 + H - 1, 4);
+
+    const int numCellsX = endCellX - startCellX + 1;
+    const int numCellsZ = endCellZ - startCellZ + 1;
+
+    const int cornerW = numCellsX + 1;
+    const int cornerH = numCellsZ + 1;
+
+    int *corners = (int *)malloc(cornerW * cornerH * sizeof(int));
+    if (!corners) return CFX_WEB_ALLOC;
+
+    for (int cz = 0; cz < cornerH; cz++) {
+        int worldZ4 = (startCellZ + cz) * 4;
+        for (int cx = 0; cx < cornerW; cx++) {
+            int worldX4 = (startCellX + cx) * 4;
+            corners[cz * cornerW + cx] = cfxWebModernOverviewHeight(worldX4, worldZ4, detail);
+        }
+    }
+
+    for (int cz = 0; cz < numCellsZ; cz++) {
+        const int cellWorldZ4 = (startCellZ + cz) * 4;
+        int lz0 = cellWorldZ4 - minZ4;
+        int lz1 = lz0 + 4;
+        int clampZ0 = (lz0 < 0) ? 0 : lz0;
+        int clampZ1 = (lz1 > H) ? H : lz1;
+        if (clampZ0 >= clampZ1) continue;
+
+        for (int cx = 0; cx < numCellsX; cx++) {
+            const int cellWorldX4 = (startCellX + cx) * 4;
+            int lx0 = cellWorldX4 - minX4;
+            int lx1 = lx0 + 4;
+            int clampX0 = (lx0 < 0) ? 0 : lx0;
+            int clampX1 = (lx1 > W) ? W : lx1;
+            if (clampX0 >= clampX1) continue;
+
+            int c00 = corners[cz * cornerW + cx];
+            int c10 = corners[cz * cornerW + (cx + 1)];
+            int c01 = corners[(cz + 1) * cornerW + cx];
+            int c11 = corners[(cz + 1) * cornerW + (cx + 1)];
+
+            int midX = cellWorldX4 + 2;
+            int midZ = cellWorldZ4 + 2;
+            int cMid = cfxWebModernOverviewHeight(midX, midZ, detail);
+
+            int min_h = c00, max_h = c00;
+            if (c10 < min_h) min_h = c10;
+            if (c10 > max_h) max_h = c10;
+            if (c01 < min_h) min_h = c01;
+            if (c01 > max_h) max_h = c01;
+            if (c11 < min_h) min_h = c11;
+            if (c11 > max_h) max_h = c11;
+            if (cMid < min_h) min_h = cMid;
+            if (cMid > max_h) max_h = cMid;
+
+            const int is_waterline = (min_h <= CFX_WEB_WATERLINE_CELL_HI && max_h >= CFX_WEB_WATERLINE_CELL_LO);
+            const int energy = cfxWebEvaluateCurvatureEnergy(c00, c10, c01, c11, cMid);
+
+            if (energy > 4 || is_waterline) {
+                int cTop   = (c00 + c10 + 1) >> 1;
+                int cBot   = (c01 + c11 + 1) >> 1;
+                int cLeft  = (c00 + c01 + 1) >> 1;
+                int cRight = (c10 + c11 + 1) >> 1;
+
+                for (int qz = 0; qz < 2; qz++) {
+                    int subZ0 = clampZ0 > (lz0 + qz * 2) ? clampZ0 : (lz0 + qz * 2);
+                    int subZ1 = clampZ1 < (lz0 + (qz + 1) * 2) ? clampZ1 : (lz0 + (qz + 1) * 2);
+                    if (subZ0 >= subZ1) continue;
+
+                    for (int qx = 0; qx < 2; qx++) {
+                        int subX0 = clampX0 > (lx0 + qx * 2) ? clampX0 : (lx0 + qx * 2);
+                        int subX1 = clampX1 < (lx0 + (qx + 1) * 2) ? clampX1 : (lx0 + (qx + 1) * 2);
+                        if (subX0 >= subX1) continue;
+
+                        int qc00, qc10, qc01, qc11;
+                        if (qz == 0 && qx == 0) { qc00 = c00; qc10 = cTop; qc01 = cLeft; qc11 = cMid; }
+                        else if (qz == 0 && qx == 1) { qc00 = cTop; qc10 = c10; qc01 = cMid; qc11 = cRight; }
+                        else if (qz == 1 && qx == 0) { qc00 = cLeft; qc10 = cMid; qc01 = c01; qc11 = cBot; }
+                        else { qc00 = cMid; qc10 = cRight; qc01 = cBot; qc11 = c11; }
+
+                        int qmin = qc00, qmax = qc00;
+                        if (qc10 < qmin) qmin = qc10;
+                        if (qc10 > qmax) qmax = qc10;
+                        if (qc01 < qmin) qmin = qc01;
+                        if (qc01 > qmax) qmax = qc01;
+                        if (qc11 < qmin) qmin = qc11;
+                        if (qc11 > qmax) qmax = qc11;
+
+                        const int q_is_waterline = (qmin <= CFX_WEB_WATERLINE_CELL_HI && qmax >= CFX_WEB_WATERLINE_CELL_LO);
+                        if (qmax - qmin > 5 || q_is_waterline) {
+                            for (int lz = subZ0; lz < subZ1; lz++) {
+                                int worldZ4 = minZ4 + lz;
+                                for (int lx = subX0; lx < subX1; lx++) {
+                                    int worldX4 = minX4 + lx;
+                                    macro[lz * W + lx] = cfxWebModernOverviewHeight(worldX4, worldZ4, detail);
+                                }
+                            }
+                        } else {
+                            int qWorldX4 = cellWorldX4 + qx * 2;
+                            int qWorldZ4 = cellWorldZ4 + qz * 2;
+                            for (int lz = subZ0; lz < subZ1; lz++) {
+                                int dz = (minZ4 + lz) - qWorldZ4;
+                                for (int lx = subX0; lx < subX1; lx++) {
+                                    int dx = (minX4 + lx) - qWorldX4;
+                                    int top = cfxWebLerpSymmetric(qc00, qc10, dx, 2);
+                                    int bot = cfxWebLerpSymmetric(qc01, qc11, dx, 2);
+                                    macro[lz * W + lx] = cfxWebLerpSymmetric(top, bot, dz, 2);
+                                }
+                            }
+                        }
+                    }
+                }
+            } else {
+                for (int lz = clampZ0; lz < clampZ1; lz++) {
+                    int dz = (minZ4 + lz) - cellWorldZ4;
+                    for (int lx = clampX0; lx < clampX1; lx++) {
+                        int dx = (minX4 + lx) - cellWorldX4;
+                        int top = cfxWebLerpSymmetric(c00, c10, dx, 4);
+                        int bot = cfxWebLerpSymmetric(c01, c11, dx, 4);
+                        macro[lz * W + lx] = cfxWebLerpSymmetric(top, bot, dz, 4);
+                    }
+                }
+            }
+        }
+    }
+
+    free(corners);
+    return CFX_WEB_OK;
+}
+
+/* sampleOctaveAmp over the octave suffix [firstOct, octcnt). octdepth stores
+ * its octaves finest-first (see cfxWebLegacyDepthOctaveFloor), so a suffix
+ * start drops the shortest-wavelength octaves while keeping the accumulation
+ * order of the survivors identical to sampleOctaveAmp. */
+static double cfxWebSampleOctaveAmpSuffix(const OctaveNoise *noise, double x, double y, double z,
+        double yamp, double ymin, int ydefault, int firstOct)
+{
+    double v = 0;
+    int i;
+    for (i = firstOct > 0 ? firstOct : 0; i < noise->octcnt; i++)
+    {
+        PerlinNoise *p = noise->octaves + i;
+        double lf = p->lacunarity;
+        double ax = maintainPrecision(x * lf);
+        double ay = ydefault ? -p->b : maintainPrecision(y * lf);
+        double az = maintainPrecision(z * lf);
+        double pv = samplePerlin(p, ax, ay, az, yamp * lf, ymin * lf);
+        v += p->amplitude * pv;
+    }
+    return v;
+}
+
+/*
+ * Octave truncation for the legacy depth noise on coarse LOD windows
+ * (mirrors the JNI shim's cfxLegacyDepthOctaveFloor). octdepth is built with
+ * omin=-15 and 16 octaves, finest-first: octave i carries wavelength
+ * 2^i/50 blocks at the overview's sampling argument and the eight finest
+ * octaves hold just 0.39% of the total amplitude. Coarse windows skip the
+ * octaves shorter than half the sampling stride - the same "one octave
+ * beyond the strict stride Nyquist limit" cut the modern coarse lattices
+ * apply. Waterline micro queries and small exact-anchor grids stay on the
+ * full-detail per-pixel entry (see CFX_WEB_LEGACY_TRUNCATE_MIN_CELLS).
+ */
+/* Octave count of the legacy depth noise (`octdepth`, omin=-15). */
+#define CFX_WEB_LEGACY_DEPTH_OCTAVES 16
+
+static int cfxWebLegacyDepthOctaveFloor(int stride)
+{
+    int k = 0;
+    /* Stop one short of the octave count: an empty suffix would make the
+     * depth term identically zero and collapse every height to a constant
+     * (mirrors the JNI shim). */
+    while (k < CFX_WEB_LEGACY_DEPTH_OCTAVES - 1 && (double) (1 << k) < 25.0 * stride)
+        k++;
+    return k;
+}
+
+/* Biome-independent part of the legacy overview height, as the per-pixel
+ * formula: the depth-noise offset with its full clamp chain. */
+static double cfxWebLegacyDensityOffset(
+    const SurfaceNoise *sn, double quartX, double quartZ, int firstOct
+)
+{
+    double offset = cfxWebSampleOctaveAmpSuffix(
+        &sn->octdepth, quartX * 200.0, 10.0, quartZ * 200.0,
+        1.0, 0.0, 1.0, firstOct
+    );
+    offset *= 65535.0 / 8000.0;
+    if (offset < 0.0)
+        offset *= -0.3;
+    offset = offset * 3.0 - 2.0;
+    if (offset > 1.0)
+        offset = 1.0;
+    offset *= 17.0 / 64.0;
+    return offset < 0.0 ? offset / 28.0 : offset / 40.0;
 }
 
 static int cfxWebLegacyOverviewHeight(int biome, int blockX, int blockZ)
@@ -480,30 +873,105 @@ static int cfxWebLegacyOverviewHeight(int biome, int blockX, int blockZ)
     (void) biomeScale;
     const double blendedDepth = ((biomeDepth * 4.0 - 1.0) / 8.0)
         * (17.0 / 64.0);
-    const double quartX = blockX / 4.0;
-    const double quartZ = blockZ / 4.0;
-    double offset = sampleOctaveAmp(
-        &surfaceNoise.octdepth, quartX * 200.0, 10.0, quartZ * 200.0,
-        1.0, 0.0, 1.0
+    const double densityOffset = cfxWebLegacyDensityOffset(
+        &surfaceNoise, blockX / 4.0, blockZ / 4.0, 0
     );
-    offset *= 65535.0 / 8000.0;
-    if (offset < 0.0)
-        offset *= -0.3;
-    offset = offset * 3.0 - 2.0;
-    if (offset > 1.0)
-        offset = 1.0;
-    offset *= 17.0 / 64.0;
-    const double densityOffset = offset < 0.0 ? offset / 28.0 : offset / 40.0;
     return (int) floor(128.0 * (0.53125 + densityOffset + blendedDepth));
 }
 
-static int cfxWebOverviewHeights(
-    int blockX, int blockZ, int w, int h, int stride, int *out
+/*
+ * Memo-aware wrapper for the legacy overview biome grid (mirrors the JNI
+ * shim's cfxGenerateOverviewBiomes): the tile flow requests the identical
+ * strided window twice per tile - once inside the overview heights, once for
+ * the biome layer, with the LOD0-1 exact-residual anchor window interleaved -
+ * so two slots turn the second full layer-stack pass into a memcpy. WASM
+ * generator state is a single instance driven by one worker, so statics are
+ * safe. Memoize tile-sized windows only (see CFX_WEB_OVERVIEW_MEMO_MAX_CELLS).
+ */
+#define CFX_WEB_OVERVIEW_MEMO_MAX_CELLS (1 << 17)
+#define CFX_WEB_OVERVIEW_MEMO_SLOTS 2
+
+static int webOverviewMemoValid[CFX_WEB_OVERVIEW_MEMO_SLOTS];
+static int webOverviewMemoX[CFX_WEB_OVERVIEW_MEMO_SLOTS];
+static int webOverviewMemoZ[CFX_WEB_OVERVIEW_MEMO_SLOTS];
+static int webOverviewMemoW[CFX_WEB_OVERVIEW_MEMO_SLOTS];
+static int webOverviewMemoH[CFX_WEB_OVERVIEW_MEMO_SLOTS];
+static int webOverviewMemoStride[CFX_WEB_OVERVIEW_MEMO_SLOTS];
+static int *webOverviewMemoBiomes[CFX_WEB_OVERVIEW_MEMO_SLOTS];
+static size_t webOverviewMemoCap[CFX_WEB_OVERVIEW_MEMO_SLOTS];
+static int webOverviewMemoNext;
+
+static int cfxWebOverviewBiomes(
+    int blockX, int blockZ, int w, int h, int blockStride, int *out
+)
+{
+    const int cells = w * h;
+    int slot;
+    for (slot = 0; slot < CFX_WEB_OVERVIEW_MEMO_SLOTS; slot++)
+    {
+        if (webOverviewMemoValid[slot]
+            && webOverviewMemoX[slot] == blockX
+            && webOverviewMemoZ[slot] == blockZ
+            && webOverviewMemoW[slot] == w
+            && webOverviewMemoH[slot] == h
+            && webOverviewMemoStride[slot] == blockStride)
+        {
+            memcpy(out, webOverviewMemoBiomes[slot], sizeof(int) * (size_t) cells);
+            return CFX_WEB_OK;
+        }
+    }
+
+    const int scale = blockStride < 4 ? 1 : 4;
+    const int err = cfxWebGenerateBiomesStrided(
+        scale, floordiv(blockX, scale), floordiv(blockZ, scale),
+        w, h, blockStride < 4 ? blockStride : blockStride / 4, out
+    );
+    if (err != CFX_WEB_OK)
+        return err;
+
+    if (cells <= CFX_WEB_OVERVIEW_MEMO_MAX_CELLS)
+    {
+        const int target = webOverviewMemoNext;
+        webOverviewMemoNext = (target + 1) % CFX_WEB_OVERVIEW_MEMO_SLOTS;
+        if (webOverviewMemoCap[target] < (size_t) cells)
+        {
+            int *grown = realloc(
+                webOverviewMemoBiomes[target], sizeof(int) * (size_t) cells);
+            if (grown != NULL)
+            {
+                webOverviewMemoBiomes[target] = grown;
+                webOverviewMemoCap[target] = (size_t) cells;
+            }
+        }
+        if (webOverviewMemoCap[target] >= (size_t) cells)
+        {
+            memcpy(webOverviewMemoBiomes[target], out, sizeof(int) * (size_t) cells);
+            webOverviewMemoValid[target] = 1;
+            webOverviewMemoX[target] = blockX;
+            webOverviewMemoZ[target] = blockZ;
+            webOverviewMemoW[target] = w;
+            webOverviewMemoH[target] = h;
+            webOverviewMemoStride[target] = blockStride;
+        }
+    }
+    return CFX_WEB_OK;
+}
+
+/* Coarse legacy overview windows at or above this cell count skip the
+ * sub-Nyquist depth-noise octaves; the exact-residual anchor grids and the
+ * stride-4 waterline micro queries stay below the bar and keep full detail
+ * (mirrors the JNI shim's CFX_LEGACY_TRUNCATE_MIN_CELLS). */
+#define CFX_WEB_LEGACY_TRUNCATE_MIN_CELLS 4096
+
+
+static int cfxWebOverviewHeightsImpl(
+    int blockX, int blockZ, int w, int h, int stride, int *out,
+    const CfxWebNoiseDetail *detail, int truncateLegacy
 )
 {
     if (mc >= MC_1_18)
     {
-        if (stride < 4)
+        if (stride <= 4 && (w > 1 || h > 1))
         {
             const int lastX = blockX + (w - 1) * stride;
             const int lastZ = blockZ + (h - 1) * stride;
@@ -516,12 +984,15 @@ static int cfxWebOverviewHeights(
             int *macro = malloc(sizeof(int) * (size_t) gridW * gridH);
             if (macro == NULL)
                 return CFX_WEB_ALLOC;
+            CfxWebNoiseDetail macroDetail = cfxWebNoiseDetailForStride(&generator.bn.terrain, 4);
+            const CfxWebNoiseDetail *activeDetail = detail->truncated ? detail : &macroDetail;
+            const int macroErr = cfxWebEvaluateAdaptiveMacroGrid(macro, gridW, gridH, minX4, minZ4, activeDetail);
+            if (macroErr != CFX_WEB_OK)
+            {
+                free(macro);
+                return macroErr;
+            }
             int j, i;
-            for (j = 0; j < gridH; j++)
-                for (i = 0; i < gridW; i++)
-                    macro[j*gridW+i] = cfxWebModernOverviewHeight(
-                        minX4 + i, minZ4 + j
-                    );
             for (j = 0; j < h; j++)
             {
                 const int sampleZ = blockZ + j * stride;
@@ -534,11 +1005,9 @@ static int cfxWebOverviewHeights(
                     const int x4 = floordiv(sampleX, 4);
                     const int fx = sampleX - x4 * 4;
                     const int ix = x4 - minX4;
-                    const int top = macro[iz*gridW+ix]
-                        + floordiv((macro[iz*gridW+ix+1] - macro[iz*gridW+ix])*fx, 4);
-                    const int bottom = macro[(iz+1)*gridW+ix]
-                        + floordiv((macro[(iz+1)*gridW+ix+1] - macro[(iz+1)*gridW+ix])*fx, 4);
-                    out[j*w+i] = top + floordiv((bottom-top)*fz, 4);
+                    const int top = cfxWebLerpSymmetric(macro[iz*gridW+ix], macro[iz*gridW+ix+1], fx, 4);
+                    const int bottom = cfxWebLerpSymmetric(macro[(iz+1)*gridW+ix], macro[(iz+1)*gridW+ix+1], fx, 4);
+                    out[j*w+i] = cfxWebLerpSymmetric(top, bottom, fz, 4);
                 }
             }
             free(macro);
@@ -550,35 +1019,379 @@ static int cfxWebOverviewHeights(
                 for (i = 0; i < w; i++)
                     out[j*w+i] = cfxWebModernOverviewHeight(
                         floordiv(blockX + i*stride, 4),
-                        floordiv(blockZ + j*stride, 4)
+                        floordiv(blockZ + j*stride, 4), detail
                     );
         }
         return CFX_WEB_OK;
     }
 
-    const int scale = stride < 4 ? 1 : 4;
-    const int nativeStride = stride < 4 ? stride : stride / 4;
-    const int err = cfxWebGenerateBiomesStrided(
-        scale, floordiv(blockX, scale), floordiv(blockZ, scale),
-        w, h, nativeStride, out
-    );
+    /* --- pre-1.18 dispatch (mirrors the JNI shim) -----------------------
+     * The legacy height is a closed form: floor(128 * (0.53125 +
+     * densityOffset(x,z) + blendedDepth(biome))). stride < 4 solves the
+     * depth noise once per world-aligned quart corner - vanilla 1.17 itself
+     * evaluates the depth noise per quart column - and bilinearly
+     * interpolates the biome-independent base per output pixel; stride >= 4
+     * windows above CFX_WEB_LEGACY_TRUNCATE_MIN_CELLS skip the depth-noise
+     * octaves shorter than half the sampling stride. Waterline micro
+     * queries and small anchor grids keep the full-detail per-pixel entry. */
+    const int cells = w * h;
+    int *biomes = malloc(sizeof(int) * (size_t) cells);
+    if (biomes == NULL)
+        return CFX_WEB_ALLOC;
+    const int err = cfxWebOverviewBiomes(blockX, blockZ, w, h, stride, biomes);
     if (err != CFX_WEB_OK)
+    {
+        free(biomes);
         return err;
-    int j, i;
-    for (j = 0; j < h; j++)
-        for (i = 0; i < w; i++)
+    }
+
+    if (stride < 4 && (w > 1 || h > 1))
+    {
+        const int lastX = blockX + (w - 1) * stride;
+        const int lastZ = blockZ + (h - 1) * stride;
+        const int minX4 = floordiv(blockX, 4);
+        const int minZ4 = floordiv(blockZ, 4);
+        const int maxX4 = floordiv(lastX, 4) + 1;
+        const int maxZ4 = floordiv(lastZ, 4) + 1;
+        const int gridW = maxX4 - minX4 + 1;
+        const int gridH = maxZ4 - minZ4 + 1;
+        double *base = malloc(sizeof(double) * (size_t) gridW * gridH);
+        if (base == NULL)
         {
-            const int index = j*w+i;
-            out[index] = cfxWebLegacyOverviewHeight(
-                out[index], blockX + i*stride, blockZ + j*stride
-            );
+            free(biomes);
+            return CFX_WEB_ALLOC;
         }
+        int j, i;
+        /* The lattice resolves one offset per 4x4-block cell, so the corner
+         * solves apply the same coarse-window octave cut as a stride-4
+         * window: octaves shorter than half the cell size hold 0.39% of the
+         * amplitude and only alias inside the bilinear interpolation. */
+        const int latticeFirstOct = cfxWebLegacyDepthOctaveFloor(4);
+        for (j = 0; j < gridH; j++)
+            for (i = 0; i < gridW; i++)
+                base[j*gridW+i] = 0.53125 + cfxWebLegacyDensityOffset(
+                    &surfaceNoise, (double) (minX4 + i), (double) (minZ4 + j),
+                    latticeFirstOct
+                );
+        for (j = 0; j < h; j++)
+        {
+            const int sampleZ = blockZ + j * stride;
+            const int z4 = floordiv(sampleZ, 4);
+            const double fz = (double) (sampleZ - z4*4) / 4.0;
+            const int iz = z4 - minZ4;
+            for (i = 0; i < w; i++)
+            {
+                const int sampleX = blockX + i * stride;
+                const int x4 = floordiv(sampleX, 4);
+                const double fx = (double) (sampleX - x4*4) / 4.0;
+                const int ix = x4 - minX4;
+                double biomeDepth, biomeScale;
+                getBiomeDepthAndScale(biomes[j*w+i], &biomeDepth, &biomeScale, NULL);
+                (void) biomeScale;
+                const double blendedDepth = ((biomeDepth * 4.0 - 1.0) / 8.0)
+                    * (17.0 / 64.0);
+                const double b00 = base[iz*gridW+ix];
+                const double top = b00 + (base[iz*gridW+ix+1] - b00) * fx;
+                const double b01 = base[(iz+1)*gridW+ix];
+                const double bottom = b01 + (base[(iz+1)*gridW+ix+1] - b01) * fx;
+                const double lerped = top + (bottom - top) * fz;
+                out[j*w+i] = (int) floor(128.0 * (lerped + blendedDepth));
+            }
+        }
+        free(base);
+    }
+    else if (truncateLegacy && stride >= 4 && (w > 1 || h > 1)
+        && cells >= CFX_WEB_LEGACY_TRUNCATE_MIN_CELLS)
+    {
+        const int firstOct = cfxWebLegacyDepthOctaveFloor(stride);
+        int j, i;
+        for (j = 0; j < h; j++)
+            for (i = 0; i < w; i++)
+            {
+                double biomeDepth, biomeScale;
+                getBiomeDepthAndScale(biomes[j*w+i], &biomeDepth, &biomeScale, NULL);
+                (void) biomeScale;
+                const double blendedDepth = ((biomeDepth * 4.0 - 1.0) / 8.0)
+                    * (17.0 / 64.0);
+                const double densityOffset = cfxWebLegacyDensityOffset(
+                    &surfaceNoise, (blockX + i*stride) / 4.0,
+                    (blockZ + j*stride) / 4.0, firstOct
+                );
+                out[j*w+i] =
+                    (int) floor(128.0 * (0.53125 + densityOffset + blendedDepth));
+            }
+    }
+    else
+    {
+        int j, i;
+        for (j = 0; j < h; j++)
+            for (i = 0; i < w; i++)
+                out[j*w+i] = cfxWebLegacyOverviewHeight(
+                    biomes[j*w+i], blockX + i*stride, blockZ + j*stride
+                );
+    }
+    free(biomes);
     return CFX_WEB_OK;
+}
+
+static int cfxWebOverviewHeights(
+    int blockX, int blockZ, int w, int h, int stride, int *out
+)
+{
+    /* 1x1 micro-queries are strictly reserved for waterline / coastline point precision */
+    CfxWebNoiseDetail detail = (w == 1 && h == 1)
+        ? CFX_WEB_DETAIL_FULL
+        : cfxWebNoiseDetailForStride(&generator.bn.terrain, stride);
+    return cfxWebOverviewHeightsImpl(
+        blockX, blockZ, w, h, stride, out, &detail, 0
+    );
+}
+
+/*
+ * Coarse-lattice variant for the LOD2-4 anchor sweeps: same geometry, but
+ * terrain-noise octaves shorter than the sampling stride are skipped (see
+ * CfxWebNoiseDetail). Waterline-band and exact-residual callers must keep the
+ * full-detail entry above.
+ */
+static int cfxWebOverviewHeightsCoarse(
+    int blockX, int blockZ, int w, int h, int stride, int *out
+)
+{
+    /* Same adaptive detail as the full entry (1x1 stays full-detail); this entry
+     * owns the pre-1.18 octave truncation. */
+    CfxWebNoiseDetail detail = (w == 1 && h == 1)
+        ? CFX_WEB_DETAIL_FULL
+        : cfxWebNoiseDetailForStride(&generator.bn.terrain, stride);
+    return cfxWebOverviewHeightsImpl(
+        blockX, blockZ, w, h, stride, out, &detail, 1
+    );
 }
 
 static int cfxWebLerp(int from, int to, int offset, int extent)
 {
     return from + floordiv((to - from) * offset, extent);
+}
+
+/*
+ * Solves the sub-biome lattice's corner anchors for the band gate and the cell
+ * loop, mirroring LodSampling.solveSubBiomeAnchors: one height-aware biome
+ * sample at every second output pixel (odd tile-local pixels -1+2k; the far
+ * corner anchors sit one sub-sample past the grid and their height input falls
+ * back to the margin pixel). Heights come from heightData rows/cols 2k, i.e.
+ * anchor-anchored reconstruction values, so the sweep may run before the
+ * waterline band resolution rewrites the odd pixels - the Java side relies on
+ * exactly that order to feed the gate.
+ */
+static void cfxWebSolveSubBiomeAnchors(
+    int blockX0, int blockZ0, int anchorBlockStride,
+    int *anchorBiomes, int anchorsW
+)
+{
+    int kz, kx;
+    for (kz = 0; kz < anchorsW; kz++)
+        for (kx = 0; kx < anchorsW; kx++)
+        {
+            const int row = kz*2 < CFX_WEB_GRID_SIZE
+                ? kz*2 : CFX_WEB_GRID_SIZE - 1;
+            const int col = kx*2 < CFX_WEB_GRID_SIZE
+                ? kx*2 : CFX_WEB_GRID_SIZE - 1;
+            const int height = heightData[row*CFX_WEB_GRID_SIZE + col];
+            const int y = height < CFX_WEB_WATER_LEVEL
+                ? CFX_WEB_WATER_LEVEL : height;
+            int x4, y4, z4;
+            voronoiAccess3D(
+                generator.sha, blockX0 + kx*anchorBlockStride,
+                y, blockZ0 + kz*anchorBlockStride, &x4, &y4, &z4
+            );
+            anchorBiomes[kz*anchorsW+kx] = sampleBiomeNoise(
+                &generator.bn, NULL, x4, y4, z4, NULL, 0
+            );
+        }
+}
+
+/*
+ * Whether any biome anchor around an overview quad is water-relevant: the quad
+ * spans even pixels 2k..2k+2 and the biome anchors sit at odd pixels 2k-1..2k+3,
+ * so the 3x3 block of anchor indices k..k+2 covers the quad plus one anchor of
+ * margin per side. Out-of-range anchors are skipped, as on the Java side.
+ */
+static int cfxWebWaterRelevantNeighbourhood(
+    const int *anchorBiomes, int anchorsW, int quadKx, int quadKz
+)
+{
+    int dz, dx;
+    for (dz = 0; dz <= 2; dz++)
+    {
+        const int az = quadKz + dz;
+        if (az < 0 || az >= anchorsW)
+            continue;
+        for (dx = 0; dx <= 2; dx++)
+        {
+            const int ax = quadKx + dx;
+            if (ax < 0 || ax >= anchorsW)
+                continue;
+            if (cfxWebIsWaterBiome(anchorBiomes[az*anchorsW+ax]))
+                return 1;
+        }
+    }
+    return 0;
+}
+
+/*
+ * Fills heightData with the 1.18+ LOD2-4 anchor-lattice overview, mirroring the
+ * Java side's stage order exactly (blockX/blockZ are the tile origin, grid pixel
+ * p maps to blockX + p*blockStride for p in [-1, 256]): coarse anchor solves on
+ * even tile-local pixels, bilinear reconstruction everywhere (band pixels keep
+ * tentative values), then the sub-biome anchor sweep, then the waterline band
+ * resolution. A reconstructed odd pixel keeps its interpolated value only where
+ * its anchor quad sits deep on one side of the waterline - open water below sea
+ * level, or highland at least CFX_WEB_OVERVIEW_INTERPOLATION_MIN above it - or
+ * entirely above CFX_WEB_OVERVIEW_BIOME_GATE with no water-relevant biome
+ * anchor in the 3x3 neighbourhood, since the band's job there was only
+ * hidden-river protection and the biome lattice answers that directly. Every
+ * other crossing pixel keeps a fresh stride-4 full-detail solve, so the
+ * waterline cannot drift. Returns the biome anchor grid for the caller's cell
+ * loop (a count x count int buffer the caller frees).
+ */
+static int cfxWebOverviewHeightsAnchored(
+    int blockX, int blockZ, int blockStride, int **outBiomeAnchors
+)
+{
+    const int minP = -1;
+    const int maxP = CFX_WEB_GRID_SIZE - 2;
+    const int minK = floordiv(minP, 2);
+    const int maxK = floordiv(maxP, 2) + (maxP & 1);
+    const int count = maxK - minK + 1;
+    int *macro = malloc(sizeof(int) * (size_t) count * count);
+    if (macro == NULL)
+        return CFX_WEB_ALLOC;
+    /* Anchor solves go through the coarse entry: their stride is double the
+     * pixel stride, detail finer than that is dropped. */
+    int err = cfxWebOverviewHeightsCoarse(
+        blockX + 2*minK*blockStride, blockZ + 2*minK*blockStride,
+        count, count, 2*blockStride, macro
+    );
+    int *biomeAnchors = NULL;
+    if (err == CFX_WEB_OK)
+    {
+        int j, i;
+        for (j = 0; j < CFX_WEB_GRID_SIZE; j++)
+        {
+            const int pixelZ = minP + j;
+            const int kz = floordiv(pixelZ, 2) - minK;
+            const int oddZ = pixelZ - 2*floordiv(pixelZ, 2);
+            for (i = 0; i < CFX_WEB_GRID_SIZE; i++)
+            {
+                const int pixelX = minP + i;
+                const int kx = floordiv(pixelX, 2) - minK;
+                const int oddX = pixelX - 2*floordiv(pixelX, 2);
+                const int h00 = macro[kz*count+kx];
+                int value = h00;
+                if (oddX || oddZ)
+                {
+                    /* Guard the right-hand anchor: at the last lattice column kx+1 would wrap into
+                     * the next row (and read past the buffer on the last row). */
+                    const int h10 = (kx + 1 < count) ? macro[kz*count+kx+1] : h00;
+                    const int top = oddX ? cfxWebLerp(h00, h10, 1, 2) : h00;
+                    if (oddZ)
+                    {
+                        const int h01 = macro[(kz+1)*count+kx];
+                        const int bottom = oddX && (kx + 1 < count)
+                            ? cfxWebLerp(h01, macro[(kz+1)*count+kx+1], 1, 2)
+                            : h01;
+                        value = cfxWebLerp(top, bottom, 1, 2);
+                    }
+                    else
+                    {
+                        value = top;
+                    }
+                }
+                heightData[j*CFX_WEB_GRID_SIZE+i] = value;
+            }
+        }
+        biomeAnchors = malloc(sizeof(int) * (size_t) count * count);
+        if (biomeAnchors == NULL)
+        {
+            err = CFX_WEB_ALLOC;
+        }
+        else
+        {
+            cfxWebSolveSubBiomeAnchors(
+                blockX - blockStride, blockZ - blockStride,
+                2*blockStride, biomeAnchors, count
+            );
+        }
+    }
+    if (err == CFX_WEB_OK)
+    {
+        int j, i;
+        for (j = 0; j < CFX_WEB_GRID_SIZE && err == CFX_WEB_OK; j++)
+        {
+            const int pixelZ = minP + j;
+            const int kz = floordiv(pixelZ, 2) - minK;
+            const int oddZ = pixelZ - 2*floordiv(pixelZ, 2);
+            for (i = 0; i < CFX_WEB_GRID_SIZE && err == CFX_WEB_OK; i++)
+            {
+                const int pixelX = minP + i;
+                const int kx = floordiv(pixelX, 2) - minK;
+                const int oddX = pixelX - 2*floordiv(pixelX, 2);
+                if (!oddX && !oddZ)
+                    continue;
+                const int h00 = macro[kz*count+kx];
+                int lowest = h00;
+                int highest = h00;
+                /* Bounds check, not a parity check: the envelope must keep the right-hand anchor
+                 * for every pixel that has one, and only skip it at the last lattice column where
+                 * kx+1 would wrap into the next row. */
+                const int hasRight = (kx + 1 < count);
+                if (hasRight)
+                {
+                    const int h10 = macro[kz*count+kx+1];
+                    if (h10 < lowest) lowest = h10;
+                    if (h10 > highest) highest = h10;
+                }
+                if (oddZ)
+                {
+                    const int h01 = macro[(kz+1)*count+kx];
+                    if (h01 < lowest) lowest = h01;
+                    if (h01 > highest) highest = h01;
+                    if (hasRight)
+                    {
+                        const int h11 = macro[(kz+1)*count+kx+1];
+                        if (h11 < lowest) lowest = h11;
+                        if (h11 > highest) highest = h11;
+                    }
+                }
+                if (highest < CFX_WEB_OVERVIEW_INTERPOLATION_MAX_WATER
+                    || lowest >= CFX_WEB_OVERVIEW_INTERPOLATION_MIN)
+                {
+                    continue;
+                }
+                if (lowest >= CFX_WEB_OVERVIEW_BIOME_GATE
+                    && !cfxWebWaterRelevantNeighbourhood(
+                        biomeAnchors, count, kx + minK, kz + minK))
+                {
+                    continue;
+                }
+                /* Stride 4 keeps the per-cell solve a per-pixel overview used;
+                 * a stride-1 query would blend quart cells. Full detail, not
+                 * the coarse entry, because these pixels are the waterline. */
+                err = cfxWebOverviewHeights(
+                    blockX + pixelX*blockStride,
+                    blockZ + pixelZ*blockStride,
+                    1, 1, 4, &heightData[j*CFX_WEB_GRID_SIZE+i]
+                );
+            }
+        }
+    }
+    free(macro);
+    if (err != CFX_WEB_OK)
+    {
+        free(biomeAnchors);
+        return err;
+    }
+    *outBiomeAnchors = biomeAnchors;
+    return CFX_WEB_OK;
 }
 
 static int cfxWebApplyExactResiduals(
@@ -701,17 +1514,48 @@ static int cfxWebGenerateOverworld(int blockX, int blockZ, int lod, int exact)
     int *fluidConfidence = calloc(CFX_WEB_GRID_CELLS, sizeof(int));
     if (fluidConfidence == NULL)
         return CFX_WEB_ALLOC;
-    int err = cfxWebOverviewHeights(
-        originX, originZ, CFX_WEB_GRID_SIZE, CFX_WEB_GRID_SIZE,
-        blockStride, heightData
-    );
+    int *biomeAnchors = NULL;
+    int err;
+    if (mc >= MC_1_18 && lod >= 2)
+    {
+        err = cfxWebOverviewHeightsAnchored(
+            blockX, blockZ, blockStride, &biomeAnchors
+        );
+        if (err != CFX_WEB_OK)
+        {
+            biomeAnchors = NULL;
+            err = cfxWebOverviewHeights(
+                originX, originZ, CFX_WEB_GRID_SIZE, CFX_WEB_GRID_SIZE,
+                blockStride, heightData
+            );
+        }
+    }
+    else
+    {
+        err = cfxWebOverviewHeights(
+            originX, originZ, CFX_WEB_GRID_SIZE, CFX_WEB_GRID_SIZE,
+            blockStride, heightData
+        );
+    }
     if (err == CFX_WEB_OK && exact && lod <= 1)
         err = cfxWebApplyExactResiduals(
             originX, originZ, lod, blockStride, fluidConfidence
         );
     if (err == CFX_WEB_OK)
     {
-        if (mc >= MC_1_18)
+        if (mc >= MC_1_18 && biomeAnchors != NULL)
+        {
+            /*
+             * LOD2-4: the cell lattice answers the plain per-pixel biome table
+             * (one sample per pixel, no sub-sampling), the subsumption the Java
+             * side performs when it array-copies the sweep into biomeId.
+             */
+            cfxWebRunSubBiomeCells(
+                blockX, blockZ, lod, biomeAnchors,
+                CFX_WEB_GRID_SIZE / 2 + 1
+            );
+        }
+        else if (mc >= MC_1_18)
         {
             int j, i;
             for (j = 0; j < CFX_WEB_GRID_SIZE; j++)
@@ -731,11 +1575,9 @@ static int cfxWebGenerateOverworld(int blockX, int blockZ, int lod, int exact)
         }
         else
         {
-            const int scale = blockStride < 4 ? 1 : 4;
-            err = cfxWebGenerateBiomesStrided(
-                scale, floordiv(originX, scale), floordiv(originZ, scale),
-                CFX_WEB_GRID_SIZE, CFX_WEB_GRID_SIZE,
-                blockStride / scale, biomeData
+            err = cfxWebOverviewBiomes(
+                originX, originZ, CFX_WEB_GRID_SIZE, CFX_WEB_GRID_SIZE,
+                blockStride, biomeData
             );
         }
     }
@@ -755,6 +1597,7 @@ static int cfxWebGenerateOverworld(int blockX, int blockZ, int lod, int exact)
             surfaceData[i] = (water ? CFX_WEB_SURFACE_WATER : 0) | (depth << 8);
         }
     }
+    free(biomeAnchors);
     free(fluidConfidence);
     return err;
 }
@@ -995,6 +1838,9 @@ int cfxWebInit(int mcVersion, int64_t seed, int dim, int flags)
     worldSeed = (uint64_t) seed;
     mc = mcVersion;
     dimension = dim;
+    /* The overview biome memo keys on geometry alone; a new seed or version
+     * invalidates every stored window. */
+    memset(webOverviewMemoValid, 0, sizeof(webOverviewMemoValid));
     ready = 1;
     return CFX_WEB_OK;
 }
@@ -1015,8 +1861,6 @@ int cfxWebGenerateTile(int blockX, int blockZ, int lod, int exact)
             : cfxWebGenerateFlatDimension(blockX, blockZ, lod);
     else
         result = cfxWebGenerateFlatDimension(blockX, blockZ, lod);
-    if (result == CFX_WEB_OK)
-        result = cfxWebGenerateSubSamples(blockX, blockZ, lod);
     if (result == CFX_WEB_OK)
         cfxWebGenerateCanopy(blockX, blockZ, lod);
     return result;
@@ -1044,22 +1888,4 @@ __attribute__((visibility("default")))
 int *cfxWebCanopyData(void)
 {
     return canopyData;
-}
-
-__attribute__((visibility("default")))
-int *cfxWebSubBiomeData(void)
-{
-    return subBiomeData;
-}
-
-__attribute__((visibility("default")))
-int *cfxWebSubSurfaceData(void)
-{
-    return subSurfaceData;
-}
-
-__attribute__((visibility("default")))
-int *cfxWebSubCanopyData(void)
-{
-    return subCanopyData;
 }

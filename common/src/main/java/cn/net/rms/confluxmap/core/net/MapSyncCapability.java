@@ -17,7 +17,9 @@ public enum MapSyncCapability {
     /** Version 2 added the flat quadrant's top material id to {@code QUADRA_LAYOUT_S2C} entries. */
     QUADRA_LAYOUT(9, 2),
     /** Datapack biome display names served from the world's packs (0x16/0x17). */
-    DATAPACK_BIOME_LANGS(10, 1);
+    DATAPACK_BIOME_LANGS(10, 1),
+    /** Server-initiated full map sync manifest pages (0x18). */
+    FULL_SYNC(11, 1);
 
     private final int id;
     private final int version;

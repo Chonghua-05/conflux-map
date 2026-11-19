@@ -25,6 +25,7 @@ import java.util.Optional;
 import java.util.OptionalInt;
 import java.util.OptionalLong;
 import java.util.Set;
+import java.util.function.BooleanSupplier;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
 
@@ -35,6 +36,7 @@ public final class StructureIndex {
     private static final int MC_26_3 = 35;
     private static final String CACHE_PREFIX = "structures_v4_mc";
     private static final int MAX_CANDIDATE_QUERY_REGIONS = 1_024;
+    private static final long MAX_CANDIDATE_WALK_REGIONS = 100L * MAX_CANDIDATE_QUERY_REGIONS;
 
     public enum StructureType {
         DESERT_PYRAMID(1, "desert_pyramid", "DP", 32, 32, DimensionId.OVERWORLD, MC_1_17_1, 16.0),
@@ -162,6 +164,9 @@ public final class StructureIndex {
 
     public enum State { CANDIDATE, VERIFIED, NONEXISTENT }
 
+    public record CandidateSearch(List<Marker> markers, boolean complete) {
+    }
+
     public record Candidate(int blockX, int blockZ, int variant) {
     }
 
@@ -260,6 +265,7 @@ public final class StructureIndex {
     private final Map<String, Marker> markers = new HashMap<>();
     private final Map<StructureType, Set<Long>> queriedRegions = new EnumMap<>(StructureType.class);
     private boolean dirty;
+    private long walkBudgetRegions = MAX_CANDIDATE_WALK_REGIONS;
 
     /**
      * Compatibility constructor for callers that do not have a world identity. New callers must
@@ -463,11 +469,10 @@ public final class StructureIndex {
     }
 
     /**
-     * Returns the nearest candidates inside a circular search area. Native generation expands
-     * only while the next rectangular batch stays under a fixed region budget, so a large UI
-     * radius cannot stall the client thread.
+     * Returns the nearest candidates inside a circular search area. See searchCandidates for
+     * the generation bounds and the completeness flag of the query.
      */
-    public synchronized List<Marker> findCandidates(
+    public List<Marker> findCandidates(
         final StructureType type,
         final int blockX,
         final int blockZ,
@@ -477,7 +482,7 @@ public final class StructureIndex {
         return findCandidates(type, blockX, blockZ, maxRadius, limit, OptionalInt.empty());
     }
 
-    public synchronized List<Marker> findCandidates(
+    public List<Marker> findCandidates(
         final StructureType type,
         final int blockX,
         final int blockZ,
@@ -485,11 +490,71 @@ public final class StructureIndex {
         final int limit,
         final OptionalInt variant
     ) {
+        return findCandidates(type, blockX, blockZ, maxRadius, limit, variant, SearchOrder.NEAREST);
+    }
+
+    public List<Marker> findCandidates(
+        final StructureType type,
+        final int blockX,
+        final int blockZ,
+        final int maxRadius,
+        final int limit,
+        final OptionalInt variant,
+        final SearchOrder order
+    ) {
+        return searchCandidates(type, blockX, blockZ, maxRadius, limit, variant, order).markers();
+    }
+
+    public CandidateSearch searchCandidates(
+        final StructureType type,
+        final int blockX,
+        final int blockZ,
+        final int maxRadius,
+        final int limit,
+        final OptionalInt variant,
+        final SearchOrder order
+    ) {
+        return searchCandidates(type, blockX, blockZ, maxRadius, limit, variant, order, () -> false);
+    }
+
+    /**
+     * Walks the search disc in native batches of at most {@link #MAX_CANDIDATE_QUERY_REGIONS}
+     * regions and at most {@link #MAX_CANDIDATE_WALK_REGIONS} regions in total. The index
+     * monitor is held only for marker-map reads and writes, never across a native batch, so
+     * render-thread queries stay responsive while a walk is in flight. The walk stops early
+     * once {@code cancelled} reports true; a cancelled or budget-truncated walk reports
+     * {@code complete=false} because strips inside the covered extent may be unscanned.
+     */
+    public CandidateSearch searchCandidates(
+        final StructureType type,
+        final int blockX,
+        final int blockZ,
+        final int maxRadius,
+        final int limit,
+        final OptionalInt variant,
+        final SearchOrder order,
+        final BooleanSupplier cancelled
+    ) {
         if (provider == null || maxRadius <= 0 || limit <= 0
             || !type.supports(mcVersion, dimension)) {
-            return List.of();
+            return new CandidateSearch(List.of(), true);
         }
         final int boundedLimit = Math.min(limit, 100);
+        if (order == SearchOrder.FARTHEST) {
+            if (type.globalPlacement()) {
+                query(
+                    Integer.MIN_VALUE,
+                    Integer.MAX_VALUE,
+                    Integer.MIN_VALUE,
+                    Integer.MAX_VALUE,
+                    EnumSet.of(type)
+                );
+                return new CandidateSearch(
+                    outermostCandidates(type, blockX, blockZ, maxRadius, boundedLimit, variant), true
+                );
+            }
+            return farthestCandidates(type, blockX, blockZ, maxRadius, boundedLimit, variant, cancelled);
+        }
         if (type.globalPlacement()) {
             query(
                 Integer.MIN_VALUE,
@@ -498,42 +563,148 @@ public final class StructureIndex {
                 Integer.MAX_VALUE,
                 EnumSet.of(type)
             );
-            return nearestCandidates(type, blockX, blockZ, maxRadius, boundedLimit, variant);
-        }
-
-        final int regionSize = type.regionSizeBlocks(mcVersion);
-        final long initialExtent = Math.min(
-            maxRadius,
-            (long) Math.max(1, (int) Math.ceil(Math.sqrt(boundedLimit))) * regionSize
-        );
-        long extent = Math.max(1L, initialExtent);
-        while (true) {
-            final int minBlockX = clampBlockCoordinate((long) blockX - extent);
-            final int maxBlockX = clampBlockCoordinate((long) blockX + extent);
-            final int minBlockZ = clampBlockCoordinate((long) blockZ - extent);
-            final int maxBlockZ = clampBlockCoordinate((long) blockZ + extent);
-            if (regionCount(type, minBlockX, maxBlockX, minBlockZ, maxBlockZ)
-                > MAX_CANDIDATE_QUERY_REGIONS) {
-                break;
-            }
-            prefetchCandidateArea(type, minBlockX, maxBlockX, minBlockZ, maxBlockZ);
-            final List<Marker> result = nearestCandidates(
-                type, blockX, blockZ, maxRadius, boundedLimit, variant
+            return new CandidateSearch(
+                nearestCandidates(type, blockX, blockZ, maxRadius, boundedLimit, variant), true
             );
-            if (result.size() >= boundedLimit || extent >= maxRadius) {
-                return result;
-            }
-            extent = Math.min((long) maxRadius, extent * 2L);
         }
-        return nearestCandidates(type, blockX, blockZ, maxRadius, boundedLimit, variant);
+        return nearestAreaCandidates(type, blockX, blockZ, maxRadius, boundedLimit, variant, cancelled);
     }
 
-    private List<Marker> nearestCandidates(
+    private CandidateSearch nearestAreaCandidates(
         final StructureType type,
         final int blockX,
         final int blockZ,
         final int maxRadius,
         final int limit,
+        final OptionalInt variant,
+        final BooleanSupplier cancelled
+    ) {
+        final int regionSize = type.regionSizeBlocks(mcVersion);
+        final long initialExtent = Math.min(
+            maxRadius,
+            (long) Math.max(1, (int) Math.ceil(Math.sqrt(limit))) * regionSize
+        );
+        long extent = Math.max(1L, initialExtent);
+        long coveredExtent = 0;
+        final Walk walk = new Walk(cancelled, walkBudgetRegions);
+        while (!walk.cancelled()) {
+            final int minBlockX = clampBlockCoordinate((long) blockX - extent);
+            final int maxBlockX = clampBlockCoordinate((long) blockX + extent);
+            final int minBlockZ = clampBlockCoordinate((long) blockZ - extent);
+            final int maxBlockZ = clampBlockCoordinate((long) blockZ + extent);
+            final int phaseRegions = regionCount(type, minBlockX, maxBlockX, minBlockZ, maxBlockZ);
+            if (phaseRegions > MAX_CANDIDATE_QUERY_REGIONS) {
+                break;
+            }
+            walk.spend(phaseRegions);
+            prefetchCandidateArea(type, minBlockX, maxBlockX, minBlockZ, maxBlockZ);
+            coveredExtent = extent;
+            final List<Marker> result = nearestCandidates(
+                type, blockX, blockZ, maxRadius, limit, variant
+            );
+            if (nearestAreWithinCoveredArea(result, limit, coveredExtent, blockX, blockZ)
+                || extent >= maxRadius) {
+                return new CandidateSearch(result, true);
+            }
+            extent = Math.min((long) maxRadius, extent * 2L);
+        }
+        if (walk.cancelled()) {
+            return new CandidateSearch(
+                nearestCandidates(type, blockX, blockZ, maxRadius, limit, variant), false
+            );
+        }
+        while (coveredExtent < maxRadius && !walk.stopped()) {
+            final long thicknessRegions = frameThicknessRegions(coveredExtent, regionSize);
+            final long outerHalf = Math.min(
+                maxRadius, coveredExtent + thicknessRegions * (long) regionSize
+            );
+            collectFrame(
+                type, blockX, blockZ, coveredExtent, outerHalf, maxRadius, variant, null, walk
+            );
+            coveredExtent = outerHalf;
+            if (walk.truncated()) {
+                break;
+            }
+            final List<Marker> ringResult = nearestCandidates(
+                type, blockX, blockZ, maxRadius, limit, variant
+            );
+            if (nearestAreWithinCoveredArea(
+                ringResult, limit, coveredExtent, blockX, blockZ
+            )) {
+                return new CandidateSearch(ringResult, true);
+            }
+        }
+        final boolean complete = !walk.truncated() && !walk.cancelled() && coveredExtent >= maxRadius;
+        return new CandidateSearch(
+            nearestCandidates(type, blockX, blockZ, maxRadius, limit, variant), complete
+        );
+    }
+
+    /**
+     * Frame thickness in regions for the ring walks. With the thickness also clamped to the
+     * current side length, the {@code 8} in the denominator aims one full ring at about half
+     * the per-batch region cap, so a ring needs only a handful of native batches; strips wider
+     * than the cap (tiny region sizes at large radii) are still sliced by the segmentation in
+     * {@link #collectStrip}.
+     */
+    private long frameThicknessRegions(final long halfExtent, final int regionSize) {
+        final long sideRegions = Math.max(1, (halfExtent * 2 + regionSize - 1) / regionSize);
+        return Math.max(1, Math.min(sideRegions, MAX_CANDIDATE_QUERY_REGIONS / (8 * sideRegions)));
+    }
+
+    private boolean nearestAreWithinCoveredArea(
+        final List<Marker> result,
+        final int limit,
+        final long coveredExtent,
+        final int blockX,
+        final int blockZ
+    ) {
+        return result.size() >= limit
+            && distance(result.get(limit - 1), blockX, blockZ) <= coveredExtent;
+    }
+
+    private synchronized List<Marker> nearestCandidates(
+        final StructureType type,
+        final int blockX,
+        final int blockZ,
+        final int maxRadius,
+        final int limit,
+        final OptionalInt variant
+    ) {
+        final List<Marker> candidates = inRadius(type, blockX, blockZ, maxRadius, variant);
+        candidates.sort(Comparator
+            .comparingDouble((Marker marker) -> distance(marker, blockX, blockZ))
+            .thenComparingInt(Marker::blockX)
+            .thenComparingInt(Marker::blockZ));
+        return candidates.size() <= limit
+            ? List.copyOf(candidates)
+            : List.copyOf(candidates.subList(0, limit));
+    }
+
+    /** Picks the farthest in-radius markers; exact because the caller has generated the whole area. */
+    private synchronized List<Marker> outermostCandidates(
+        final StructureType type,
+        final int blockX,
+        final int blockZ,
+        final int maxRadius,
+        final int limit,
+        final OptionalInt variant
+    ) {
+        final List<Marker> candidates = inRadius(type, blockX, blockZ, maxRadius, variant);
+        candidates.sort(Comparator
+            .comparingDouble((Marker marker) -> distance(marker, blockX, blockZ)).reversed()
+            .thenComparingInt(Marker::blockX)
+            .thenComparingInt(Marker::blockZ));
+        return candidates.size() <= limit
+            ? List.copyOf(candidates)
+            : List.copyOf(candidates.subList(0, limit));
+    }
+
+    private synchronized List<Marker> inRadius(
+        final StructureType type,
+        final int blockX,
+        final int blockZ,
+        final int maxRadius,
         final OptionalInt variant
     ) {
         final List<Marker> candidates = new ArrayList<>();
@@ -545,13 +716,199 @@ public final class StructureIndex {
             }
             candidates.add(marker);
         }
-        candidates.sort(Comparator
-            .comparingDouble((Marker marker) -> distance(marker, blockX, blockZ))
-            .thenComparingInt(Marker::blockX)
-            .thenComparingInt(Marker::blockZ));
-        return candidates.size() <= limit
-            ? List.copyOf(candidates)
-            : List.copyOf(candidates.subList(0, limit));
+        return candidates;
+    }
+
+    private CandidateSearch farthestCandidates(
+        final StructureType type,
+        final int blockX,
+        final int blockZ,
+        final int maxRadius,
+        final int limit,
+        final OptionalInt variant,
+        final BooleanSupplier cancelled
+    ) {
+        final int regionSize = type.regionSizeBlocks(mcVersion);
+        final List<Marker> pool = new ArrayList<>();
+        final Walk walk = new Walk(cancelled, walkBudgetRegions);
+        long unscannedHalf = maxRadius;
+        boolean outermostProven = false;
+        while (unscannedHalf > 0 && !walk.stopped()) {
+            final long thicknessRegions = frameThicknessRegions(unscannedHalf, regionSize);
+            final long outerHalf = unscannedHalf;
+            unscannedHalf = Math.max(0, unscannedHalf - thicknessRegions * (long) regionSize);
+            collectFrame(
+                type, blockX, blockZ, unscannedHalf, outerHalf, maxRadius, variant, pool, walk
+            );
+            if (walk.truncated()) {
+                break;
+            }
+            pool.sort(Comparator
+                .comparingDouble((Marker marker) -> distance(marker, blockX, blockZ)).reversed()
+                .thenComparingInt(Marker::blockX)
+                .thenComparingInt(Marker::blockZ));
+            if (pool.size() >= limit && distance(pool.get(limit - 1), blockX, blockZ)
+                >= Math.hypot(unscannedHalf, unscannedHalf)) {
+                outermostProven = true;
+                break;
+            }
+        }
+        final boolean complete = outermostProven
+            || (!walk.truncated() && !walk.cancelled() && unscannedHalf == 0);
+        return new CandidateSearch(
+            pool.size() <= limit ? List.copyOf(pool) : List.copyOf(pool.subList(0, limit)),
+            complete
+        );
+    }
+
+    /**
+     * Mutable per-walk state: the remaining region budget, whether the last frame stopped
+     * mid-strip, and the cooperative cancel signal shared with the caller.
+     */
+    private static final class Walk {
+        private long budget;
+        private boolean truncated;
+        private final BooleanSupplier cancelled;
+
+        Walk(final BooleanSupplier cancelled, final long budget) {
+            this.cancelled = cancelled;
+            this.budget = budget;
+        }
+
+        boolean stopped() {
+            return budget <= 0 || cancelled.getAsBoolean();
+        }
+
+        boolean truncated() {
+            return truncated;
+        }
+
+        boolean cancelled() {
+            return cancelled.getAsBoolean();
+        }
+
+        void spend(final long regions) {
+            budget -= regions;
+        }
+    }
+
+    /**
+     * Collects the ring frame between {@code innerHalf} and {@code outerHalf} around the
+     * center. {@code pool} accumulates the frame's in-radius markers for the FARTHEST walk;
+     * NEAREST passes {@code null} because it re-derives the nearest list from the marker map
+     * after the frame completes.
+     */
+    private void collectFrame(
+        final StructureType type,
+        final int blockX,
+        final int blockZ,
+        final long innerHalf,
+        final long outerHalf,
+        final int maxRadius,
+        final OptionalInt variant,
+        final List<Marker> pool,
+        final Walk walk
+    ) {
+        collectStrip(type, blockX, blockZ,
+            blockX - outerHalf, blockX + outerHalf,
+            blockZ - outerHalf, blockZ - innerHalf - 1,
+            maxRadius, variant, pool, walk);
+        collectStrip(type, blockX, blockZ,
+            blockX - outerHalf, blockX + outerHalf,
+            blockZ + innerHalf + 1, blockZ + outerHalf,
+            maxRadius, variant, pool, walk);
+        collectStrip(type, blockX, blockZ,
+            blockX - outerHalf, blockX - innerHalf - 1,
+            blockZ - innerHalf, blockZ + innerHalf,
+            maxRadius, variant, pool, walk);
+        collectStrip(type, blockX, blockZ,
+            blockX + innerHalf + 1, blockX + outerHalf,
+            blockZ - innerHalf, blockZ + innerHalf,
+            maxRadius, variant, pool, walk);
+    }
+
+    private void collectStrip(
+        final StructureType type,
+        final int blockX,
+        final int blockZ,
+        final long minBlockX,
+        final long maxBlockX,
+        final long minBlockZ,
+        final long maxBlockZ,
+        final int maxRadius,
+        final OptionalInt variant,
+        final List<Marker> pool,
+        final Walk walk
+    ) {
+        if (minBlockX > maxBlockX || minBlockZ > maxBlockZ) {
+            return;
+        }
+        final int regionSize = type.regionSizeBlocks(mcVersion);
+        final long minRegionX = Math.floorDiv(minBlockX, regionSize);
+        final long maxRegionX = Math.floorDiv(maxBlockX, regionSize);
+        final long minRegionZ = Math.floorDiv(minBlockZ, regionSize);
+        final long maxRegionZ = Math.floorDiv(maxBlockZ, regionSize);
+        final long width = maxRegionX - minRegionX + 1;
+        final long height = maxRegionZ - minRegionZ + 1;
+        final long segments = Math.max(
+            1, (width * height + MAX_CANDIDATE_QUERY_REGIONS - 1) / MAX_CANDIDATE_QUERY_REGIONS
+        );
+        for (long segment = 0; segment < segments; segment++) {
+            if (walk.stopped()) {
+                walk.truncated = true;
+                return;
+            }
+            final long sliceMinRegionX;
+            final long sliceMaxRegionX;
+            final long sliceMinRegionZ;
+            final long sliceMaxRegionZ;
+            if (width >= height) {
+                sliceMinRegionX = minRegionX + segment * width / segments;
+                sliceMaxRegionX = minRegionX + (segment + 1) * width / segments - 1;
+                sliceMinRegionZ = minRegionZ;
+                sliceMaxRegionZ = maxRegionZ;
+            } else {
+                sliceMinRegionX = minRegionX;
+                sliceMaxRegionX = maxRegionX;
+                sliceMinRegionZ = minRegionZ + segment * height / segments;
+                sliceMaxRegionZ = minRegionZ + (segment + 1) * height / segments - 1;
+            }
+            if (sliceMinRegionX > sliceMaxRegionX || sliceMinRegionZ > sliceMaxRegionZ) {
+                continue;
+            }
+            final long sliceMinBlockX = clampBlockCoordinate(sliceMinRegionX * (long) regionSize);
+            final long sliceMaxBlockX = clampBlockCoordinate((sliceMaxRegionX + 1) * (long) regionSize - 1);
+            final long sliceMinBlockZ = clampBlockCoordinate(sliceMinRegionZ * (long) regionSize);
+            final long sliceMaxBlockZ = clampBlockCoordinate((sliceMaxRegionZ + 1) * (long) regionSize - 1);
+            walk.spend((sliceMaxRegionX - sliceMinRegionX + 1)
+                * (sliceMaxRegionZ - sliceMinRegionZ + 1));
+            prefetchCandidateArea(
+                type,
+                (int) sliceMinBlockX,
+                (int) sliceMaxBlockX,
+                (int) sliceMinBlockZ,
+                (int) sliceMaxBlockZ
+            );
+            if (pool == null) {
+                continue;
+            }
+            final long scanMinBlockX = Math.max(minBlockX, sliceMinBlockX);
+            final long scanMaxBlockX = Math.min(maxBlockX, sliceMaxBlockX);
+            final long scanMinBlockZ = Math.max(minBlockZ, sliceMinBlockZ);
+            final long scanMaxBlockZ = Math.min(maxBlockZ, sliceMaxBlockZ);
+            synchronized (this) {
+                for (final Marker marker : markers.values()) {
+                    if (marker.type() != type || marker.state() == State.NONEXISTENT
+                        || (variant.isPresent() && marker.variant() != variant.getAsInt())
+                        || marker.blockX() < scanMinBlockX || marker.blockX() > scanMaxBlockX
+                        || marker.blockZ() < scanMinBlockZ || marker.blockZ() > scanMaxBlockZ
+                        || distance(marker, blockX, blockZ) > maxRadius) {
+                        continue;
+                    }
+                    pool.add(marker);
+                }
+            }
+        }
     }
 
     private int regionCount(
@@ -683,7 +1040,8 @@ public final class StructureIndex {
     /**
      * Candidate searches stay small, so loading the requested rectangle again as one batch is
      * cheaper than letting {@link #query} invoke the native provider once for every uncached
-     * region after a player changes the search center.
+     * region after a player changes the search center. The native batch runs outside the
+     * monitor so concurrent viewport queries are never blocked by the lookup itself.
      */
     private void prefetchCandidateArea(
         final StructureType type,
@@ -698,20 +1056,27 @@ public final class StructureIndex {
         final int minRegionZ = Math.floorDiv(minBlockZ, regionSize);
         final int maxRegionZ = Math.floorDiv(maxBlockZ, regionSize);
         final Set<Long> covered = queriedRegions.get(type);
-        boolean missing = false;
-        for (int regionZ = minRegionZ; regionZ <= maxRegionZ && !missing; regionZ++) {
-            for (int regionX = minRegionX; regionX <= maxRegionX; regionX++) {
-                if (!covered.contains(packRegion(regionX, regionZ))) {
-                    missing = true;
-                    break;
+        synchronized (this) {
+            boolean missing = false;
+            for (int regionZ = minRegionZ; regionZ <= maxRegionZ && !missing; regionZ++) {
+                for (int regionX = minRegionX; regionX <= maxRegionX; regionX++) {
+                    if (!covered.contains(packRegion(regionX, regionZ))) {
+                        missing = true;
+                        break;
+                    }
                 }
             }
+            if (!missing) {
+                return;
+            }
         }
-        if (!missing) {
-            return;
+        final Candidate[] found = provider.detailedCandidates(
+            type, minRegionX, minRegionZ, maxRegionX, maxRegionZ
+        );
+        synchronized (this) {
+            addCandidates(type, found);
+            markCovered(covered, minRegionX, minRegionZ, maxRegionX, maxRegionZ);
         }
-        addCandidates(type, provider.detailedCandidates(type, minRegionX, minRegionZ, maxRegionX, maxRegionZ));
-        markCovered(covered, minRegionX, minRegionZ, maxRegionX, maxRegionZ);
     }
 
     private static int clampBlockCoordinate(final long coordinate) {
@@ -760,5 +1125,10 @@ public final class StructureIndex {
 
     private static String cacheFileName(final int mcVersion, final String dimension) {
         return CACHE_PREFIX + mcVersion + "_" + dimension + ".json";
+    }
+
+    /** Test seam: shrinks the total walk budget so mid-frame truncation is reachable deterministically. */
+    void walkBudgetRegionsForTest(final long regions) {
+        walkBudgetRegions = Math.max(1L, regions);
     }
 }

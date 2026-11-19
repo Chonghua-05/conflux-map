@@ -85,6 +85,44 @@ class MsgCodecTest {
     }
 
     @Test
+    void featureRestrictionsRoundTripEveryCombination() throws ProtoException {
+        for (int bits = 0; bits < 16; bits++) {
+            final FeatureRestrictionsS2C original = new FeatureRestrictionsS2C(
+                (bits & 1) != 0,
+                (bits & 2) != 0,
+                (bits & 4) != 0,
+                (bits & 8) != 0
+            );
+            final FeatureRestrictionsS2C decoded = (FeatureRestrictionsS2C) MsgCodec.decode(
+                MsgCodec.encode(original)
+            );
+            assertEquals(original, decoded);
+            assertEquals(bits != 0, !decoded.isEmpty());
+            assertEquals(Proto.MSG_FEATURE_RESTRICTIONS_S2C, decoded.typeId());
+        }
+        assertTrue(FeatureRestrictionsS2C.none().isEmpty());
+    }
+
+    @Test
+    void restrictionMessagesRoundTripWithoutChangingTheEmptyMessageFrame() throws ProtoException {
+        assertArrayEquals(new byte[] {0x19, 3}, MsgCodec.encode(
+            new FeatureRestrictionsS2C(true, true, false, false)
+        ));
+        final FeatureRestrictionsS2C message = new FeatureRestrictionsS2C(
+            true, true, false, false, "Maps are disabled. 🌍"
+        );
+        assertEquals(message, MsgCodec.decode(MsgCodec.encode(message)));
+        assertEquals("", ((FeatureRestrictionsS2C) MsgCodec.decode(new byte[] {0x19, 3})).message());
+        assertThrows(ProtoException.class, () -> MsgCodec.encode(new FeatureRestrictionsS2C(
+            true, true, false, false, "x".repeat(Proto.MAX_UTF8_BYTES + 1)
+        )));
+        final byte[] encoded = MsgCodec.encode(message);
+        assertThrows(ProtoException.class, () -> MsgCodec.decode(Arrays.copyOf(encoded, encoded.length - 1)));
+        assertThrows(ProtoException.class, () -> MsgCodec.decode(new byte[] {0x19, 3, 0, 1, (byte) 0xFF}));
+        assertThrows(ProtoException.class, () -> MsgCodec.decode(new byte[] {0x19, 3, 0, 0, 1}));
+    }
+
+    @Test
     void playerPositionsRoundTripEveryIdentityAndPositionField() throws ProtoException {
         final PlayerPositionsS2C original = new PlayerPositionsS2C(List.of(
             new PlayerPositionsS2C.Entry(
@@ -862,6 +900,80 @@ class MsgCodecTest {
             names.put("biome.big.b" + i, "B" + i);
         }
         assertThrows(ProtoException.class, () -> MsgCodec.encode(new BiomeLangS2C(names)));
+    }
+
+    @Test
+    void fullSyncManifestRoundTrips() throws ProtoException {
+        final List<MapFullSyncManifestS2C.RegionCoord> regions = List.of(
+            new MapFullSyncManifestS2C.RegionCoord(-5, 7),
+            new MapFullSyncManifestS2C.RegionCoord(0, 0)
+        );
+        final MapFullSyncManifestS2C page =
+            new MapFullSyncManifestS2C(0xBEEF, 2, 3, 1, 4, false, regions);
+        final MapFullSyncManifestS2C decoded =
+            (MapFullSyncManifestS2C) MsgCodec.decode(MsgCodec.encode(page));
+        assertEquals(Proto.MSG_MAP_FULL_SYNC_MANIFEST_S2C, decoded.typeId());
+        assertEquals(0xBEEF, decoded.syncId());
+        assertEquals(2, decoded.dimIndex());
+        assertEquals(3, decoded.lod());
+        assertEquals(1, decoded.pageIndex());
+        assertEquals(4, decoded.pageCount());
+        assertFalse(decoded.cancel());
+        assertEquals(regions, decoded.regions());
+
+        final MapFullSyncManifestS2C cancel = MapFullSyncManifestS2C.cancel(0);
+        final MapFullSyncManifestS2C decodedCancel =
+            (MapFullSyncManifestS2C) MsgCodec.decode(MsgCodec.encode(cancel));
+        assertTrue(decodedCancel.cancel());
+        assertTrue(decodedCancel.regions().isEmpty());
+    }
+
+    @Test
+    void fullSyncManifestRejectsOutOfRangeFields() throws ProtoException {
+        final List<MapFullSyncManifestS2C.RegionCoord> regions = List.of(
+            new MapFullSyncManifestS2C.RegionCoord(1, 1)
+        );
+        assertThrows(ProtoException.class,
+            () -> MsgCodec.encode(new MapFullSyncManifestS2C(0x10000, 0, 0, 0, 1, false, regions)));
+        assertThrows(ProtoException.class,
+            () -> MsgCodec.encode(new MapFullSyncManifestS2C(0, Proto.MAX_DIM_ENTRIES, 0, 0, 1, false, regions)));
+        assertThrows(ProtoException.class,
+            () -> MsgCodec.encode(new MapFullSyncManifestS2C(0, 0, Proto.DEFAULT_MAX_PATCH_LOD + 1, 0, 1, false, regions)));
+        assertThrows(ProtoException.class,
+            () -> MsgCodec.encode(new MapFullSyncManifestS2C(0, 0, 0, 0, 0, false, regions)));
+        assertThrows(ProtoException.class,
+            () -> MsgCodec.encode(new MapFullSyncManifestS2C(0, 0, 0, 0, Proto.MAX_FULL_SYNC_PAGES + 1, false, regions)));
+        assertThrows(ProtoException.class,
+            () -> MsgCodec.encode(new MapFullSyncManifestS2C(0, 0, 0, 2, 2, false, regions)));
+        // A cancel page carrying regions is not a valid control page.
+        assertThrows(ProtoException.class,
+            () -> MsgCodec.encode(new MapFullSyncManifestS2C(0, 0, 0, 0, 1, true, regions)));
+    }
+
+    @Test
+    void fullSyncManifestPageRegionCapIsEnforcedInBothDirections() throws Exception {
+        final List<MapFullSyncManifestS2C.RegionCoord> tooMany = new ArrayList<>();
+        for (int i = 0; i <= Proto.MAX_FULL_SYNC_PAGE_REGIONS; i++) {
+            tooMany.add(new MapFullSyncManifestS2C.RegionCoord(i, 0));
+        }
+        assertThrows(ProtoException.class,
+            () -> MsgCodec.encode(new MapFullSyncManifestS2C(0, 0, 0, 0, 1, false, tooMany)));
+
+        // A forged wire page claiming more regions than the cap must be rejected on decode.
+        final java.io.ByteArrayOutputStream bytes = new java.io.ByteArrayOutputStream();
+        final java.io.DataOutputStream out = new java.io.DataOutputStream(bytes);
+        out.writeShort(1);
+        out.writeByte(0);
+        out.writeByte(0);
+        out.writeByte(0);
+        out.writeByte(1);
+        out.writeByte(0);
+        out.writeShort(Proto.MAX_FULL_SYNC_PAGE_REGIONS + 1);
+        out.flush();
+        final byte[] payload = new byte[bytes.size() + 1];
+        payload[0] = (byte) Proto.MSG_MAP_FULL_SYNC_MANIFEST_S2C;
+        System.arraycopy(bytes.toByteArray(), 0, payload, 1, bytes.size());
+        assertThrows(ProtoException.class, () -> MsgCodec.decode(payload));
     }
 
     private static List<HelloPolicyS2C.DimDescriptor> randomDims(final Random rng) {

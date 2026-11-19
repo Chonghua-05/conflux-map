@@ -65,6 +65,43 @@ public interface BaselineSampler {
         return false;
     }
 
+    /**
+     * Sparse strided coarse-biome sampling for wide-area search: each output cell is one
+     * independent biome-source query, instead of the dense-row sweep {@link #biomesStrided}
+     * performs (whose cost scales with {@code stride} per output cell). Overworld supports
+     * scale 16 on the post-1.18 climate model, Nether and End scale 4; implementations return
+     * false for unsupported (dimension, scale) combinations and callers fall back.
+     */
+    default boolean biomesSparseStrided(
+        final int scale, final int x, final int z, final int w, final int h, final int stride, final int[] out
+    ) {
+        return false;
+    }
+
+    /**
+     * Search-targeted variant of {@link #biomesSparseStrided}: cells that cannot be {@code
+     * targetBiomeId} may be rejected cheaply and reported as {@code -1} instead of paying a full
+     * biome query; every other cell carries its real biome id. The default falls back to the
+     * plain sparse sweep, which yields the same hits.
+     */
+    default boolean biomesScanStrided(
+        final int scale, final int x, final int z, final int w, final int h, final int stride,
+        final int targetBiomeId, final int[] out
+    ) {
+        return biomesSparseStrided(scale, x, z, w, h, stride, out);
+    }
+
+    /**
+     * Finest native biome scale this sampler resolves without any terrain work, for the
+     * biome-identity view that never needs heights: 1 for the pre-1.18 layer stacks (any scale
+     * is a pure biome-stack query there), 16 for the post-1.18 Overworld climate model (scale
+     * 1/4 embed the full per-column surface solve), 0 when no terrain-free query exists and the
+     * caller must keep the height-aware pipeline.
+     */
+    default int terrainFreeBiomeScale() {
+        return 0;
+    }
+
     /** Overworld: floored heights for a w*h rectangle at 1:4 scale ({@code x4}/{@code z4} = blockX/4, blockZ/4). */
     boolean heights(int x4, int z4, int w, int h, int[] outY);
 
@@ -130,6 +167,58 @@ public interface BaselineSampler {
     }
 
     /**
+     * Coarse-lattice overview for the LOD2-4 anchor sweeps: same geometry as {@link
+     * #overviewHeights}, but implementations may skip terrain detail finer than the sampling
+     * stride. The default keeps full detail; waterline-band and exact-residual queries always
+     * use {@link #overviewHeights}.
+     */
+    default boolean overviewHeightsCoarse(
+        final int blockX,
+        final int blockZ,
+        final int w,
+        final int h,
+        final int stride,
+        final int[] outTerrainY
+    ) {
+        return overviewHeights(blockX, blockZ, w, h, stride, outTerrainY);
+    }
+
+    /**
+     * Exact overview heights at n independent block positions, all-or-nothing per call: entry i
+     * resolves the same column {@link #overviewHeights}(blockX[i], blockZ[i], 1, 1, 4, ...) would.
+     * Returns false on any failure; the caller repairs through the per-point entry.
+     */
+    default boolean overviewHeightsSparse(
+        final int[] blockX,
+        final int[] blockZ,
+        final int n,
+        final int[] outTerrainY
+    ) {
+        final int[] exact = new int[1];
+        for (int i = 0; i < n; i++) {
+            if (!overviewHeights(blockX[i], blockZ[i], 1, 1, 4, exact)) {
+                return false;
+            }
+            outTerrainY[i] = exact[0];
+        }
+        return true;
+    }
+
+    /**
+     * Whether {@link LodSampling} may reconstruct this sampler's fields from sparse lattices
+     * instead of querying every position: overview heights bilinearly between every-second-pixel
+     * anchors (waterline zones still solve exactly), and the LOD3-4 sub-biome sweep copied from
+     * anchor-uniform cells where the water/land classification provably ignores the biome. This
+     * is a quality statement about the sampler's models, not a capability: the 1.18+ native
+     * predictor is smooth at those spacings, while pre-1.18 output is pinned bit-exact as the
+     * reference and non-native samplers keep their per-position contract, so both opt out (the
+     * default).
+     */
+    default boolean interpolatableOverviewHeights() {
+        return false;
+    }
+
+    /**
      * Resolves final Overworld surface biomes at the supplied terrain heights without generating
      * those heights a second time. Implementations that cannot reuse the height grid return false,
      * and {@link LodSampling} falls back to {@link #biomesStrided}.
@@ -144,6 +233,34 @@ public interface BaselineSampler {
         final int[] outBiomeIds
     ) {
         return false;
+    }
+
+    /**
+     * Height-aware surface biomes for n uniformly-shaped cells: cell i covers an edge x edge point
+     * grid spaced stride blocks apart with heights terrainYPacked[i*edge*edge .. ], resolving the
+     * same values {@link #surfaceBiomes}(cellX[i], cellZ[i], edge, edge, stride, heights_i, out_i)
+     * would. All-or-nothing per call; false means repair per cell.
+     */
+    default boolean surfaceBiomesSparse(
+        final int[] cellX,
+        final int[] cellZ,
+        final int edge,
+        final int stride,
+        final int[] terrainYPacked,
+        final int n,
+        final int[] outBiomeIdsPacked
+    ) {
+        final int points = edge * edge;
+        final int[] heights = new int[points];
+        final int[] out = new int[points];
+        for (int i = 0; i < n; i++) {
+            System.arraycopy(terrainYPacked, i * points, heights, 0, points);
+            if (!surfaceBiomes(cellX[i], cellZ[i], edge, edge, stride, heights, out)) {
+                return false;
+            }
+            System.arraycopy(out, 0, outBiomeIdsPacked, i * points, points);
+        }
+        return true;
     }
 
     /** End: floored End surface heights (0 = void) for a w*h rectangle at 1:4 scale. */

@@ -1,5 +1,6 @@
 package cn.net.rms.confluxmap.server;
 
+import cn.net.rms.confluxmap.core.util.ChunkKeys;
 import java.util.Iterator;
 import java.util.LinkedHashMap;
 import java.util.Map;
@@ -77,7 +78,7 @@ public final class PendingLiveRemovals {
                 ),
                 ignored -> new LinkedHashMap<>()
             )
-            .put(chunkKey(chunkX, chunkZ), new ChunkEntry(observedMtimeMs, tick, awaitWrite));
+            .put(ChunkKeys.pack(chunkX, chunkZ), new ChunkEntry(observedMtimeMs, tick, awaitWrite));
     }
 
     /** Drops the pending entry of a chunk that loaded again; its overlay goes back to live use. */
@@ -91,7 +92,7 @@ public final class PendingLiveRemovals {
         if (chunks == null) {
             return;
         }
-        chunks.remove(chunkKey(chunkX, chunkZ));
+        chunks.remove(ChunkKeys.pack(chunkX, chunkZ));
         if (chunks.isEmpty()) {
             pendingRegions.remove(key);
         }
@@ -128,7 +129,8 @@ public final class PendingLiveRemovals {
                 final Map.Entry<Long, ChunkEntry> chunk = chunkIterator.next();
                 final ChunkEntry pending = chunk.getValue();
                 if (expired(tick, pending, mtime)) {
-                    sink.removeLive(key.worldIndex(), chunkX(chunk.getKey()), chunkZ(chunk.getKey()));
+                    sink.removeLive(
+                        key.worldIndex(), ChunkKeys.chunkX(chunk.getKey()), ChunkKeys.chunkZ(chunk.getKey()));
                     chunkIterator.remove();
                 }
             }
@@ -149,17 +151,5 @@ public final class PendingLiveRemovals {
             return true;
         }
         return currentMtime > 0L && currentMtime != pending.observedMtimeMs();
-    }
-
-    private static long chunkKey(final int chunkX, final int chunkZ) {
-        return ((long) chunkX << 32) | (chunkZ & 0xFFFFFFFFL);
-    }
-
-    private static int chunkX(final long chunkKey) {
-        return (int) (chunkKey >> 32);
-    }
-
-    private static int chunkZ(final long chunkKey) {
-        return (int) chunkKey;
     }
 }

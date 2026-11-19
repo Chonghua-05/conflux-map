@@ -3,17 +3,34 @@ package cn.net.rms.confluxmap.core.predict;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 
+import cn.net.rms.confluxmap.nativepredict.GpuBackend;
 import cn.net.rms.confluxmap.nativepredict.McVersions;
 import cn.net.rms.confluxmap.nativepredict.NativeLib;
+import cn.net.rms.confluxmap.nativepredict.PredictionBackend;
 import java.io.BufferedReader;
 import java.io.InputStreamReader;
 import java.nio.file.Path;
+import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Assumptions;
+import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
 /** Pins the browser WASM baseline to the production Java/JNI predictor. */
 class WebPredictorParityTest {
     private static final long SEED = 123456789L;
+
+    @BeforeEach
+    void pinCpuReference() {
+        // The wasm port is a CPU port; on GPU machines the sparse seam now serves
+        // drift-budgeted fp32, so pin the Java side to the CPU reference to keep
+        // this port-equivalence gate bit-exact.
+        GpuBackend.configure(PredictionBackend.CPU);
+    }
+
+    @AfterEach
+    void restoreGpu() {
+        GpuBackend.configure(PredictionBackend.GPU);
+    }
 
     @Test
     void overworldBaselineMatchesProductionAtEveryExactResidualBoundary() throws Exception {
@@ -40,6 +57,16 @@ class WebPredictorParityTest {
         final int current = McVersions.toCubiomes("1.21.8").orElseThrow();
         for (int lod = 3; lod <= 4; lod++) {
             assertParity(current, PredictionDimensions.OVERWORLD, lod, wasm, dumpScript);
+        }
+        final int legacy = McVersions.toCubiomes("1.17.1").orElseThrow();
+        for (int lod = 0; lod <= 4; lod++) {
+            // Both phases at every LOD: the quart lattice floors to absolute world
+            // coordinates, so a negative origin must not shift the sampled grid.
+            assertParity(
+                legacy, PredictionDimensions.OVERWORLD, lod, -65_539, -32_771,
+                wasm, dumpScript
+            );
+            assertParity(legacy, PredictionDimensions.OVERWORLD, lod, wasm, dumpScript);
         }
         assertParity(
             current, PredictionDimensions.OVERWORLD, 4, -65_536, -65_536,
@@ -75,7 +102,6 @@ class WebPredictorParityTest {
         assertNotNull(javaGrid, "Java baseline LOD" + lod);
         final DerivedGrid derived = BaselineDeriver.derive(javaGrid);
         final int[] beforeCanopy = derived.surfaceY.clone();
-        final int[] beforeSubCanopy = derived.subSurfaceY.clone();
         CanopyStylizer.apply(derived, javaGrid, SEED, lod, blockX, blockZ);
         final Process process = new ProcessBuilder(
             "node", dumpScript.toString(), wasm.toString(),
@@ -90,8 +116,7 @@ class WebPredictorParityTest {
             while ((line = reader.readLine()) != null) {
                 final String[] values = line.split(",");
                 assertEquals(
-                    javaGrid.supersampled() ? 16 : 4,
-                    values.length, "WASM output at line " + index
+                    4, values.length, "WASM output at line " + index
                 );
                 assertEquals(
                     javaGrid.terrainY[index], Integer.parseInt(values[0]),
@@ -113,27 +138,6 @@ class WebPredictorParityTest {
                     Integer.parseInt(values[3]),
                     "canopy height at LOD" + lod + " index " + index
                 );
-                if (javaGrid.supersampled()) {
-                    for (int sample = 0; sample < 4; sample++) {
-                        final int sub = index * 4 + sample;
-                        final int offset = 4 + sample * 3;
-                        assertEquals(
-                            javaGrid.subBiomeId[sub], Integer.parseInt(values[offset]),
-                            "sub-biome at LOD" + lod + " index " + sub
-                        );
-                        assertEquals(
-                            (javaGrid.subSurfaceFlags[sub] & BaselineGrid.SURFACE_FLUID) != 0
-                                ? 1 : 0,
-                            Integer.parseInt(values[offset + 1]),
-                            "sub-fluid at LOD" + lod + " index " + sub
-                        );
-                        assertEquals(
-                            derived.subSurfaceY[sub] - beforeSubCanopy[sub],
-                            Integer.parseInt(values[offset + 2]),
-                            "sub-canopy at LOD" + lod + " index " + sub
-                        );
-                    }
-                }
                 index++;
             }
         }

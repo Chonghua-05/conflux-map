@@ -1,5 +1,6 @@
 package cn.net.rms.confluxmap.core.terrain;
 
+import cn.net.rms.confluxmap.core.util.ChunkKeys;
 import java.io.IOException;
 import java.time.Duration;
 import java.util.ArrayList;
@@ -41,6 +42,7 @@ public final class TerrainWorker implements AutoCloseable {
     );
     private final CaveFloorEngine engine = new CaveFloorEngine();
     private final Map<Integer, MaterialDescriptor> materials = new HashMap<>();
+    private volatile Map<Integer, MaterialDescriptor> materialSnapshot = Map.of();
     private final LinkedHashMap<Long, CachedChunk> chunks = new LinkedHashMap<>(
         64, 0.75f, true
     );
@@ -195,8 +197,7 @@ public final class TerrainWorker implements AutoCloseable {
             if (cachedSessionToken != next.sessionToken()) {
                 chunks.clear();
                 cachedBytes = 0L;
-                materials.clear();
-                requestedMaterials.clear();
+                clearMaterials();
                 cachedSessionToken = next.sessionToken();
             }
             view = next;
@@ -218,7 +219,7 @@ public final class TerrainWorker implements AutoCloseable {
         }
         final CachedChunk chunk;
         synchronized (stateLock) {
-            final long key = chunkKey(encoded.chunkX(), encoded.chunkZ());
+            final long key = ChunkKeys.pack(encoded.chunkX(), encoded.chunkZ());
             final CachedChunk existing = chunks.get(key);
             if (existing == null) {
                 final CachedChunk fresh = new CachedChunk(encoded);
@@ -243,14 +244,27 @@ public final class TerrainWorker implements AutoCloseable {
 
     private void acceptMaterials(final Map<Integer, MaterialDescriptor> additions) {
         synchronized (stateLock) {
-            materials.putAll(additions);
-            requestedMaterials.removeAll(additions.keySet());
+            addMaterials(additions);
         }
         final TerrainView target = view;
         if (target != null) {
             computation.getQueue().clear();
             scheduleAll(target, epoch.get());
         }
+    }
+
+    /** Caller must hold {@link #stateLock}. Updates the canonical map and volatile snapshot together. */
+    private void addMaterials(final Map<Integer, MaterialDescriptor> additions) {
+        materials.putAll(additions);
+        requestedMaterials.removeAll(additions.keySet());
+        materialSnapshot = Map.copyOf(materials);
+    }
+
+    /** Caller must hold {@link #stateLock}. Clears materials and resets snapshot to empty. */
+    private void clearMaterials() {
+        materials.clear();
+        requestedMaterials.clear();
+        materialSnapshot = Map.of();
     }
 
     private void invalidateChunk(
@@ -260,7 +274,7 @@ public final class TerrainWorker implements AutoCloseable {
             return;
         }
         synchronized (stateLock) {
-            final CachedChunk removed = chunks.remove(chunkKey(chunkX, chunkZ));
+            final CachedChunk removed = chunks.remove(ChunkKeys.pack(chunkX, chunkZ));
             if (removed != null) {
                 cachedBytes -= removed.estimatedBytes();
                 removed.invalidate();
@@ -274,7 +288,7 @@ public final class TerrainWorker implements AutoCloseable {
         }
         final CachedChunk chunk;
         synchronized (stateLock) {
-            chunk = chunks.get(chunkKey(delta.chunkX(), delta.chunkZ()));
+            chunk = chunks.get(ChunkKeys.pack(delta.chunkX(), delta.chunkZ()));
             if (chunk == null) {
                 return;
             }
@@ -337,10 +351,7 @@ public final class TerrainWorker implements AutoCloseable {
             return;
         }
         try {
-            final Map<Integer, MaterialDescriptor> materialSnapshot;
-            synchronized (stateLock) {
-                materialSnapshot = Map.copyOf(materials);
-            }
+            final Map<Integer, MaterialDescriptor> materialSnapshot = this.materialSnapshot;
             final ChunkVolume decoded = chunk.decode();
             if (decoded == null) {
                 return;
@@ -469,7 +480,7 @@ public final class TerrainWorker implements AutoCloseable {
                 || result.generation() != expectedGeneration) {
                 return;
             }
-            final long key = chunkKey(result.result().chunkX(), result.result().chunkZ());
+            final long key = ChunkKeys.pack(result.result().chunkX(), result.result().chunkZ());
             final TerrainResult existing = results.get(key);
             if (existing != null && existing.result().revision() > result.result().revision()) {
                 return;
@@ -548,10 +559,6 @@ public final class TerrainWorker implements AutoCloseable {
         synchronized (resultLock) {
             resultLock.notifyAll();
         }
-    }
-
-    private static long chunkKey(final int x, final int z) {
-        return ((long) x << 32) ^ (z & 0xFFFFFFFFL);
     }
 
     private static Thread daemon(final String name, final Runnable target) {

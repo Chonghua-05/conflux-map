@@ -2,6 +2,7 @@ package cn.net.rms.confluxmap.core.config;
 
 import cn.net.rms.confluxmap.core.model.DimensionId;
 import cn.net.rms.confluxmap.core.model.WorldIdentity;
+import cn.net.rms.confluxmap.core.util.CoordinateText;
 import java.util.Optional;
 
 /** Validates and renders the client-configured fullscreen-map teleport command. */
@@ -53,9 +54,9 @@ public final class TeleportCommandTemplate {
             throw new IllegalArgumentException("invalid teleport command template");
         }
         return stripLeadingSlash(template.trim())
-            .replace(X, Double.toString(x))
-            .replace(Y, Double.toString(y))
-            .replace(Z, Double.toString(z))
+            .replace(X, CoordinateText.plain(x))
+            .replace(Y, CoordinateText.plain(y))
+            .replace(Z, CoordinateText.plain(z))
             .replace(DIMENSION, dimension.toString())
             .replace(WORLD, world.worldId());
     }

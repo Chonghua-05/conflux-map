@@ -371,7 +371,11 @@ public final class TileService {
         );
     }
 
-    /** Keeps prediction below available real sources while allowing newer synchronized chunks through. */
+    /**
+     * Keeps prediction below available real sources while allowing newer synchronized chunks
+     * through. The revision plane is chunk-granular: one cell per correction chunk at the
+     * tile's LOD, because a chunk's pixels share a single source revision.
+     */
     public void maskPredictedPixels(
         final TileKey realKey,
         final int[] predictedPixels,
@@ -382,7 +386,7 @@ public final class TileService {
             realKey,
             predictedPixels,
             corrections == null ? null : corrections.copyEvaluated(),
-            corrections == null ? null : corrections.copyPixelSourceRevisions(),
+            corrections == null ? null : corrections.copyChunkSourceRevisions(),
             profile
         );
     }
@@ -391,7 +395,7 @@ public final class TileService {
         final TileKey realKey,
         final int[] predictedPixels,
         final byte[] syncEvaluated,
-        final long[] syncSourceRevisions,
+        final long[] syncChunkSourceRevisions,
         final CorrectionProfile profile
     ) {
         if (predictedPixels.length != RegionColumns.SIZE * RegionColumns.SIZE) {
@@ -400,9 +404,10 @@ public final class TileService {
         if (syncEvaluated != null && syncEvaluated.length != PatchCodec.MASK_BYTES) {
             throw new IllegalArgumentException("sync evaluated mask has the wrong length");
         }
-        if (syncSourceRevisions != null
-            && syncSourceRevisions.length != RegionColumns.SIZE * RegionColumns.SIZE) {
-            throw new IllegalArgumentException("sync source revisions have the wrong length");
+        final int chunksPerTile = 16 << realKey.lod();
+        if (syncChunkSourceRevisions != null
+            && syncChunkSourceRevisions.length != chunksPerTile * chunksPerTile) {
+            throw new IllegalArgumentException("sync chunk source revisions have the wrong length");
         }
         final MapWorld world = mapWorlds.current();
         if (world == null
@@ -412,39 +417,54 @@ public final class TileService {
         }
         final MapLayer layer = MapLayer.parse(BiomeTileKeys.realLayerId(realKey.layerId()));
         final ColumnStore store = world.store(layer);
-        final int chunksPerTile = 16 << realKey.lod();
         final int pixelsPerChunk = 16 >> realKey.lod();
         final int baseChunkX = realKey.tileX() * chunksPerTile;
         final int baseChunkZ = realKey.tileZ() * chunksPerTile;
-        for (int chunkDz = 0; chunkDz < chunksPerTile; chunkDz++) {
-            for (int chunkDx = 0; chunkDx < chunksPerTile; chunkDx++) {
-                final int chunkX = baseChunkX + chunkDx;
-                final int chunkZ = baseChunkZ + chunkDz;
-                final ChunkViewport localViewport = localAuthorityViewport;
-                final boolean locallyAuthoritative = localViewport != null
-                    && localViewport.contains(chunkX, chunkZ);
-                final boolean localPresent = store.hasRealChunk(chunkX, chunkZ);
-                if (!localPresent) {
+        // Tile boundaries also align to the store's 16x16-chunk regions. A missing region has
+        // no local pixels to mask, so high LODs need one map lookup per region rather than one
+        // per world chunk (256 rather than 65,536 for an uncaptured LOD4 tile).
+        for (int regionDz = 0; regionDz < chunksPerTile; regionDz += RegionColumns.CHUNKS) {
+            for (int regionDx = 0; regionDx < chunksPerTile; regionDx += RegionColumns.CHUNKS) {
+                final RegionColumns region = store.region(
+                    (baseChunkX + regionDx) >> 4, (baseChunkZ + regionDz) >> 4
+                );
+                if (region == null) {
                     continue;
                 }
-                final long localRevision = localPresent
-                    ? store.realChunkSourceRevision(chunkX, chunkZ)
-                    : MapSourceSelector.UNKNOWN_REVISION;
-                final int pixelX = chunkDx * pixelsPerChunk;
-                final int pixelZ = chunkDz * pixelsPerChunk;
-                for (int dz = 0; dz < pixelsPerChunk; dz++) {
-                    final int row = (pixelZ + dz) * RegionColumns.SIZE;
-                    for (int dx = 0; dx < pixelsPerChunk; dx++) {
-                        final int pixel = row + pixelX + dx;
-                        final boolean syncPresent = syncEvaluated != null
-                            && (syncEvaluated[pixel >>> 3] & (1 << (pixel & 7))) != 0;
-                        final long syncRevision = syncPresent && syncSourceRevisions != null
-                            ? syncSourceRevisions[pixel]
-                            : MapSourceSelector.UNKNOWN_REVISION;
-                        if (locallyAuthoritative || !MapSourceSelector.syncWins(
-                            localPresent, localRevision, syncPresent, syncRevision, profile
-                        )) {
-                            predictedPixels[pixel] = Argb.TRANSPARENT;
+                for (int localZ = 0; localZ < RegionColumns.CHUNKS; localZ++) {
+                    final int chunkDz = regionDz + localZ;
+                    for (int localX = 0; localX < RegionColumns.CHUNKS; localX++) {
+                        final boolean localPresent = region.chunkSource(localX, localZ).isExplored();
+                        if (!localPresent) {
+                            continue;
+                        }
+                        final int chunkDx = regionDx + localX;
+                        final int chunkX = baseChunkX + chunkDx;
+                        final int chunkZ = baseChunkZ + chunkDz;
+                        final ChunkViewport localViewport = localAuthorityViewport;
+                        final boolean locallyAuthoritative = localViewport != null
+                            && localViewport.contains(chunkX, chunkZ);
+                        final long localRevision = region.chunkSourceRevision(localX, localZ);
+                        final long syncChunkRevision = syncChunkSourceRevisions == null
+                            ? MapSourceSelector.UNKNOWN_REVISION
+                            : syncChunkSourceRevisions[chunkDz * chunksPerTile + chunkDx];
+                        final int pixelX = chunkDx * pixelsPerChunk;
+                        final int pixelZ = chunkDz * pixelsPerChunk;
+                        for (int dz = 0; dz < pixelsPerChunk; dz++) {
+                            final int row = (pixelZ + dz) * RegionColumns.SIZE;
+                            for (int dx = 0; dx < pixelsPerChunk; dx++) {
+                                final int pixel = row + pixelX + dx;
+                                final boolean syncPresent = syncEvaluated != null
+                                    && (syncEvaluated[pixel >>> 3] & (1 << (pixel & 7))) != 0;
+                                final long syncRevision = syncPresent
+                                    ? syncChunkRevision
+                                    : MapSourceSelector.UNKNOWN_REVISION;
+                                if (locallyAuthoritative || !MapSourceSelector.syncWins(
+                                    localPresent, localRevision, syncPresent, syncRevision, profile
+                                )) {
+                                    predictedPixels[pixel] = Argb.TRANSPARENT;
+                                }
+                            }
                         }
                     }
                 }
@@ -568,7 +588,8 @@ public final class TileService {
         invalidateCompositions();
     }
 
-    private void invalidateCompositions() {
+    /** Drops composed results whose capture-time baked data has been replaced underneath them. */
+    public synchronized void invalidateCompositions() {
         compositionGeneration++;
         dirty.clear();
         staleTiles.clear();
@@ -876,6 +897,7 @@ public final class TileService {
         final boolean biomeMode = BiomeTileKeys.isBiome(key);
         final MapLayer layer = MapLayer.parse(BiomeTileKeys.realLayerId(key.layerId()));
         final MapColorStyle mapColorStyle = config.mapColorStyle;
+        final int voidColor = config.voidColumnColor.argb();
         final XaeroMapStyle.Shadow xaeroShadow = XaeroMapStyle.shadowFor(key.dimension());
         final ColumnStore store = world.store(layer);
         // The roof view is block-accurate and lives around one almost-flat Y. Keep the shared,
@@ -916,7 +938,7 @@ public final class TileService {
             composeLod0(
                 store, key.tileX(), key.tileZ(), biomeMode, applyAbsoluteHeight,
                 layer.type(), applyDaylight, daylightFactor, gamma, composedLight,
-                mapColorStyle, xaeroShadow, dirtyRect, composedPixels
+                mapColorStyle, xaeroShadow, voidColor, dirtyRect, composedPixels
             );
             if (store.region(key.tileX(), key.tileZ()) != null) {
                 changed.add(dirtyRect);
@@ -936,7 +958,7 @@ public final class TileService {
             pixels = composeLodN(
                 store, key, biomeMode, applyAbsoluteHeight,
                 layer.type(), applyDaylight, daylightFactor, gamma, lightPlane, changed,
-                mapColorStyle, xaeroShadow, work.regions
+                mapColorStyle, xaeroShadow, voidColor, work.regions
             );
         }
         final TileUpdate.Relight relight = lightPlane == null
@@ -965,6 +987,7 @@ public final class TileService {
         final byte[] outLight,
         final MapColorStyle mapColorStyle,
         final XaeroMapStyle.Shadow xaeroShadow,
+        final int voidColor,
         final TileUpdate.Rect dirtyRect,
         final int[] pixels
     ) {
@@ -985,7 +1008,7 @@ public final class TileService {
                 neighborhood, pixels,
                 biomeMode, applyAbsoluteHeight, layerType,
                 applyDaylight, daylightFactor, gamma, outLight, mapColorStyle, xaeroShadow,
-                dirtyRect
+                voidColor, dirtyRect
             );
         }
     }
@@ -1015,6 +1038,7 @@ public final class TileService {
         final List<TileUpdate.Rect> outChanged,
         final MapColorStyle mapColorStyle,
         final XaeroMapStyle.Shadow xaeroShadow,
+        final int voidColor,
         final Set<Long> dirtyRegions
     ) {
         final int lod = key.lod();
@@ -1024,6 +1048,7 @@ public final class TileService {
         final int baseRegionX = key.tileX() << lod;
         final int baseRegionZ = key.tileZ() << lod;
         final int[] outPixels = new int[size * size];
+        final ComposeScratch scratch = COMPOSE_SCRATCH.get();
         for (int dz = 0; dz < regionsPerSide; dz++) {
             for (int dx = 0; dx < regionsPerSide; dx++) {
                 final int regionX = baseRegionX + dx;
@@ -1034,18 +1059,17 @@ public final class TileService {
                 if (store.region(regionX, regionZ) == null) {
                     continue;
                 }
-                final ComposeScratch scratch = COMPOSE_SCRATCH.get();
                 final byte[] fullLight = outLight == null ? null : scratch.outputLight;
                 final int[] full = scratch.outputPixels;
                 composeLod0(
                     store, regionX, regionZ, biomeMode, applyAbsoluteHeight,
                     layerType, applyDaylight, daylightFactor, gamma, fullLight,
-                    mapColorStyle, xaeroShadow, DirtyWork.FULL_RECT, full
+                    mapColorStyle, xaeroShadow, voidColor, DirtyWork.FULL_RECT, full
                 );
-                final int[] downsampled = downsample(full, size, lod);
+                final int[] downsampled = downsample(full, size, lod, scratch);
                 stitch(downsampled, subSize, outPixels, dx * subSize, dz * subSize);
                 if (outLight != null) {
-                    stitchLight(downsampleLight(fullLight, size, lod), subSize, outLight, dx * subSize, dz * subSize);
+                    stitchLight(downsampleLight(fullLight, size, lod, scratch), subSize, outLight, dx * subSize, dz * subSize);
                 }
                 outChanged.add(new TileUpdate.Rect(dx * subSize, dz * subSize, subSize, subSize));
             }
@@ -1053,13 +1077,24 @@ public final class TileService {
         return outPixels;
     }
 
-    /** Repeated 2x2 box-average halving, {@code steps} times: {@code size -> size >> steps}. */
-    private static int[] downsample(final int[] src, final int size, final int steps) {
+    /**
+     * Repeated 2x2 box-average halving, {@code steps} times: {@code size -> size >> steps}.
+     *
+     * <p><b>Memory contract:</b> When {@code steps > 0}, the returned array is a borrowed
+     * worker-local scratch buffer ({@code downsampleA} or {@code downsampleB}) of fixed capacity
+     * {@code PIXELS / 4} (16384). Only the first {@code (size >> steps)^2} elements are valid.
+     * Callers must consume the contents immediately (e.g. via {@link #stitch}) and must never
+     * retain the array reference or use {@code array.length} as dimensions.
+     */
+    private static int[] downsample(final int[] src, final int size, final int steps, final ComposeScratch scratch) {
+        if (steps <= 0) {
+            return src;
+        }
         int[] current = src;
         int currentSize = size;
         for (int step = 0; step < steps; step++) {
             final int nextSize = currentSize / 2;
-            final int[] next = new int[nextSize * nextSize];
+            final int[] next = (step % 2 == 0) ? scratch.downsampleA : scratch.downsampleB;
             for (int z = 0; z < nextSize; z++) {
                 final int z0 = z * 2;
                 final int z1 = z0 + 1;
@@ -1091,21 +1126,28 @@ public final class TileService {
      * 0-15 levels. A plain average (no alpha weighting) is enough here - the levels only
      * steer how strongly a re-light darkens each pixel, and at coarse LODs a torch is a
      * sub-pixel detail either way.
+     *
+     * <p><b>Memory contract:</b> Follows the same scratch-buffer pooling rules as {@link #downsample}.
+     * Block light levels are canonically in the range {@code 0..15}; {@code & 0xFF} defensively prevents
+     * negative sign extension if signed bytes are manipulated.
      */
-    private static byte[] downsampleLight(final byte[] src, final int size, final int steps) {
+    private static byte[] downsampleLight(final byte[] src, final int size, final int steps, final ComposeScratch scratch) {
+        if (steps <= 0) {
+            return src;
+        }
         byte[] current = src;
         int currentSize = size;
         for (int step = 0; step < steps; step++) {
             final int nextSize = currentSize / 2;
-            final byte[] next = new byte[nextSize * nextSize];
+            final byte[] next = (step % 2 == 0) ? scratch.downsampleLightA : scratch.downsampleLightB;
             for (int z = 0; z < nextSize; z++) {
                 final int z0 = z * 2;
                 final int z1 = z0 + 1;
                 for (int x = 0; x < nextSize; x++) {
                     final int x0 = x * 2;
                     final int x1 = x0 + 1;
-                    final int sum = current[z0 * currentSize + x0] + current[z0 * currentSize + x1]
-                        + current[z1 * currentSize + x0] + current[z1 * currentSize + x1];
+                    final int sum = (current[z0 * currentSize + x0] & 0xFF) + (current[z0 * currentSize + x1] & 0xFF)
+                        + (current[z1 * currentSize + x0] & 0xFF) + (current[z1 * currentSize + x1] & 0xFF);
                     next[z * nextSize + x] = (byte) ((sum + 2) >> 2);
                 }
             }
@@ -1162,6 +1204,7 @@ public final class TileService {
         final byte[] outLight,
         final MapColorStyle mapColorStyle,
         final XaeroMapStyle.Shadow xaeroShadow,
+        final int voidColor,
         final TileUpdate.Rect dirtyRect
     ) {
         final int size = RegionColumns.SIZE;
@@ -1194,8 +1237,12 @@ public final class TileService {
             for (int x = dirtyRect.x(); x < dirtyRect.x() + dirtyRect.width(); x++) {
                 final int idx = z * size + x;
                 final byte k = kind[idx];
-                if (k == SurfaceKind.UNKNOWN.ordinal() || k == SurfaceKind.VOID.ordinal()) {
+                if (k == SurfaceKind.UNKNOWN.ordinal()) {
                     outPixels[idx] = Argb.TRANSPARENT;
+                    continue;
+                }
+                if (k == SurfaceKind.VOID.ordinal()) {
+                    outPixels[idx] = voidColor;
                     continue;
                 }
                 if (biomeMode) {
@@ -1295,12 +1342,22 @@ public final class TileService {
         final int tintedBase = Argb.multiply(baseArgb[idx], tintArgb[idx]);
         final int composed;
         if (waterOrIce) {
+            // Shoulders whose neighbour region is absent are filled from the axial
+            // opposite (see reliefMultiplier) so the floor keeps its slope light.
+            final int north =
+                reliefHeight(x, z - 1, true, surfaceY, fluidDepth, kind, neighborhood);
+            final int northWest =
+                reliefHeight(x - 1, z - 1, true, surfaceY, fluidDepth, kind, neighborhood);
+            final int south =
+                reliefHeight(x, z + 1, true, surfaceY, fluidDepth, kind, neighborhood);
+            final int southEast =
+                reliefHeight(x + 1, z + 1, true, surfaceY, fluidDepth, kind, neighborhood);
             int shadedFloor = overlayArgb[idx] == Argb.TRANSPARENT
                 ? Argb.TRANSPARENT
                 : XaeroMapStyle.applyTerrain(
                     overlayArgb[idx], floor,
-                    reliefHeight(x, z - 1, true, surfaceY, fluidDepth, kind, neighborhood),
-                    reliefHeight(x - 1, z - 1, true, surfaceY, fluidDepth, kind, neighborhood),
+                    ShadingPipeline.filledShoulderWithSentinels(north, south, floor),
+                    ShadingPipeline.filledShoulderWithSentinels(northWest, southEast, floor),
                     1, true, shadow
                 );
             shadedFloor = ShadingPipeline.applyBrightnessMultiplier(
@@ -1308,10 +1365,18 @@ public final class TileService {
             );
             composed = ShadingPipeline.compositeOver(tintedBase, shadedFloor);
         } else {
+            final int north =
+                reliefHeight(x, z - 1, false, surfaceY, fluidDepth, kind, neighborhood);
+            final int northWest =
+                reliefHeight(x - 1, z - 1, false, surfaceY, fluidDepth, kind, neighborhood);
+            final int south =
+                reliefHeight(x, z + 1, false, surfaceY, fluidDepth, kind, neighborhood);
+            final int southEast =
+                reliefHeight(x + 1, z + 1, false, surfaceY, fluidDepth, kind, neighborhood);
             final int shadedBase = XaeroMapStyle.applyTerrain(
                 tintedBase, surface,
-                reliefHeight(x, z - 1, false, surfaceY, fluidDepth, kind, neighborhood),
-                reliefHeight(x - 1, z - 1, false, surfaceY, fluidDepth, kind, neighborhood),
+                ShadingPipeline.filledShoulderWithSentinels(north, south, surface),
+                ShadingPipeline.filledShoulderWithSentinels(northWest, southEast, surface),
                 1, true, shadow
             );
             composed = ShadingPipeline.compositeOver(overlayArgb[idx], shadedBase);
@@ -1355,18 +1420,38 @@ public final class TileService {
         final byte[] localKind,
         final RegionNeighborhood neighborhood
     ) {
-        return ShadingPipeline.directionalReliefMultiplier(
-            reliefHeight(x - 1, z, bathymetry, localSurfaceY, localFluidDepth, localKind, neighborhood),
-            reliefHeight(x, z + 1, bathymetry, localSurfaceY, localFluidDepth, localKind, neighborhood),
-            reliefHeight(x - 1, z + 1, bathymetry, localSurfaceY, localFluidDepth, localKind, neighborhood),
-            reliefHeight(x + 1, z, bathymetry, localSurfaceY, localFluidDepth, localKind, neighborhood),
-            reliefHeight(x, z - 1, bathymetry, localSurfaceY, localFluidDepth, localKind, neighborhood),
-            reliefHeight(x + 1, z - 1, bathymetry, localSurfaceY, localFluidDepth, localKind, neighborhood),
+        final int centerHeight =
+            reliefHeight(x, z, bathymetry, localSurfaceY, localFluidDepth, localKind, neighborhood);
+        if (centerHeight == ShadingPipeline.NO_HEIGHT) {
+            return 1.0;
+        }
+        // Region-edge columns lose shoulders to absent neighbour regions; filling them from
+        // the axial opposite keeps slope shading alive to the last column instead of
+        // collapsing the whole pixel flat (a one-texel bright band on region borders).
+        final int litWest =
+            reliefHeight(x - 1, z, bathymetry, localSurfaceY, localFluidDepth, localKind, neighborhood);
+        final int litSouth =
+            reliefHeight(x, z + 1, bathymetry, localSurfaceY, localFluidDepth, localKind, neighborhood);
+        final int litDiagonal =
+            reliefHeight(x - 1, z + 1, bathymetry, localSurfaceY, localFluidDepth, localKind, neighborhood);
+        final int darkEast =
+            reliefHeight(x + 1, z, bathymetry, localSurfaceY, localFluidDepth, localKind, neighborhood);
+        final int darkNorth =
+            reliefHeight(x, z - 1, bathymetry, localSurfaceY, localFluidDepth, localKind, neighborhood);
+        final int darkDiagonal =
+            reliefHeight(x + 1, z - 1, bathymetry, localSurfaceY, localFluidDepth, localKind, neighborhood);
+        return ShadingPipeline.directionalReliefMultiplierWithSentinels(
+            ShadingPipeline.filledShoulderWithSentinels(litWest, darkEast, centerHeight),
+            ShadingPipeline.filledShoulderWithSentinels(litSouth, darkNorth, centerHeight),
+            ShadingPipeline.filledShoulderWithSentinels(litDiagonal, darkDiagonal, centerHeight),
+            ShadingPipeline.filledShoulderWithSentinels(darkEast, litWest, centerHeight),
+            ShadingPipeline.filledShoulderWithSentinels(darkNorth, litSouth, centerHeight),
+            ShadingPipeline.filledShoulderWithSentinels(darkDiagonal, litDiagonal, centerHeight),
             1
         );
     }
 
-    private static Integer reliefHeight(
+    private static int reliefHeight(
         final int x,
         final int z,
         final boolean bathymetry,
@@ -1385,7 +1470,7 @@ public final class TileService {
             if (value == ChunkSnapshot.NO_SURFACE
                 || k == SurfaceKind.UNKNOWN.ordinal()
                 || k == SurfaceKind.VOID.ordinal()) {
-                return null;
+                return ShadingPipeline.NO_HEIGHT;
             }
             if (!bathymetry
                 || (k != SurfaceKind.WATER.ordinal()
@@ -1398,12 +1483,12 @@ public final class TileService {
         final int regionDz = z < 0 ? -1 : z >= RegionColumns.SIZE ? 1 : 0;
         final RegionColumns region = neighborhood.at(regionDx, regionDz);
         if (region == null) {
-            return null;
+            return ShadingPipeline.NO_HEIGHT;
         }
         final int localX = Math.floorMod(x, RegionColumns.SIZE);
         final int localZ = Math.floorMod(z, RegionColumns.SIZE);
         final short value = region.reliefYAt(localX, localZ, bathymetry);
-        return value == ChunkSnapshot.NO_SURFACE ? null : (int) value;
+        return value == ChunkSnapshot.NO_SURFACE ? ShadingPipeline.NO_HEIGHT : (int) value;
     }
 
     private record RegionNeighborhood(
@@ -1575,6 +1660,11 @@ public final class TileService {
         final byte[] light = new byte[PIXELS];
         final int[] outputPixels = new int[PIXELS];
         final byte[] outputLight = new byte[PIXELS];
+
+        final int[] downsampleA = new int[PIXELS / 4];
+        final int[] downsampleB = new int[PIXELS / 4];
+        final byte[] downsampleLightA = new byte[PIXELS / 4];
+        final byte[] downsampleLightB = new byte[PIXELS / 4];
     }
 
     private record DirtyWork(long token, Set<Long> regions, TileUpdate.Rect lod0Rect) {

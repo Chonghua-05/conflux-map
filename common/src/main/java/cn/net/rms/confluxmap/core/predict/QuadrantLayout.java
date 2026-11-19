@@ -159,7 +159,7 @@ public final class QuadrantLayout {
                     grid.fluidY[i] = BaselineGrid.NO_FLUID;
                     grid.surfaceFlags[i] = 0;
                     derived.kind[i] = (byte) SurfaceKind.VOID.ordinal();
-                    derived.surfaceY[i] = 0;
+                    derived.surfaceY[i] = BaselineGrid.NO_SURFACE;
                     derived.fluidDepth[i] = 0;
                 } else {
                     applyFlatColumn(grid, derived, i, flat);
@@ -259,5 +259,22 @@ public final class QuadrantLayout {
                 }
             }
         }
+    }
+
+    @Override
+    public boolean equals(final Object obj) {
+        if (this == obj) {
+            return true;
+        }
+        if (!(obj instanceof final QuadrantLayout other)) {
+            return false;
+        }
+        return Arrays.equals(styles, other.styles)
+            && Arrays.equals(flats, other.flats);
+    }
+
+    @Override
+    public int hashCode() {
+        return 31 * Arrays.hashCode(styles) + Arrays.hashCode(flats);
     }
 }

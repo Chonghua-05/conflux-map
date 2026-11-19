@@ -9,8 +9,10 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 import cn.net.rms.confluxmap.core.model.SurfaceKind;
 import cn.net.rms.confluxmap.core.util.Argb;
 import cn.net.rms.confluxmap.core.util.TileMath;
+import cn.net.rms.confluxmap.nativepredict.GpuBackend;
 import cn.net.rms.confluxmap.nativepredict.McVersions;
 import cn.net.rms.confluxmap.nativepredict.NativeLib;
+import cn.net.rms.confluxmap.nativepredict.PredictionBackend;
 import java.util.OptionalInt;
 import org.junit.jupiter.api.Assumptions;
 import org.junit.jupiter.api.BeforeEach;
@@ -304,6 +306,143 @@ class PredictionNativeIntegrationTest {
     }
 
     @Test
+    void sparseStridedSamplingAgreesWithTheDenseStridedGrid() {
+        final int side = 24;
+        final int stride = 7;
+        final NativeBaselineSampler overworld = new NativeBaselineSampler(
+            mc21(), SEED, PredictionDimensions.OVERWORLD, 0
+        );
+        final int[] dense = new int[side * side];
+        final int[] sparse = new int[side * side];
+        assertTrue(overworld.biomesStrided(16, -40, 100, side, side, stride, dense));
+        assertTrue(overworld.biomesSparseStrided(16, -40, 100, side, side, stride, sparse));
+        assertArrayEquals(
+            dense,
+            sparse,
+            "sparse per-point sampling must agree with the dense-row sweep at identical coordinates"
+        );
+        assertFalse(
+            overworld.biomesSparseStrided(4, 0, 0, 2, 2, 1, new int[4]),
+            "Overworld scale 4 embeds the exact surface solve and must stay on the dense path"
+        );
+
+        final NativeBaselineSampler nether = new NativeBaselineSampler(
+            mc21(), SEED, PredictionDimensions.NETHER, 0
+        );
+        assertTrue(nether.biomesSparseStrided(4, 0, 0, 8, 8, 3, new int[64]));
+        assertFalse(
+            nether.biomesSparseStrided(16, 0, 0, 2, 2, 1, new int[4]),
+            "Nether has no 1:16 layer; the request must fail so callers fall back"
+        );
+
+        final NativeBaselineSampler end = new NativeBaselineSampler(
+            mc21(), SEED, PredictionDimensions.END, 0
+        );
+        assertTrue(end.biomesSparseStrided(4, 0, 0, 8, 8, 3, new int[64]));
+        assertTrue(end.biomesSparseStrided(16, 0, 0, 8, 8, 3, new int[64]));
+    }
+
+    @Test
+    void scanStridedPrefilterNeverChangesTheHitsSparseWouldReport() {
+        final int side = 32;
+        final int stride = 9;
+        final NativeBaselineSampler overworld = new NativeBaselineSampler(
+            mc21(), SEED, PredictionDimensions.OVERWORLD, 0
+        );
+        final int[] sparse = new int[side * side];
+        assertTrue(overworld.biomesSparseStrided(16, -200, 60, side, side, stride, sparse));
+
+        for (final String name : new String[] {"forest", "plains", "mushroom_fields", "ocean"}) {
+            final OptionalInt target = CubiomesBiomeIds.idForName(name);
+            assertTrue(target.isPresent(), "CubiomesBiomeIds must know " + name);
+            final int[] scan = new int[side * side];
+            assertTrue(overworld.biomesScanStrided(
+                16, -200, 60, side, side, stride, target.getAsInt(), scan
+            ));
+            int rejected = 0;
+            int hits = 0;
+            int surfaceSliceHits = 0;
+            for (int i = 0; i < scan.length; i++) {
+                if (scan[i] == -1) {
+                    rejected++;
+                    assertFalse(
+                        sparse[i] == target.getAsInt(),
+                        "prefilter rejected a cell the full query reports as " + name
+                    );
+                } else if (scan[i] == target.getAsInt() && sparse[i] != target.getAsInt()) {
+                    // The scan re-tests surviving cells on the surface slice (depth 0),
+                    // invisible to the y=0 sparse sweep under tall terrain. The slice skips
+                    // the climate shift, so the hit can sit a boundary cell off the accurate
+                    // surface biome; require a match in its neighbourhood.
+                    final int blockX = (-200 + (i % side) * stride) * 16 + 8;
+                    final int blockZ = (60 + (i / side) * stride) * 16 + 8;
+                    assertTrue(surfaceNeighborhoodHolds(
+                        overworld, target.getAsInt(), blockX, blockZ),
+                        "a surface-slice hit at " + blockX + "," + blockZ
+                            + " must have an accurate surface match nearby");
+                    surfaceSliceHits++;
+                } else {
+                    assertEquals(
+                        sparse[i], scan[i],
+                        "a surviving cell must carry the same biome id the plain sparse sweep reports"
+                    );
+                }
+                if (sparse[i] == target.getAsInt()) {
+                    hits++;
+                }
+            }
+            assertTrue(hits > 0 || rejected > 0 || surfaceSliceHits > 0,
+                "grid must produce a signal for " + name);
+        }
+
+        // A target without a parameter table degrades to the plain sparse sweep.
+        final int[] unlisted = new int[side * side];
+        assertTrue(overworld.biomesScanStrided(16, -200, 60, side, side, stride, 200, unlisted));
+        assertArrayEquals(
+            sparse, unlisted,
+            "an id with no climate envelope must scan identically to the plain sparse sweep"
+        );
+
+        final NativeBaselineSampler nether = new NativeBaselineSampler(
+            mc21(), SEED, PredictionDimensions.NETHER, 0
+        );
+        final int[] netherSparse = new int[64];
+        final int[] netherScan = new int[64];
+        assertTrue(nether.biomesSparseStrided(4, 0, 0, 8, 8, 3, netherSparse));
+        assertTrue(nether.biomesScanStrided(4, 0, 0, 8, 8, 3, 8, netherScan));
+        assertArrayEquals(
+            netherSparse, netherScan,
+            "Nether has no climate envelope; the scan must equal the plain sparse sweep"
+        );
+
+        final NativeBaselineSampler legacy = new NativeBaselineSampler(
+            mc17(), SEED, PredictionDimensions.OVERWORLD, 0
+        );
+        assertFalse(
+            legacy.biomesScanStrided(16, 0, 0, 2, 2, 1, 4, new int[4]),
+            "pre-1.18 Overworld layer stacks must keep failing so callers fall back"
+        );
+    }
+
+    /** Accurate-surface target check over the 3x3 quart neighbourhood of a coarse cell center. */
+    private static boolean surfaceNeighborhoodHolds(
+        final NativeBaselineSampler sampler, final int target, final int blockX, final int blockZ
+    ) {
+        final int[] terrainY = new int[9];
+        final int[] surface = new int[9];
+        if (!sampler.overviewHeights(blockX - 8, blockZ - 8, 3, 3, 8, terrainY)
+            || !sampler.surfaceBiomes(blockX - 8, blockZ - 8, 3, 3, 8, terrainY, surface)) {
+            return false;
+        }
+        for (final int biome : surface) {
+            if (biome == target) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    @Test
     void overviewPipelineHasTheSameQualityContractAcrossVersionsAndLods() {
         assertOverviewQuality(mc17(), 0);
         assertOverviewQuality(mc17(), 4);
@@ -407,58 +546,69 @@ class PredictionNativeIntegrationTest {
         ) / 3;
     }
 
-    /**
-     * Real-generation guard for biome supersampling. At LOD4 one output pixel spans 16 blocks -
-     * wider than a river - so a single lookup per pixel misses most thin features. The
-     * sub-samples must surface biomes the per-pixel grid never sees; if they ever stop doing so,
-     * meandering rivers and shorelines are back to breaking into straight, gappy lines.
-     */
+    /** No LOD sub-samples biomes any more, so none of them pays the 4x sampling cost. */
     @Test
-    void coarseLodSubSamplesFindThinBiomesThePixelCentresMiss() {
+    void noLodPaysForBiomeSupersampling() {
         final NativeBaselineSampler sampler = new NativeBaselineSampler(mc21(), SEED, 0, 0);
-        final BaselineGrid grid = LodSampling.sample(sampler, false, 4, 0, 0);
-        assertNotNull(grid);
-        assertTrue(grid.supersampled(), "LOD4 must supersample biomes");
-
-        int pixelsWhoseSubSamplesDisagree = 0;
-        int subSamplesUnseenAtTheCentre = 0;
-        for (int z = 0; z < BaselineGrid.PIXELS; z++) {
-            for (int x = 0; x < BaselineGrid.PIXELS; x++) {
-                final int idx = BaselineGrid.index(x, z);
-                boolean disagrees = false;
-                for (int sz = 0; sz < grid.subPerAxis; sz++) {
-                    for (int sx = 0; sx < grid.subPerAxis; sx++) {
-                        if (grid.subBiomeId[grid.subIndex(idx, sx, sz)] != grid.biomeId[idx]) {
-                            disagrees = true;
-                            subSamplesUnseenAtTheCentre++;
-                        }
-                    }
-                }
-                if (disagrees) {
-                    pixelsWhoseSubSamplesDisagree++;
-                }
-            }
-        }
-
-        assertTrue(
-            pixelsWhoseSubSamplesDisagree > BaselineGrid.PIXELS * BaselineGrid.PIXELS / 100,
-            "expected a real share of LOD4 pixels to contain a biome their centre misses, got "
-                + pixelsWhoseSubSamplesDisagree + " of " + (BaselineGrid.PIXELS * BaselineGrid.PIXELS)
-        );
-        assertTrue(subSamplesUnseenAtTheCentre > 0);
-    }
-
-    /** Fine LODs already sample at or below the native biome grid, so they must not pay for 4x. */
-    @Test
-    void fineLodsDoNotPayForBiomeSupersampling() {
-        final NativeBaselineSampler sampler = new NativeBaselineSampler(mc21(), SEED, 0, 0);
-        for (final int lod : new int[] {0, 1, 2}) {
+        for (final int lod : new int[] {0, 1, 2, 3, 4}) {
             final BaselineGrid grid = LodSampling.sample(sampler, false, lod, 0, 0);
             assertNotNull(grid);
             assertEquals(
                 BaselineGrid.NO_SUPERSAMPLING, grid.subPerAxis,
-                "LOD" + lod + " already reaches the native biome grid"
+                "LOD" + lod + " must sample one biome lookup per pixel"
             );
+        }
+    }
+
+    /**
+     * The LOD2-4 biome sweeps run on a tile-absolute lattice (anchor solves, biome-uniform cell
+     * copies, exact cells elsewhere), so a window update - expanded to whole lattice cells -
+     * must reproduce the full tile's values pixel for pixel, copied cells included. Window
+     * shapes cover corner/edge positions and odd/even offsets, i.e. every partial-cell expansion
+     * path, including the widened biome-anchor margin the waterline gate reads.
+     *
+     * <p>The engine is pinned off for this contract: window determinism holds on one serving
+     * reference. In auto mode a full tile's above-gate chunks serve the fp32 kernels while a
+     * small window's anchor grid stays below the gate on the CPU, and the two references
+     * disagree by construction since the shim adopted the waterline lround the kernels do not
+     * encode (that cross-reference drift is the engagement suite's engine-switch gate).
+     */
+    @Test
+    void coarseLodWindowsReproduceTheFullTileLatticeSweep() {
+        GpuBackend.configure(PredictionBackend.CPU);
+        try {
+            for (final int lod : new int[] {2, 3, 4}) {
+                final NativeBaselineSampler sampler = new NativeBaselineSampler(mc21(), SEED, 0, 0);
+                final BaselineGrid full = LodSampling.sample(sampler, false, lod, 4096, -8192);
+                assertNotNull(full);
+
+                final int[][] windows = {
+                    {0, 0, 1, 1},
+                    {37, 61, 37, 61},
+                    {113, 47, 119, 53},
+                    {0, 254, 3, 255},
+                    {252, 0, 255, 7},
+                };
+                for (final int[] bounds : windows) {
+                    final BaselineGrid window = LodSampling.sampleOverworldWindow(
+                        sampler, lod, 4096, -8192, bounds[0], bounds[1], bounds[2], bounds[3]
+                    );
+                    assertNotNull(window, "window sampling must succeed: " + java.util.Arrays.toString(bounds));
+                    for (int z = bounds[1]; z <= bounds[3]; z++) {
+                        for (int x = bounds[0]; x <= bounds[2]; x++) {
+                            final int index = BaselineGrid.index(x, z);
+                            assertEquals(full.terrainY[index], window.terrainY[index],
+                                "terrain at lod " + lod + " pixel " + x + "," + z);
+                            assertEquals(full.biomeId[index], window.biomeId[index],
+                                "biome at lod " + lod + " pixel " + x + "," + z);
+                            assertEquals(full.surfaceFlags[index], window.surfaceFlags[index],
+                                "surface flags at lod " + lod + " pixel " + x + "," + z);
+                        }
+                    }
+                }
+            }
+        } finally {
+            GpuBackend.configure(PredictionBackend.GPU);
         }
     }
 
@@ -514,5 +664,48 @@ class PredictionNativeIntegrationTest {
             "overview height must solve for the 3D terrain noise, not just the offset spline;"
                 + " mean absolute error was " + mean + " blocks"
         );
+    }
+
+    @Test
+    void stageStatsAttributeTileSamplingBetweenGpuAndCpu() {
+        final NativeBaselineSampler sampler = new NativeBaselineSampler(
+            mc21(), SEED, PredictionDimensions.OVERWORLD, 0
+        );
+        final long before = sampler.gpuStageStats();
+        final BaselineGrid grid = LodSampling.sample(sampler, false, 2, 0, 0);
+        assertNotNull(grid, "native sampling must succeed");
+        final long delta = sampler.gpuStageStats() - before;
+        assertTrue(delta > 0, "an Overworld tile must run at least one tracked stage call");
+        final long gpu = delta >>> 32;
+        final long total = delta & 0xffffffffL;
+        assertTrue(gpu <= total, "GPU-served stages cannot exceed tracked stages: " + delta);
+        final String label = PredictionTileService.backendLabel(delta);
+        if (gpu == 0) {
+            assertEquals("cpu", label, "no GPU-served stage must label the tile cpu");
+        } else if (gpu == total) {
+            assertEquals("gpu", label, "fully GPU-served stages must label the tile gpu");
+        } else {
+            assertEquals("mixed", label, "partially GPU-served stages must label the tile mixed");
+        }
+
+        // Repeated sampling keeps accumulating the same thread's context counters.
+        final long secondBefore = sampler.gpuStageStats();
+        assertNotNull(LodSampling.sample(sampler, false, 2, 0, 0));
+        assertTrue(sampler.gpuStageStats() - secondBefore > 0, "the second tile must also be tracked");
+    }
+
+    @Test
+    void gpuStatsExposeEngineModeDeviceAndDispatchCounts() {
+        final GpuBackend.GpuStats stats = GpuBackend.stats();
+        assertNotNull(stats, "stats must be readable on a library carrying the export");
+        final String modeLabel = GpuBackend.engineModeLabel(stats.engineMode());
+        assertTrue(
+            modeLabel.equals("off") || modeLabel.equals("auto") || modeLabel.equals("force")
+                || modeLabel.startsWith("unknown("),
+            "engine mode " + stats.engineMode() + " must map to a known label, got " + modeLabel
+        );
+        assertNotNull(stats.device(), "device name is empty before first use, never null");
+        assertTrue(stats.dispatches() >= 0, "dispatch counts are unsigned totals");
+        assertTrue(stats.heightDispatches() >= 0, "dispatch counts are unsigned totals");
     }
 }

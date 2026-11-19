@@ -8,15 +8,15 @@ import cn.net.rms.confluxmap.core.model.DimensionId;
  * aligned sparse grid of exact cubiomes columns. The overview keeps LOD3-4 spatially detailed;
  * the exact residual grid removes broad height drift without making a fullscreen viewport pay for
  * a complete world-generation column at every texel. End heights retain their
- * dimension-specific interpolation and pooling path.
+ * dimension-specific interpolation and pooling path. The biome-identity view bypasses all of
+ * the Overworld height work via {@link #sampleOverworldBiomes}.
  * <ul>
  *   <li>LOD0-1: final biomes are sampled at block scale, one lookup per output pixel.
- *   <li>LOD2: final biomes are sampled at native scale 4, one lookup per output pixel.
- *   <li>LOD3-4: scale-4 biomes use a 2-cell or 4-cell stride so every output pixel still maps to
- *       its own world position instead of falling back to a coarser pre-zoom layer. Because a
- *       pixel there spans 8 or 16 blocks - wider than a river - biomes are additionally sampled
- *       2x2 per pixel and box-filtered by the composer, mirroring how the captured map averages
- *       finer pixels into a coarse tile. See {@link #BIOME_SUB_PER_AXIS}.
+ *   <li>LOD2-4: final biomes are sampled once per output pixel on the anchor-lattice
+    *       copy/refine sweep - LOD2 at native scale 4, LOD3-4 at a 2-cell or 4-cell stride so
+    *       every output pixel still maps to its own world position instead of falling back to a
+    *       coarser pre-zoom layer. The former LOD3-4 2x2 sub-sample sweep is switched off (see
+    *       {@link #BIOME_SUB_PER_AXIS}) and its plumbing stays dormant.
  *   <li>Overworld exact corrections use an 8-pixel stride at LOD0 and 16 at LOD1-4. Nearby
  *       views retain more terrain and shoreline precision while distant views do
  *       not pay for details smaller than an output pixel.
@@ -70,19 +70,49 @@ public final class LodSampling {
      */
     private static final int PREDICTED_FLUID_CEILING = BaselineDeriver.WATER_LEVEL - 1;
 
+    /**
+     * Lowest LOD whose overview heights may be solved on a sparse anchor lattice and bilinearly
+     * reconstructed, for samplers opting in via {@link
+     * BaselineSampler#interpolatableOverviewHeights()}. Below it each output position keeps its
+     * own exact overview solve: measured at LOD0-1 nearly every land pixel sits in the
+     * interpolation-excluded mid-band, so the lattice degenerates into one fallback query per
+     * pixel (slower than the direct pass) and still smears the near-zoom waterline badly enough
+     * to trip the ocean-to-land gate (0.53% measured).
+     */
+    private static final int OVERVIEW_ANCHOR_MIN_LOD = 2;
+
+    /**
+     * Height band the anchor lattice refuses to interpolate across. A reconstructed value is only
+     * used where every anchor corner sits deep on one side of the waterline: open water at least
+     * {@link #OVERVIEW_INTERPOLATION_MAX_WATER_HEIGHT} below sea level, or highland at least
+     * {@code OVERVIEW_INTERPOLATION_MIN_HEIGHT} above it. River beds carve roughly a dozen blocks
+     * below their surrounding plains, so a plains-side anchor pair can hide a sub-anchor river the
+     * reconstruction would pave over - measured as a 1.1% ocean-to-land flip rate, four times the
+     * hard gate - and shorelines cut anchor quads diagonally; near-shelf quads can equally hide a
+     * small islet the other way. Those zones keep exact per-pixel solves; only the flat flanks
+     * (deep ocean, mountain interiors) interpolate.
+     */
+    private static final int OVERVIEW_INTERPOLATION_MIN_HEIGHT = BaselineDeriver.WATER_LEVEL + 18;
+    /**
+     * Water-side counterpart: a quad whose highest anchor reaches this close to sea level can
+     * hide a shelf islet, so it stays exact. Only deeper open water interpolates.
+     */
+    private static final int OVERVIEW_INTERPOLATION_MAX_WATER_HEIGHT = BaselineDeriver.WATER_LEVEL - 6;
+
     /** Final biome layer used per LOD (cubiomes {@code Range} scale: 1 or 4). */
     private static final int[] BIOME_SCALE = {1, 1, 4, 4, 4};
     /** Native coordinates advanced per output pixel at each LOD. */
     private static final int[] BIOME_STRIDE = {1, 2, 1, 2, 4};
     /**
      * Biome sub-samples per axis per output pixel. LOD0-2 already sample at or below the native
-     * 4-block biome grid, so one lookup per pixel loses nothing. LOD3-4 span 8 and 16 blocks, where
-     * a single lookup misses most of a river or shoreline: measured against full 1-block
-     * generation, one sample per pixel retains 69% of thin-feature pixels at LOD3 and 58% at LOD4,
-     * which is what turns a meandering river into a broken, straightened line. 2x2 lifts those to
-     * 88% and 80% for 4x the biome sampling cost; 4x4 would reach 96%/92% at 16x the cost.
+     * 4-block biome grid, so one lookup per pixel loses nothing there. The coarse LODs' 2x2 sweep
+     * was switched off: its measured thin-feature retention (88% versus 69% of river/shoreline
+     * pixels at LOD3, 80% versus 58% at LOD4, against full 1-block generation) did not justify
+     * 4x the biome sampling cost once the composer stopped box-filtering sub-sample colours.
+     * Every LOD currently runs {@link BaselineGrid#NO_SUPERSAMPLING} and the sweep machinery
+     * stays dormant here.
      */
-    private static final int[] BIOME_SUB_PER_AXIS = {1, 1, 1, 2, 2};
+    private static final int[] BIOME_SUB_PER_AXIS = {1, 1, 1, 1, 1};
 
     private LodSampling() {
     }
@@ -99,11 +129,26 @@ public final class LodSampling {
         final int tileOriginX,
         final int tileOriginZ
     ) {
+        return sample(sampler, end, lod, tileOriginX, tileOriginZ, null);
+    }
+
+    /**
+     * Optional per-{@link OverworldStage} wall sink ({@link #OVERWORLD_STAGE_COUNT} longs, or
+     * null to sample unmeasured); non-Overworld paths leave it untouched.
+     */
+    public static BaselineGrid sample(
+        final BaselineSampler sampler,
+        final boolean end,
+        final int lod,
+        final int tileOriginX,
+        final int tileOriginZ,
+        final long[] overworldStageWallNanos
+    ) {
         final BaselineGrid grid = new BaselineGrid(
             lod, tileOriginX, tileOriginZ, end ? BaselineGrid.NO_SUPERSAMPLING : BIOME_SUB_PER_AXIS[lod]
         );
         if (!end) {
-            return sampleOverworld(sampler, lod, tileOriginX, tileOriginZ, grid)
+            return sampleOverworld(sampler, lod, tileOriginX, tileOriginZ, grid, overworldStageWallNanos)
                 ? grid
                 : null;
         }
@@ -138,6 +183,115 @@ public final class LodSampling {
             );
         }
         return null;
+    }
+
+    /**
+     * Samples the Overworld biome-identity plane with no terrain work at all: every biome comes
+     * from a terrain-free native query and the unsolved height columns are replaced by one flat
+     * land plane, which is all the flat-color biome composer ever needs. The shape follows
+     * {@link BaselineSampler#terrainFreeBiomeScale()}:
+     * <ul>
+ *   <li>Scale 1 (pre-1.18 layer stacks): the height-aware pipeline's own per-LOD
+    *       {@code BIOME_SCALE}/{@code BIOME_STRIDE} sampling (plus any raw sub-samples the
+    *       per-LOD sub-sampling config calls for), so the biome ids stay bit-identical to the
+    *       full pipeline - only the height passes drop out. The shim's pre-1.18 {@code
+    *       surfaceBiomes} delegates to the same layer-stack queries at the same coordinates,
+    *       which is what makes the ids provably unchanged.
+  *   <li>Scale 16 (post-1.18 climate model): one dense scale-16 climate grid, each output
+     *       pixel taking the biome of the climate cell containing its first block. Climate
+     *       answers exist at 16-block granularity only, so every LOD shares the same cells and
+     *       supersampling is dropped - a sub-sample inside one cell cannot differ from its
+     *       pixel. This is the cubiomes-viewer semantics: hillsides may show the climate biome
+     *       rather than the surface biome the height-aware pipeline would have resolved.
+     * </ul>
+     * Falls back to the full height-aware {@link #sample} when the sampler offers no
+     * terrain-free scale or the terrain-free query fails.
+     */
+    public static BaselineGrid sampleOverworldBiomes(
+        final BaselineSampler sampler,
+        final int lod,
+        final int tileOriginX,
+        final int tileOriginZ
+    ) {
+        final int terrainFreeScale = sampler.terrainFreeBiomeScale();
+        if (terrainFreeScale <= 0) {
+            return sample(sampler, false, lod, tileOriginX, tileOriginZ);
+        }
+        final BaselineGrid grid = terrainFreeScale >= 16
+            ? sampleClimateCellBiomes(sampler, lod, tileOriginX, tileOriginZ, terrainFreeScale)
+            : sampleTerrainFreeLayerBiomes(sampler, lod, tileOriginX, tileOriginZ);
+        if (grid == null) {
+            return sample(sampler, false, lod, tileOriginX, tileOriginZ);
+        }
+        fillFlatLandPlane(grid);
+        return grid;
+    }
+
+    /**
+     * Layer-stack shape: the standard per-LOD biome table plus the raw sub-biome sweep, both of
+     * which are pure biome-stack queries before 1.18.
+     */
+    private static BaselineGrid sampleTerrainFreeLayerBiomes(
+        final BaselineSampler sampler,
+        final int lod,
+        final int tileOriginX,
+        final int tileOriginZ
+    ) {
+        final BaselineGrid grid = new BaselineGrid(
+            lod, tileOriginX, tileOriginZ, BIOME_SUB_PER_AXIS[lod]
+        );
+        if (!sampleBiomes(sampler, lod, tileOriginX, tileOriginZ, grid)) {
+            return null;
+        }
+        if (grid.supersampled()) {
+            sampleRawSubBiomes(sampler, lod, tileOriginX, tileOriginZ, grid);
+        }
+        return grid;
+    }
+
+    /** Climate shape: one dense {@code climateScale} grid nearest-expanded to output pixels. */
+    private static BaselineGrid sampleClimateCellBiomes(
+        final BaselineSampler sampler,
+        final int lod,
+        final int tileOriginX,
+        final int tileOriginZ,
+        final int climateScale
+    ) {
+        final BaselineGrid grid = new BaselineGrid(
+            lod, tileOriginX, tileOriginZ, BaselineGrid.NO_SUPERSAMPLING
+        );
+        final int blocksPerPixel = 1 << lod;
+        final int cellMinX = Math.floorDiv(tileOriginX + P_MIN * blocksPerPixel, climateScale);
+        final int cellMinZ = Math.floorDiv(tileOriginZ + P_MIN * blocksPerPixel, climateScale);
+        final int cellMaxX = Math.floorDiv(tileOriginX + P_MAX * blocksPerPixel, climateScale);
+        final int cellMaxZ = Math.floorDiv(tileOriginZ + P_MAX * blocksPerPixel, climateScale);
+        final int cellsW = cellMaxX - cellMinX + 1;
+        final int cellsH = cellMaxZ - cellMinZ + 1;
+        final int[] cells = new int[cellsW * cellsH];
+        if (!sampler.biomes(climateScale, cellMinX, cellMinZ, cellsW, cellsH, cells)) {
+            return null;
+        }
+        for (int pz = P_MIN; pz <= P_MAX; pz++) {
+            final int cellZ = Math.floorDiv(tileOriginZ + pz * blocksPerPixel, climateScale) - cellMinZ;
+            for (int px = P_MIN; px <= P_MAX; px++) {
+                final int cellX = Math.floorDiv(tileOriginX + px * blocksPerPixel, climateScale) - cellMinX;
+                grid.biomeId[BaselineGrid.index(px, pz)] = cells[cellZ * cellsW + cellX];
+            }
+        }
+        return grid;
+    }
+
+    /**
+     * Stands in for the unsolved terrain: sea level exactly, so no column classifies as
+     * compatibility-fluid, and no column can derive as void. The biome-identity composer colors
+     * by biome id alone, so these heights exist only to keep the derived-grid shape valid.
+     */
+    private static void fillFlatLandPlane(final BaselineGrid grid) {
+        java.util.Arrays.fill(grid.terrainY, BaselineDeriver.WATER_LEVEL);
+        java.util.Arrays.fill(grid.baseSurfaceY, BaselineDeriver.WATER_LEVEL);
+        if (grid.supersampled()) {
+            java.util.Arrays.fill(grid.subBaseSurfaceY, BaselineDeriver.WATER_LEVEL);
+        }
     }
 
     /**
@@ -264,37 +418,158 @@ public final class LodSampling {
         final int blocksPerPixel = 1 << lod;
         final int blockX = tileOriginX + minPixelX * blocksPerPixel;
         final int blockZ = tileOriginZ + minPixelZ * blocksPerPixel;
+
+        // The lattice sweep works on whole 2x2-pixel cells, so a window at the lattice LODs
+        // (LOD2-4: per-pixel biomes, no sub-sampling) expands by up to one pixel per side to
+        // cell boundaries. Everything the expansion touches - cell partition, anchors, overview
+        // heights - is absolute to the tile, so the window sees exactly the values the full
+        // tile's sweep produced for the same pixels.
+        final boolean lattice = sampler.interpolatableOverviewHeights()
+            && lod >= OVERVIEW_ANCHOR_MIN_LOD;
         final int[] terrain = new int[width * height];
-        if (!sampler.overviewHeights(
+        if (lattice) {
+            final int sub = grid.subPerAxis;
+            final int step = 2 * sub;
+            final int minSubX = (minPixelX - P_MIN) * sub;
+            final int maxSubX = (minPixelX - P_MIN + width) * sub;
+            final int minSubZ = (minPixelZ - P_MIN) * sub;
+            final int maxSubZ = (minPixelZ - P_MIN + height) * sub;
+            final int cellX0 = Math.floorDiv(minSubX, step);
+            final int cellZ0 = Math.floorDiv(minSubZ, step);
+            final int cellX1 = (maxSubX + step - 1) / step;
+            final int cellZ1 = (maxSubZ + step - 1) / step;
+            /*
+             * The cell sweep needs the cells' own pixels [2c0-1, 2c1-1]; the widened biome-anchor
+             * query below additionally reads the pixel under anchor cells one further out, so the
+             * expansion covers [2*anchorCell0, 2*(c1+1)] clamped to the tile grid. Everything is
+             * tile-absolute, so the wider window just reproduces more of the full tile.
+             */
+            final int anchorCellMinX = Math.max(0, cellX0 - 1);
+            final int anchorCellMinZ = Math.max(0, cellZ0 - 1);
+            final int anchorCellMaxX = Math.min(LATTICE_CELL_COUNT, cellX1 + 1);
+            final int anchorCellMaxZ = Math.min(LATTICE_CELL_COUNT, cellZ1 + 1);
+            final int expMinPx = Math.max(P_MIN, 2 * anchorCellMinX - 1);
+            final int expMinPz = Math.max(P_MIN, 2 * anchorCellMinZ - 1);
+            final int expMaxPx = Math.min(P_MAX, 2 * anchorCellMaxX - 1);
+            final int expMaxPz = Math.min(P_MAX, 2 * anchorCellMaxZ - 1);
+            final int expW = expMaxPx - expMinPx + 1;
+            final int expH = expMaxPz - expMinPz + 1;
+            final int[] expTerrain = new int[expW * expH];
+            final OverviewLattice latticeData = solveOverviewLattice(
+                sampler, lod, tileOriginX, tileOriginZ, expMinPx, expMinPz, expW, expH
+            );
+            int[] windowAnchors = null;
+            int anchorCellX0 = cellX0;
+            int anchorCellZ0 = cellZ0;
+            int anchorCellsW = cellX1 - cellX0;
+            int anchorCellsH = cellZ1 - cellZ0;
+            if (latticeData != null) {
+                reconstructOverviewLattice(expMinPx, expMinPz, expW, expH, latticeData, expTerrain);
+                /*
+                 * The band gate reads biome anchors one cell beyond each window edge, so the
+                 * anchor query widens by one cell per side - clamped to the tile's own cell
+                 * range, because the full tile treats anchors outside it as absent and the
+                 * window must resolve the same gate verdicts.
+                 */
+                anchorCellX0 = anchorCellMinX;
+                anchorCellZ0 = anchorCellMinZ;
+                anchorCellsW = anchorCellMaxX - anchorCellX0;
+                anchorCellsH = anchorCellMaxZ - anchorCellZ0;
+                windowAnchors = solveSubBiomeAnchors(
+                    sampler, lod, tileOriginX, tileOriginZ, sub,
+                    anchorCellX0, anchorCellZ0, anchorCellsW, anchorCellsH,
+                    expTerrain, expMinPx + 1, expMinPz + 1, expW
+                );
+                if (!resolveOverviewBand(
+                    sampler, lod, tileOriginX, tileOriginZ,
+                    expMinPx, expMinPz, expW, expH,
+                    latticeData, expTerrain, windowAnchors,
+                    anchorCellsW + 1, anchorCellsH + 1, anchorCellX0, anchorCellZ0
+                )) {
+                    return null;
+                }
+            }
+            if (latticeData == null && !sampler.overviewHeights(
+                tileOriginX + expMinPx * blocksPerPixel,
+                tileOriginZ + expMinPz * blocksPerPixel,
+                expW, expH, blocksPerPixel, expTerrain
+            )) {
+                return null;
+            }
+            for (int z = 0; z < height; z++) {
+                System.arraycopy(
+                    expTerrain, (z + minPixelZ - expMinPz) * expW + (minPixelX - expMinPx),
+                    terrain, z * width, width
+                );
+            }
+            final int[] expanded = windowAnchors != null
+                ? runSubBiomeCells(
+                    sampler, lod, tileOriginX, tileOriginZ, sub,
+                    cellX0, cellZ0, cellX1 - cellX0, cellZ1 - cellZ0,
+                    expTerrain, expMinPx + 1, expMinPz + 1, expW,
+                    windowAnchors, anchorCellsW + 1, anchorCellX0, anchorCellZ0
+                )
+                : sampleSubBiomeLatticeRange(
+                    sampler, lod, tileOriginX, tileOriginZ, sub,
+                    cellX0, cellZ0, cellX1 - cellX0, cellZ1 - cellZ0,
+                    expTerrain, expMinPx + 1, expMinPz + 1, expW
+                );
+            if (expanded != null) {
+                final int subWidth = width * sub;
+                final int subHeight = height * sub;
+                final int rawW = (cellX1 - cellX0) * step;
+                final int offsetX = minSubX - cellX0 * step;
+                final int offsetZ = minSubZ - cellZ0 * step;
+                final int[] windowSubRaw = new int[subWidth * subHeight];
+                for (int z = 0; z < subHeight; z++) {
+                    System.arraycopy(
+                        expanded, (z + offsetZ) * rawW + offsetX,
+                        windowSubRaw, z * subWidth, subWidth
+                    );
+                }
+                scatterSubBiomeWindow(grid, windowSubRaw, minPixelX, minPixelZ, width, height);
+                copyWindow(grid.terrainY, terrain, minPixelX, minPixelZ, width, height);
+                resolveOverviewFluidWindow(grid, minPixelX, minPixelZ, maxPixelX, maxPixelZ);
+                return grid;
+            }
+        } else if (!sampler.overviewHeights(
             blockX, blockZ, width, height, blocksPerPixel, terrain
         )) {
             return null;
         }
-        final int[] biomes = new int[width * height];
-        if (!sampler.surfaceBiomes(
-            blockX, blockZ, width, height, blocksPerPixel, terrain, biomes
-        )) {
-            final int scale = BIOME_SCALE[lod];
-            final int stride = BIOME_STRIDE[lod];
-            final int nativeX = Math.floorDiv(tileOriginX, scale) + minPixelX * stride;
-            final int nativeZ = Math.floorDiv(tileOriginZ, scale) + minPixelZ * stride;
-            if (!sampler.biomesStrided(
-                scale, nativeX, nativeZ, width, height, stride, biomes
+        // Same subsumption as the full tile: a successful sub-sample sweep answers the pixel's
+        // own biome from its first sub-sample, so the centre pass never runs separately.
+        final int[] subRaw = sampleSubBiomeWindowRaw(
+            sampler, grid, blockX, blockZ, minPixelX, minPixelZ, width, height,
+            blocksPerPixel, terrain
+        );
+        if (subRaw != null) {
+            scatterSubBiomeWindow(grid, subRaw, minPixelX, minPixelZ, width, height);
+        } else {
+            final int[] biomes = new int[width * height];
+            if (!sampler.surfaceBiomes(
+                blockX, blockZ, width, height, blocksPerPixel, terrain, biomes
             )) {
-                return null;
+                final int scale = BIOME_SCALE[lod];
+                final int stride = BIOME_STRIDE[lod];
+                final int nativeX = Math.floorDiv(tileOriginX, scale) + minPixelX * stride;
+                final int nativeZ = Math.floorDiv(tileOriginZ, scale) + minPixelZ * stride;
+                if (!sampler.biomesStrided(
+                    scale, nativeX, nativeZ, width, height, stride, biomes
+                )) {
+                    return null;
+                }
             }
+            copyWindow(grid.biomeId, biomes, minPixelX, minPixelZ, width, height);
+            fillSubBiomeWindowFromPixels(grid, minPixelX, minPixelZ, width, height);
         }
         copyWindow(grid.terrainY, terrain, minPixelX, minPixelZ, width, height);
-        copyWindow(grid.biomeId, biomes, minPixelX, minPixelZ, width, height);
-        sampleSubBiomeWindow(
-            sampler, grid, blockX, blockZ,
-            minPixelX, minPixelZ, width, height, blocksPerPixel, terrain
-        );
         resolveOverviewFluidWindow(grid, minPixelX, minPixelZ, maxPixelX, maxPixelZ);
         return grid;
     }
 
-    private static void sampleSubBiomeWindow(
+    /** Window variant of {@link #sampleSubBiomeRaw}: the raw sweep, or null when unavailable. */
+    private static int[] sampleSubBiomeWindowRaw(
         final BaselineSampler sampler,
         final BaselineGrid grid,
         final int blockX,
@@ -307,7 +582,7 @@ public final class LodSampling {
         final int[] terrain
     ) {
         if (!grid.supersampled()) {
-            return;
+            return null;
         }
         final int sub = grid.subPerAxis;
         final int subWidth = width * sub;
@@ -320,16 +595,57 @@ public final class LodSampling {
             }
         }
         final int[] biomes = new int[subWidth * subHeight];
-        final boolean sampled = sampler.surfaceBiomes(
+        return sampler.surfaceBiomes(
             blockX, blockZ, subWidth, subHeight, blocksPerPixel / sub, heights, biomes
-        );
+        ) ? biomes : null;
+    }
+
+    /** Window variant of {@link #scatterSubBiomes}, including each pixel's own first sub-sample. */
+    private static void scatterSubBiomeWindow(
+        final BaselineGrid grid,
+        final int[] raw,
+        final int minPixelX,
+        final int minPixelZ,
+        final int width,
+        final int height
+    ) {
+        final int sub = grid.subPerAxis;
+        final int subWidth = width * sub;
+        final int subHeight = height * sub;
         for (int z = 0; z < subHeight; z++) {
             for (int x = 0; x < subWidth; x++) {
                 final int pixelX = minPixelX + x / sub;
                 final int pixelZ = minPixelZ + z / sub;
                 final int pixel = BaselineGrid.index(pixelX, pixelZ);
-                grid.subBiomeId[grid.subIndex(pixel, x % sub, z % sub)] = sampled
-                    ? biomes[z * subWidth + x] : grid.biomeId[pixel];
+                if (grid.supersampled()) {
+                    grid.subBiomeId[grid.subIndex(pixel, x % sub, z % sub)] = raw[z * subWidth + x];
+                }
+                if (x % sub == 0 && z % sub == 0) {
+                    grid.biomeId[pixel] = raw[z * subWidth + x];
+                }
+            }
+        }
+    }
+
+    private static void fillSubBiomeWindowFromPixels(
+        final BaselineGrid grid,
+        final int minPixelX,
+        final int minPixelZ,
+        final int width,
+        final int height
+    ) {
+        if (!grid.supersampled()) {
+            return;
+        }
+        final int sub = grid.subPerAxis;
+        for (int z = 0; z < height; z++) {
+            for (int x = 0; x < width; x++) {
+                final int pixel = BaselineGrid.index(minPixelX + x, minPixelZ + z);
+                for (int sz = 0; sz < sub; sz++) {
+                    for (int sx = 0; sx < sub; sx++) {
+                        grid.subBiomeId[grid.subIndex(pixel, sx, sz)] = grid.biomeId[pixel];
+                    }
+                }
             }
         }
     }
@@ -395,52 +711,713 @@ public final class LodSampling {
         }
     }
 
+    /**
+     * One overworld sampling stage, in execution order. {@link #runOverworldStage} runs one
+     * stage for one tile, so a driver may interleave other work between stages but must keep
+     * this order. Lattice LODs (2-4, opting-in samplers) run the coarse stages in dependency
+     * order: anchor heights (H_LATTICE), then the biome anchor sweep (ANCHOR_BIOMES; it reads
+     * only even anchor-pixel heights, so it may run while band pixels still hold reconstruction
+     * values), then the waterline band resolution (BAND) - which consults the biome anchors to
+     * skip quads that are provably waterline-irrelevant - and finally the cell copy/refine loop
+     * (CELLS), whose guards read the now-final band pixel heights. A failed anchor query leaves
+     * the band ungated (every crossing pixel solves exactly) and the biome stage on its own
+     * fallbacks. EXACT_COLUMNS drops out on its own from the LOD where the exact residual pass
+     * no longer runs.
+     */
+    enum OverworldStage {
+        /** Solves and reconstructs the overview anchor lattice, or fills dense overview heights. */
+        H_LATTICE,
+        /** Solves the sub-biome corner anchors over the lattice cells (lattice path only). */
+        ANCHOR_BIOMES,
+        /** Re-solves waterline-band pixels exactly, gated by the biome anchors (lattice path only). */
+        BAND,
+        /** Applies the sparse exact residual correction and fills the anchor fluid confidence. */
+        EXACT_COLUMNS,
+        /** Fills biomes via the cell copy/refine sweep or the per-pixel fallbacks. */
+        CELLS,
+        /** Classifies each column as water or land into the grid's surface planes. */
+        COMPOSE
+    }
+
+    static final int OVERWORLD_STAGE_COUNT = OverworldStage.values().length;
+
+    /**
+     * Per-tile mutable state carried across the overworld stages; one instance per sampling
+     * run, or one per wave member when stages are driven tile by tile. Fields are populated and
+     * consumed only by the stage functions behind {@link #runOverworldStage}.
+     */
+    static final class OverworldStageState {
+        final int lod;
+        final int tileOriginX;
+        final int tileOriginZ;
+        final int blocksPerPixel;
+        final BaselineGrid grid;
+        /** Anchor aquifer confidence per output pixel; filled by EXACT_COLUMNS, read by COMPOSE. */
+        final int[] fluidConfidence;
+        /** Overview anchor lattice; null when the tile takes the dense overview path. */
+        OverviewLattice lattice;
+        /** Sub-biome corner anchors; null unless the lattice path produced them. */
+        int[] biomeAnchors;
+
+        OverworldStageState(
+            final int lod,
+            final int tileOriginX,
+            final int tileOriginZ,
+            final BaselineGrid grid
+        ) {
+            this.lod = lod;
+            this.tileOriginX = tileOriginX;
+            this.tileOriginZ = tileOriginZ;
+            this.blocksPerPixel = 1 << lod;
+            this.grid = grid;
+            this.fluidConfidence = new int[grid.terrainY.length];
+        }
+    }
+
+    /**
+     * Runs one {@link OverworldStage} for one tile against the sampler. Returns false when the
+     * tile failed and must be dropped; the remaining stages must then not run.
+     */
+    static boolean runOverworldStage(
+        final OverworldStage stage,
+        final OverworldStageState state,
+        final BaselineSampler sampler
+    ) {
+        return switch (stage) {
+            case H_LATTICE -> runLatticeStage(state, sampler);
+            case ANCHOR_BIOMES -> runAnchorBiomesStage(state, sampler);
+            case BAND -> runBandStage(state, sampler);
+            case EXACT_COLUMNS -> runExactColumnsStage(state, sampler);
+            case CELLS -> runCellsStage(state, sampler);
+            case COMPOSE -> runComposeStage(state, sampler);
+        };
+    }
+
+    private static boolean runLatticeStage(
+        final OverworldStageState state,
+        final BaselineSampler sampler
+    ) {
+        final int lod = state.lod;
+        final int tileOriginX = state.tileOriginX;
+        final int tileOriginZ = state.tileOriginZ;
+        final int blocksPerPixel = state.blocksPerPixel;
+        if (lod >= OVERVIEW_ANCHOR_MIN_LOD && sampler.interpolatableOverviewHeights()) {
+            state.lattice = solveOverviewLattice(
+                sampler, lod, tileOriginX, tileOriginZ,
+                P_MIN, P_MIN, BaselineGrid.SIZE, BaselineGrid.SIZE
+            );
+            if (state.lattice != null) {
+                reconstructOverviewLattice(
+                    P_MIN, P_MIN, BaselineGrid.SIZE, BaselineGrid.SIZE,
+                    state.lattice, state.grid.terrainY
+                );
+            }
+        }
+        if (state.lattice == null
+            && !sampler.overviewHeights(
+                tileOriginX + P_MIN * blocksPerPixel,
+                tileOriginZ + P_MIN * blocksPerPixel,
+                BaselineGrid.SIZE, BaselineGrid.SIZE, blocksPerPixel, state.grid.terrainY
+            )) {
+            return false;
+        }
+        return true;
+    }
+
+    private static boolean runAnchorBiomesStage(
+        final OverworldStageState state,
+        final BaselineSampler sampler
+    ) {
+        if (state.lattice != null) {
+            state.biomeAnchors = solveSubBiomeAnchors(
+                sampler, state.lod, state.tileOriginX, state.tileOriginZ, state.grid.subPerAxis,
+                0, 0, LATTICE_CELL_COUNT, LATTICE_CELL_COUNT,
+                state.grid.terrainY, 0, 0, BaselineGrid.SIZE
+            );
+        }
+        return true;
+    }
+
+    private static boolean runBandStage(
+        final OverworldStageState state,
+        final BaselineSampler sampler
+    ) {
+        if (state.lattice != null && !resolveOverviewBand(
+            sampler, state.lod, state.tileOriginX, state.tileOriginZ,
+            P_MIN, P_MIN, BaselineGrid.SIZE, BaselineGrid.SIZE,
+            state.lattice, state.grid.terrainY, state.biomeAnchors,
+            LATTICE_CELL_COUNT + 1, LATTICE_CELL_COUNT + 1, 0, 0
+        )) {
+            return false;
+        }
+        return true;
+    }
+
+    private static boolean runExactColumnsStage(
+        final OverworldStageState state,
+        final BaselineSampler sampler
+    ) {
+        if (state.lod <= MAX_EXACT_RESIDUAL_LOD && !applyExactResiduals(
+            sampler, state.lod, state.tileOriginX, state.tileOriginZ, state.blocksPerPixel,
+            state.grid, state.fluidConfidence
+        )) {
+            return false;
+        }
+        return true;
+    }
+
+    private static boolean runCellsStage(
+        final OverworldStageState state,
+        final BaselineSampler sampler
+    ) {
+        final BaselineGrid grid = state.grid;
+        final int lod = state.lod;
+        final int tileOriginX = state.tileOriginX;
+        final int tileOriginZ = state.tileOriginZ;
+        // The lattice cell sweep answers the plain per-pixel table at LOD2-4 directly, so no
+        // separate centre pass runs: cell copies and exact samples reproduce what a dense
+        // per-pixel query returns. A supersampled grid would scatter the sweep into the dormant
+        // sub-sample planes instead. Samplers without the lattice keep the old order.
+        final int[] subRaw = state.biomeAnchors != null
+            ? runSubBiomeCells(
+                sampler, lod, tileOriginX, tileOriginZ, grid.subPerAxis,
+                0, 0, LATTICE_CELL_COUNT, LATTICE_CELL_COUNT,
+                grid.terrainY, 0, 0, BaselineGrid.SIZE,
+                state.biomeAnchors, LATTICE_CELL_COUNT + 1, 0, 0
+            )
+            : sampleSubBiomeRaw(sampler, lod, tileOriginX, tileOriginZ, grid);
+        if (subRaw != null) {
+            if (grid.supersampled()) {
+                scatterSubBiomes(grid, subRaw);
+            } else {
+                System.arraycopy(subRaw, 0, grid.biomeId, 0, subRaw.length);
+            }
+        } else {
+            if (!sampleSurfaceBiomes(sampler, lod, tileOriginX, tileOriginZ, grid)
+                && !sampleBiomes(sampler, lod, tileOriginX, tileOriginZ, grid)) {
+                return false;
+            }
+            sampleSubBiomes(sampler, lod, tileOriginX, tileOriginZ, grid);
+        }
+        return true;
+    }
+
+    private static boolean runComposeStage(
+        final OverworldStageState state,
+        final BaselineSampler sampler
+    ) {
+        resolveOverviewFluids(state.grid, state.lod, state.fluidConfidence);
+        return true;
+    }
+
+    /** Drives every overworld stage in order for one tile. */
     private static boolean sampleOverworld(
         final BaselineSampler sampler,
         final int lod,
         final int tileOriginX,
         final int tileOriginZ,
-        final BaselineGrid grid
+        final BaselineGrid grid,
+        final long[] stageWallNanos
+    ) {
+        final OverworldStageState state = new OverworldStageState(lod, tileOriginX, tileOriginZ, grid);
+        return runTimedStage(OverworldStage.H_LATTICE, state, sampler, stageWallNanos)
+            && runTimedStage(OverworldStage.ANCHOR_BIOMES, state, sampler, stageWallNanos)
+            && runTimedStage(OverworldStage.BAND, state, sampler, stageWallNanos)
+            && runTimedStage(OverworldStage.EXACT_COLUMNS, state, sampler, stageWallNanos)
+            && runTimedStage(OverworldStage.CELLS, state, sampler, stageWallNanos)
+            && runTimedStage(OverworldStage.COMPOSE, state, sampler, stageWallNanos);
+    }
+
+    private static boolean runTimedStage(
+        final OverworldStage stage,
+        final OverworldStageState state,
+        final BaselineSampler sampler,
+        final long[] stageWallNanos
+    ) {
+        final long start = stageWallNanos != null ? System.nanoTime() : 0L;
+        final boolean ok = runOverworldStage(stage, state, sampler);
+        if (stageWallNanos != null) {
+            stageWallNanos[stage.ordinal()] += System.nanoTime() - start;
+        }
+        return ok;
+    }
+
+    /** Overview anchor lattice over even tile-local pixels for one LOD2-4 window. */
+    private static final class OverviewLattice {
+        final int[] heights;
+        /** Tile-local anchor index of {@code heights[0][0]}; anchor k sits at pixel {@code 2k}. */
+        final int minKx;
+        final int minKz;
+        final int w;
+        final int h;
+
+        OverviewLattice(final int[] heights, final int minKx, final int minKz, final int w, final int h) {
+            this.heights = heights;
+            this.minKx = minKx;
+            this.minKz = minKz;
+            this.w = w;
+            this.h = h;
+        }
+    }
+
+    /**
+     * Solves the overview anchor lattice covering the tile-local pixel window, or returns null
+     * when the query fails so the caller can fall back to plain per-pixel solves. The lattice
+     * aligns to even tile-local pixel indices - so a window update and its containing full tile
+     * reconstruct from identical anchors and agree pixel-for-pixel - and anchors run one beyond
+     * an odd last pixel so it has a pair to interpolate from. Anchor solves go through the
+     * coarse entry: their stride is double the pixel stride, detail finer than that is dropped.
+     */
+    private static OverviewLattice solveOverviewLattice(
+        final BaselineSampler sampler,
+        final int lod,
+        final int tileOriginX,
+        final int tileOriginZ,
+        final int minPixelX,
+        final int minPixelZ,
+        final int width,
+        final int height
+    ) {
+        final OverviewLatticePlan plan = planOverviewLattice(
+            lod, tileOriginX, tileOriginZ, minPixelX, minPixelZ, width, height
+        );
+        final int[] anchors = new int[plan.anchorW * plan.anchorH];
+        if (!sampler.overviewHeightsCoarse(
+            plan.blockX, plan.blockZ, plan.anchorW, plan.anchorH, plan.stride, anchors
+        )) {
+            return null;
+        }
+        return new OverviewLattice(anchors, plan.anchorMinKx, plan.anchorMinKz, plan.anchorW, plan.anchorH);
+    }
+
+    /** Anchor-lattice query geometry for one pixel window; the single source both the per-tile
+     * solve and a wave's batched H_LATTICE dispatch build their queries from. */
+    private static final class OverviewLatticePlan {
+        final int blockX;
+        final int blockZ;
+        final int anchorW;
+        final int anchorH;
+        final int stride;
+        final int anchorMinKx;
+        final int anchorMinKz;
+
+        OverviewLatticePlan(
+            final int blockX, final int blockZ, final int anchorW, final int anchorH, final int stride,
+            final int anchorMinKx, final int anchorMinKz
+        ) {
+            this.blockX = blockX;
+            this.blockZ = blockZ;
+            this.anchorW = anchorW;
+            this.anchorH = anchorH;
+            this.stride = stride;
+            this.anchorMinKx = anchorMinKx;
+            this.anchorMinKz = anchorMinKz;
+        }
+    }
+
+    private static OverviewLatticePlan planOverviewLattice(
+        final int lod,
+        final int tileOriginX,
+        final int tileOriginZ,
+        final int minPixelX,
+        final int minPixelZ,
+        final int width,
+        final int height
     ) {
         final int blocksPerPixel = 1 << lod;
-        final int blockX = tileOriginX + P_MIN * blocksPerPixel;
-        final int blockZ = tileOriginZ + P_MIN * blocksPerPixel;
-        final int[] fluidConfidence = new int[grid.terrainY.length];
-        if (!sampler.overviewHeights(
-            blockX,
-            blockZ,
-            BaselineGrid.SIZE,
-            BaselineGrid.SIZE,
-            blocksPerPixel,
-            grid.terrainY
-        )) {
-            return false;
+        final int anchorMinKx = Math.floorDiv(minPixelX, 2);
+        final int anchorMinKz = Math.floorDiv(minPixelZ, 2);
+        final int maxPixelX = minPixelX + width - 1;
+        final int maxPixelZ = minPixelZ + height - 1;
+        final int anchorW = Math.floorDiv(maxPixelX, 2) + (maxPixelX & 1) - anchorMinKx + 1;
+        final int anchorH = Math.floorDiv(maxPixelZ, 2) + (maxPixelZ & 1) - anchorMinKz + 1;
+        return new OverviewLatticePlan(
+            tileOriginX + 2 * anchorMinKx * blocksPerPixel,
+            tileOriginZ + 2 * anchorMinKz * blocksPerPixel,
+            anchorW, anchorH, 2 * blocksPerPixel, anchorMinKx, anchorMinKz
+        );
+    }
+
+    /** One wave member's native query for a batchable stage, in the batch entries' flat contract. */
+    static final class StageQuery {
+        final int blockX;
+        final int blockZ;
+        final int w;
+        final int h;
+        final int stride;
+        /** Gathered terrain plane ({@code w*h}) feeding ANCHOR_BIOMES; null for H_LATTICE. */
+        final int[] terrainY;
+
+        StageQuery(
+            final int blockX, final int blockZ, final int w, final int h, final int stride, final int[] terrainY
+        ) {
+            this.blockX = blockX;
+            this.blockZ = blockZ;
+            this.w = w;
+            this.h = h;
+            this.stride = stride;
+            this.terrainY = terrainY;
         }
-        if (lod <= MAX_EXACT_RESIDUAL_LOD && !applyExactResiduals(
-            sampler, lod, tileOriginX, tileOriginZ, blocksPerPixel, grid,
-            fluidConfidence
-        )) {
-            return false;
+    }
+
+    /** Allocates the grid the staged overworld path composes into, supersampling identical to {@link #sample}. */
+    static BaselineGrid newOverworldGrid(final int lod, final int tileOriginX, final int tileOriginZ) {
+        return new BaselineGrid(lod, tileOriginX, tileOriginZ, BIOME_SUB_PER_AXIS[lod]);
+    }
+
+    /**
+     * Plans member {@code state}'s H_LATTICE native query: the anchor-lattice geometry on the
+     * interpolation path, the dense overview rectangle otherwise (the same choice
+     * {@link #runLatticeStage} makes per tile).
+     */
+    static StageQuery planLatticeQuery(final OverworldStageState state, final BaselineSampler sampler) {
+        if (state.lod >= OVERVIEW_ANCHOR_MIN_LOD && sampler.interpolatableOverviewHeights()) {
+            final OverviewLatticePlan plan = planOverviewLattice(
+                state.lod, state.tileOriginX, state.tileOriginZ,
+                P_MIN, P_MIN, BaselineGrid.SIZE, BaselineGrid.SIZE
+            );
+            return new StageQuery(plan.blockX, plan.blockZ, plan.anchorW, plan.anchorH, plan.stride, null);
         }
-        if (!sampleSurfaceBiomes(sampler, lod, tileOriginX, tileOriginZ, grid)
-            && !sampleBiomes(sampler, lod, tileOriginX, tileOriginZ, grid)) {
-            return false;
+        return new StageQuery(
+            state.tileOriginX + P_MIN * state.blocksPerPixel,
+            state.tileOriginZ + P_MIN * state.blocksPerPixel,
+            BaselineGrid.SIZE, BaselineGrid.SIZE, state.blocksPerPixel, null
+        );
+    }
+
+    /** Applies a successful batched H_LATTICE result: wrap the anchors and reconstruct, or copy the dense plane. */
+    static void applyLatticeQuery(final OverworldStageState state, final BaselineSampler sampler, final int[] result) {
+        if (state.lod >= OVERVIEW_ANCHOR_MIN_LOD && sampler.interpolatableOverviewHeights()) {
+            final OverviewLatticePlan plan = planOverviewLattice(
+                state.lod, state.tileOriginX, state.tileOriginZ,
+                P_MIN, P_MIN, BaselineGrid.SIZE, BaselineGrid.SIZE
+            );
+            state.lattice = new OverviewLattice(
+                result, plan.anchorMinKx, plan.anchorMinKz, plan.anchorW, plan.anchorH
+            );
+            reconstructOverviewLattice(
+                P_MIN, P_MIN, BaselineGrid.SIZE, BaselineGrid.SIZE, state.lattice, state.grid.terrainY
+            );
+        } else {
+            System.arraycopy(result, 0, state.grid.terrainY, 0, state.grid.terrainY.length);
         }
-        sampleSubBiomes(sampler, lod, tileOriginX, tileOriginZ, grid);
-        resolveOverviewFluids(grid, lod, fluidConfidence);
+    }
+
+    /**
+     * Plans member {@code state}'s ANCHOR_BIOMES native query, gathering the anchor terrain
+     * plane the biome solve consumes; null when the tile took no lattice and the stage queries
+     * nothing.
+     */
+    static StageQuery planAnchorBiomeQuery(final OverworldStageState state) {
+        if (state.lattice == null) {
+            return null;
+        }
+        return planSubBiomeAnchors(
+            state.lod, state.tileOriginX, state.tileOriginZ, state.grid.subPerAxis,
+            0, 0, LATTICE_CELL_COUNT, LATTICE_CELL_COUNT,
+            state.grid.terrainY, 0, 0, BaselineGrid.SIZE
+        );
+    }
+
+    /** Applies a successful batched ANCHOR_BIOMES result; layout identical to {@link #solveSubBiomeAnchors}. */
+    static void applyAnchorBiomeQuery(final OverworldStageState state, final int[] result) {
+        state.biomeAnchors = result;
+    }
+
+    /**
+     * Fills {@code out} (dense {@code width}x{@code height} window layout) with the bilinear
+     * reconstruction of {@link #solveOverviewLattice}'s anchors. Every odd pixel gets its
+     * interpolated value, including waterline-band pixels - {@link #resolveOverviewBand} replaces
+     * those afterwards once the biome anchors are known.
+     */
+    private static void reconstructOverviewLattice(
+        final int minPixelX,
+        final int minPixelZ,
+        final int width,
+        final int height,
+        final OverviewLattice lattice,
+        final int[] out
+    ) {
+        for (int j = 0; j < height; j++) {
+            final int pixelZ = minPixelZ + j;
+            final int anchorZ = Math.floorDiv(pixelZ, 2) - lattice.minKz;
+            final int oddZ = pixelZ & 1;
+            for (int i = 0; i < width; i++) {
+                final int pixelX = minPixelX + i;
+                final int anchorX = Math.floorDiv(pixelX, 2) - lattice.minKx;
+                final int oddX = pixelX & 1;
+                final int h00 = lattice.heights[anchorZ * lattice.w + anchorX];
+                int value = h00;
+                if (oddX != 0 || oddZ != 0) {
+                    // Read the right-hand anchor only when it exists: at the last lattice column the
+                    // unconditional read wrapped into the next row (dead value when oddX == 0, but a
+                    // stray read on the last row).
+                    final boolean hasRight = anchorX + 1 < lattice.w;
+                    final int h10 = hasRight ? lattice.heights[anchorZ * lattice.w + anchorX + 1] : h00;
+                    final int top = oddX != 0 ? lerp(h00, h10, 1, 2) : h00;
+                    if (oddZ != 0) {
+                        final int h01 = lattice.heights[(anchorZ + 1) * lattice.w + anchorX];
+                        final int bottom = oddX != 0 && hasRight
+                            ? lerp(h01, lattice.heights[(anchorZ + 1) * lattice.w + anchorX + 1], 1, 2)
+                            : h01;
+                        value = lerp(top, bottom, 1, 2);
+                    } else {
+                        value = top;
+                    }
+                }
+                out[j * width + i] = value;
+            }
+        }
+    }
+
+    /**
+     * Height above sea level from which a crossing quad is only waterline-relevant when the
+     * biome anchors say so. Quads whose anchors all sit under this height can themselves
+     * straddle the waterline, so they always keep exact solves; above it, only the +18 hidden
+     * carve protection of {@link #OVERVIEW_INTERPOLATION_MIN_HEIGHT} applied, which made every
+     * mid-altitude quad exact. A river biome cell announces itself at an anchor at these LODs'
+     * spacings (16 blocks wide versus 8/16/32-block anchors), so quads with no water-biome
+     * anchor in their neighbourhood carry no hidden river and interpolate.
+     */
+    private static final int OVERVIEW_INTERPOLATION_BIOME_GATE_HEIGHT = BaselineDeriver.WATER_LEVEL + 2;
+
+    /** Whether a biome id marks water-relevant terrain for the band gate. */
+    private static boolean waterRelevantBiome(final int biomeId) {
+        return BiomeTable.get(biomeId).waterBiome();
+    }
+
+    /**
+     * Resolves the waterline band for the reconstructed window: every odd pixel whose anchor
+     * quad crosses {@link #OVERVIEW_INTERPOLATION_MAX_WATER_HEIGHT}..{@link
+     * * OVERVIEW_INTERPOLATION_MIN_HEIGHT} keeps an exact per-pixel solve unless the quad sits
+     * entirely above {@link #OVERVIEW_INTERPOLATION_BIOME_GATE_HEIGHT} with no water-relevant
+     * biome anchor in the 3x3 anchor neighbourhood around it - those interpolate, because the
+     * band's job there was only hidden-river protection and the biome lattice answers that
+     * directly. {@code biomeAnchors} null (the anchor sweep failed) disables the gate and keeps
+     * every crossing pixel exact. Stride 4, not 1, for the solves: a stride-1 query bilinearly
+     * blends neighbouring quart cells, while 4 keeps the per-cell solve the replaced per-pixel
+     * pass had; full detail, not the coarse entry, because these pixels are the waterline.
+     */
+    private static boolean resolveOverviewBand(
+        final BaselineSampler sampler,
+        final int lod,
+        final int tileOriginX,
+        final int tileOriginZ,
+        final int minPixelX,
+        final int minPixelZ,
+        final int width,
+        final int height,
+        final OverviewLattice lattice,
+        final int[] out,
+        final int[] biomeAnchors,
+        final int biomeAnchorsW,
+        final int biomeAnchorsH,
+        final int biomeAnchorCellsX0,
+        final int biomeAnchorCellsZ0
+    ) {
+        final int blocksPerPixel = 1 << lod;
+        final SparseRequests requests = new SparseRequests();
+        for (int j = 0; j < height; j++) {
+            final int pixelZ = minPixelZ + j;
+            final int anchorZ = Math.floorDiv(pixelZ, 2) - lattice.minKz;
+            final int oddZ = pixelZ & 1;
+            for (int i = 0; i < width; i++) {
+                final int pixelX = minPixelX + i;
+                final int anchorX = Math.floorDiv(pixelX, 2) - lattice.minKx;
+                final int oddX = pixelX & 1;
+                if (oddX == 0 && oddZ == 0) {
+                    continue;
+                }
+                final int h00 = lattice.heights[anchorZ * lattice.w + anchorX];
+                int lowest = h00;
+                int highest = h00;
+                /*
+                 * Bounds check, not a parity check. The envelope must keep the right-hand anchor
+                 * for every pixel that has one - at the last lattice column anchorX + 1 wraps into
+                 * the next row (and past the array on the last row), so only that column skips it.
+                 * Keying this on `oddX != 0` instead would silently drop the right anchor for every
+                 * even pixel, narrowing the band and skipping exact waterline solves it used to do.
+                 */
+                final boolean hasRight = anchorX + 1 < lattice.w;
+                if (hasRight) {
+                    final int h10 = lattice.heights[anchorZ * lattice.w + anchorX + 1];
+                    lowest = Math.min(lowest, h10);
+                    highest = Math.max(highest, h10);
+                }
+                if (oddZ != 0) {
+                    final int h01 = lattice.heights[(anchorZ + 1) * lattice.w + anchorX];
+                    lowest = Math.min(lowest, h01);
+                    highest = Math.max(highest, h01);
+                    if (hasRight) {
+                        final int h11 = lattice.heights[(anchorZ + 1) * lattice.w + anchorX + 1];
+                        lowest = Math.min(lowest, h11);
+                        highest = Math.max(highest, h11);
+                    }
+                }
+                if (highest < OVERVIEW_INTERPOLATION_MAX_WATER_HEIGHT
+                    || lowest >= OVERVIEW_INTERPOLATION_MIN_HEIGHT) {
+                    continue;
+                }
+                if (biomeAnchors != null && lowest >= OVERVIEW_INTERPOLATION_BIOME_GATE_HEIGHT
+                    && !waterRelevantNeighbourhood(
+                        biomeAnchors, biomeAnchorsW, biomeAnchorsH,
+                        biomeAnchorCellsX0, biomeAnchorCellsZ0,
+                        anchorX + lattice.minKx, anchorZ + lattice.minKz)) {
+                    continue;
+                }
+                requests.add(j * width + i,
+                    tileOriginX + pixelX * blocksPerPixel,
+                    tileOriginZ + pixelZ * blocksPerPixel);
+            }
+        }
+        return resolveBandRequests(sampler, requests, out);
+    }
+
+    /**
+     * Sparse-transport thresholds for the collected band/cells requests: below {@code
+     * SPARSE_MIN_POINTS} the per-point entries stay cheaper than packing one sparse call, and
+     * larger collections dispatch in bounded chunks so a coastline tile's measured 0..~2000
+     * waterline points never grow an unbounded native batch.
+     */
+    private static final int SPARSE_MIN_POINTS = 16;
+    /**
+     * Sparse chunk caps. The per-dispatch fixed cost (~0.6ms) amortizes over the chunk, so
+     * larger chunks cut the serialized queue length until per-point compute dominates; 32K
+     * points / 8K cells is the measured sweet spot on the RTX 4060 (wall still falls from
+     * 4096 to 16K chunks but is flat past 32K).
+     */
+    private static final int SPARSE_CHUNK_POINTS = 32768;
+    /** Cells per packed sparse call; each cell carries {@code edge*edge} points. */
+    private static final int SPARSE_CHUNK_CELLS = 8192;
+
+    /**
+     * Executes a collected band: an empty collection resolves without touching the sampler, a
+     * sub-threshold one stays on the per-point entries, and larger ones dispatch bounded sparse
+     * chunks whose failure repairs through the per-point entry in collection order - so the
+     * first failing request aborts exactly where the per-point loop would have.
+     */
+    private static boolean resolveBandRequests(
+        final BaselineSampler sampler,
+        final SparseRequests requests,
+        final int[] out
+    ) {
+        if (requests.count == 0) {
+            return true;
+        }
+        final int[] exact = new int[1];
+        if (requests.count < SPARSE_MIN_POINTS) {
+            for (int k = 0; k < requests.count; k++) {
+                if (!sampler.overviewHeights(requests.blockX(k), requests.blockZ(k), 1, 1, 4, exact)) {
+                    return false;
+                }
+                out[requests.destIndex(k)] = exact[0];
+            }
+            return true;
+        }
+        final int chunkPoints = Math.min(requests.count, SPARSE_CHUNK_POINTS);
+        final int[] chunkX = new int[chunkPoints];
+        final int[] chunkZ = new int[chunkPoints];
+        final int[] chunkY = new int[chunkPoints];
+        for (int start = 0; start < requests.count; start += SPARSE_CHUNK_POINTS) {
+            final int n = Math.min(SPARSE_CHUNK_POINTS, requests.count - start);
+            for (int k = 0; k < n; k++) {
+                chunkX[k] = requests.blockX(start + k);
+                chunkZ[k] = requests.blockZ(start + k);
+            }
+            if (!sampler.overviewHeightsSparse(chunkX, chunkZ, n, chunkY)) {
+                for (int k = 0; k < n; k++) {
+                    if (!sampler.overviewHeights(chunkX[k], chunkZ[k], 1, 1, 4, exact)) {
+                        return false;
+                    }
+                    out[requests.destIndex(start + k)] = exact[0];
+                }
+                continue;
+            }
+            for (int k = 0; k < n; k++) {
+                out[requests.destIndex(start + k)] = chunkY[k];
+            }
+        }
         return true;
     }
 
     /**
-     * Fills the grid's biome sub-samples. Reuses the same height-aware {@code surfaceBiomes} entry
-     * point as the per-pixel pass, with each sub-sample handed its pixel's centre height, so the
-     * two agree on how a column's biome is chosen and only the sampled position differs.
-     *
-     * <p>Best-effort: a sampler that cannot resolve surface biomes (the interface's default, used
-     * by tests and by non-native samplers) leaves every sub-sample equal to its pixel, which is
-     * exactly the pre-supersampling behaviour.
+     * Growable (destIndex, blockX, blockZ) request triplets collected for one refinement sweep.
+     * Collection order is execution order, so a chunked dispatch and its repair walk the same
+     * requests the pre-split per-point loop issued.
      */
-    private static void sampleSubBiomes(
+    private static final class SparseRequests {
+        private int[] data = new int[3 * 64];
+        private int count;
+
+        void add(final int destIndex, final int blockX, final int blockZ) {
+            if (data.length < (count + 1) * 3) {
+                data = java.util.Arrays.copyOf(data, data.length * 2);
+            }
+            data[count * 3] = destIndex;
+            data[count * 3 + 1] = blockX;
+            data[count * 3 + 2] = blockZ;
+            count++;
+        }
+
+        int destIndex(final int i) {
+            return data[i * 3];
+        }
+
+        int blockX(final int i) {
+            return data[i * 3 + 1];
+        }
+
+        int blockZ(final int i) {
+            return data[i * 3 + 2];
+        }
+    }
+
+    /*
+     * Whether any biome anchor around an overview quad is water-relevant. The quad spans even
+     * pixels 2k..2k+2; the biome lattice's odd anchors sit at pixels 2k-1, 2k+1, 2k+3, i.e.
+     * array indices k..k+2 (shifted by the sweep's cell origin), so the 3x3 block centred on
+     * the quad's interior anchor covers the quad plus one anchor of margin on each side.
+     */
+    private static boolean waterRelevantNeighbourhood(
+        final int[] biomeAnchors,
+        final int anchorsW,
+        final int anchorsH,
+        final int cellsX0,
+        final int cellsZ0,
+        final int quadKx,
+        final int quadKz
+    ) {
+        for (int dz = 0; dz <= 2; dz++) {
+            final int az = quadKz + dz - cellsZ0;
+            if (az < 0 || az >= anchorsH) {
+                continue;
+            }
+            for (int dx = 0; dx <= 2; dx++) {
+                final int ax = quadKx + dx - cellsX0;
+                if (ax < 0 || ax >= anchorsW) {
+                    continue;
+                }
+                if (waterRelevantBiome(biomeAnchors[az * anchorsW + ax])) {
+                    return true;
+                }
+            }
+        }
+        return false;
+    }
+
+    /**
+     * Runs the raw sub-biome sweep: one height-aware {@code surfaceBiomes} query at
+     * {@code sub}-per-pixel resolution, each sub-sample handed its pixel's centre height, exactly
+     * as the per-pixel pass would resolve that column. Returns null when the grid is not
+     * supersampled or the sampler cannot serve the query.
+     *
+     * <p>The sparse-lattice path ({@link #sampleSubBiomeLatticeRange}) is chosen by the callers
+     * before falling back here; this method itself always runs the dense sweep and exists as that
+     * fallback and as the value-level contract the lattice path must reproduce outside its copied
+     * cells. A supersampled grid from a re-enabled sub-sampling config would use it for the 2x2
+     * sweep.
+     */
+    private static int[] sampleSubBiomeRaw(
         final BaselineSampler sampler,
         final int lod,
         final int tileOriginX,
@@ -448,7 +1425,7 @@ public final class LodSampling {
         final BaselineGrid grid
     ) {
         if (!grid.supersampled()) {
-            return;
+            return null;
         }
         final int sub = grid.subPerAxis;
         final int blocksPerPixel = 1 << lod;
@@ -462,7 +1439,7 @@ public final class LodSampling {
             }
         }
         final int[] raw = new int[cells];
-        final boolean sampled = sampler.surfaceBiomes(
+        return sampler.surfaceBiomes(
             tileOriginX + P_MIN * blocksPerPixel,
             tileOriginZ + P_MIN * blocksPerPixel,
             width,
@@ -470,13 +1447,465 @@ public final class LodSampling {
             blocksPerPixel / sub,
             heights,
             raw
+        ) ? raw : null;
+    }
+
+    /**
+     * Lattice cells per axis: one cell spans two output pixels ({@code step = 2 * sub}
+     * sub-samples) and the cells partition the sweep, so {@code SIZE / 2} cells cover the grid.
+     */
+    private static final int LATTICE_CELL_COUNT = BaselineGrid.SIZE / 2;
+
+    /**
+     * True for the one-block height window where the fluid classification reads the biome id: a
+     * column at or above sea level is land and one under {@link #PREDICTED_FLUID_CEILING} is
+     * water whatever the biome says, but in between water is decided by the biome alone (see
+     * {@code resolveOverviewFluids}). Lattice copies must never span this window.
+     */
+    private static boolean biomeDecidesFluid(final int solidY) {
+        return solidY >= PREDICTED_FLUID_CEILING && solidY < BaselineDeriver.WATER_LEVEL;
+    }
+
+    /** Whether all four corner anchors of one lattice cell are water biomes. */
+    private static int waterFreezeClass(final int biomeId) {
+        if (biomeId == 10 || biomeId == 11) {
+            return 1; // frozen ocean / frozen river (surface ice)
+        }
+        if (biomeId == 50) {
+            return 2; // deep frozen ocean
+        }
+        return 0; // standard non-frozen water
+    }
+
+    private static boolean allAnchorsWater(
+        final int[] anchorBiomes, final int anchorsW, final int localKx, final int localKz
+    ) {
+        final int b00 = anchorBiomes[localKz * anchorsW + localKx];
+        final int b10 = anchorBiomes[localKz * anchorsW + localKx + 1];
+        final int b01 = anchorBiomes[(localKz + 1) * anchorsW + localKx];
+        final int b11 = anchorBiomes[(localKz + 1) * anchorsW + localKx + 1];
+
+        if (!BiomeTable.get(b00).waterBiome()
+            || !BiomeTable.get(b10).waterBiome()
+            || !BiomeTable.get(b01).waterBiome()
+            || !BiomeTable.get(b11).waterBiome()) {
+            return false;
+        }
+
+        // Must preserve identical freeze semantics across all four corners
+        final int fClass = waterFreezeClass(b00);
+        return fClass == waterFreezeClass(b10)
+            && fClass == waterFreezeClass(b01)
+            && fClass == waterFreezeClass(b11);
+    }
+
+    /** Whether all four pixel heights of one lattice cell sit under the fluid-decides band. */
+    private static boolean pixelHeightsDeep(
+        final int[] pixelHeights, final int heightStride,
+        final int heightBaseRow, final int heightBaseCol, final int cz, final int cx
+    ) {
+        for (int j = 0; j < 2; j++) {
+            for (int i = 0; i < 2; i++) {
+                if (pixelHeights[(2 * cz + j - heightBaseRow) * heightStride
+                    + 2 * cx + i - heightBaseCol] >= PREDICTED_FLUID_CEILING) {
+                    return false;
+                }
+            }
+        }
+        return true;
+    }
+
+    /**
+     * Solves the sub-biome lattice's corner anchors for the cell range {@code [cellX0,
+     * cellX0+cellsW) x [cellZ0, cellZ0+cellsH)}: one height-aware {@code surfaceBiomes} query at
+     * every second output pixel. Anchor heights come from the caller's dense pixel grid (the
+     * lattice's far corner anchors sit one sub-sample past the grid; their height input falls
+     * back to the margin pixel, and the query still samples the anchor's own block - only copy
+     * decisions read those anchors, refined cells use per-sub heights, so the approximation
+     * never reaches a solved value). Returns the anchors in {@code (cellsW+1) x (cellsH+1)}
+     * layout, or null when the query fails. Reading only even anchor-pixel rows, this may run
+     * while odd band pixels still hold reconstruction values.
+     */
+    private static int[] solveSubBiomeAnchors(
+        final BaselineSampler sampler,
+        final int lod,
+        final int tileOriginX,
+        final int tileOriginZ,
+        final int sub,
+        final int cellX0,
+        final int cellZ0,
+        final int cellsW,
+        final int cellsH,
+        final int[] pixelHeights,
+        final int heightBaseCol,
+        final int heightBaseRow,
+        final int heightStride
+    ) {
+        final StageQuery plan = planSubBiomeAnchors(
+            lod, tileOriginX, tileOriginZ, sub, cellX0, cellZ0, cellsW, cellsH,
+            pixelHeights, heightBaseCol, heightBaseRow, heightStride
         );
+        final int[] anchorBiomes = new int[plan.w * plan.h];
+        if (!sampler.surfaceBiomes(
+            plan.blockX, plan.blockZ, plan.w, plan.h, plan.stride, plan.terrainY, anchorBiomes
+        )) {
+            return null;
+        }
+        return anchorBiomes;
+    }
+
+    /** Anchor-sweep query geometry plus the gathered anchor terrain plane; the shared source for
+     * the per-tile solve and a wave's batched ANCHOR_BIOMES dispatch. */
+    private static StageQuery planSubBiomeAnchors(
+        final int lod,
+        final int tileOriginX,
+        final int tileOriginZ,
+        final int sub,
+        final int cellX0,
+        final int cellZ0,
+        final int cellsW,
+        final int cellsH,
+        final int[] pixelHeights,
+        final int heightBaseCol,
+        final int heightBaseRow,
+        final int heightStride
+    ) {
+        final int blocksPerPixel = 1 << lod;
+        final int subStride = blocksPerPixel / sub;
+        final int step = 2 * sub;
+        final int blockX0 = tileOriginX + P_MIN * blocksPerPixel;
+        final int blockZ0 = tileOriginZ + P_MIN * blocksPerPixel;
+
+        final int anchorsW = cellsW + 1;
+        final int anchorsH = cellsH + 1;
+        final int[] anchorHeights = new int[anchorsW * anchorsH];
+        for (int kz = 0; kz < anchorsH; kz++) {
+            final int row = Math.min(2 * (cellZ0 + kz), BaselineGrid.SIZE - 1) - heightBaseRow;
+            for (int kx = 0; kx < anchorsW; kx++) {
+                final int col = Math.min(2 * (cellX0 + kx), BaselineGrid.SIZE - 1) - heightBaseCol;
+                anchorHeights[kz * anchorsW + kx] = pixelHeights[row * heightStride + col];
+            }
+        }
+        return new StageQuery(
+            blockX0 + cellX0 * step * subStride,
+            blockZ0 + cellZ0 * step * subStride,
+            anchorsW, anchorsH, step * subStride, anchorHeights
+        );
+    }
+
+    /**
+     * Runs the sub-biome cell loop over {@code [cellX0, cellX0+cellsW) x [cellZ0,
+     * cellZ0+cellsH)} with pre-solved {@code anchorBiomes} (see {@link
+     * * solveSubBiomeAnchors} for layout). A cell whose four corner biomes agree copies that
+     * biome across its sub-samples, but only when none of the cell's own four pixel heights
+     * falls in the biome-decides-fluid band: there a copied id could flip a water/land verdict,
+     * everywhere else the terrain height alone has already decided it and the copy can only
+     * refine biome colour. A deep-water cell - every corner a water biome, every pixel under
+     * the fluid band - copies any corner: all water biomes render with the same tint and the
+     * height alone classifies the column. Every other cell solves its sub-samples exactly, each
+     * with its own pixel's height - value-for-value what the dense sweep returns. Because
+     * cells, anchors and heights are all absolute to the tile, a window update that expands to
+     * cell boundaries reproduces the full tile's sweep bit-for-bit. Refining cells are collected
+     * and dispatched in bounded chunks (per-cell below the sparse threshold), so the first
+     * failing chunk repairs cell by cell exactly where the dense sweep would have failed.
+     * Returns the raw sweep for the requested cell range (window layout, {@code cellsW*step}
+     * wide), or null on failure.
+     */
+    private static int[] runSubBiomeCells(
+        final BaselineSampler sampler,
+        final int lod,
+        final int tileOriginX,
+        final int tileOriginZ,
+        final int sub,
+        final int cellX0,
+        final int cellZ0,
+        final int cellsW,
+        final int cellsH,
+        final int[] pixelHeights,
+        final int heightBaseCol,
+        final int heightBaseRow,
+        final int heightStride,
+        final int[] anchorBiomes,
+        final int anchorsW,
+        final int anchorCellX0,
+        final int anchorCellZ0
+    ) {
+        final int blocksPerPixel = 1 << lod;
+        final int subStride = blocksPerPixel / sub;
+        final int step = 2 * sub;
+        final int blockX0 = tileOriginX + P_MIN * blocksPerPixel;
+        final int blockZ0 = tileOriginZ + P_MIN * blocksPerPixel;
+
+        final int rawW = cellsW * step;
+        final int rawH = cellsH * step;
+        final int[] raw = new int[rawW * rawH];
+        final SparseCellRequests requests = new SparseCellRequests(step * step);
+        final int[] cellHeights = new int[step * step];
+        for (int cz = cellZ0; cz < cellZ0 + cellsH; cz++) {
+            final int z0 = (cz - cellZ0) * step;
+            for (int cx = cellX0; cx < cellX0 + cellsW; cx++) {
+                final int x0 = (cx - cellX0) * step;
+                final int localKx = cx - anchorCellX0;
+                final int localKz = cz - anchorCellZ0;
+                final int corner = anchorBiomes[localKz * anchorsW + localKx];
+                boolean copyable;
+                if (corner == anchorBiomes[localKz * anchorsW + localKx + 1]
+                    && corner == anchorBiomes[(localKz + 1) * anchorsW + localKx]
+                    && corner == anchorBiomes[(localKz + 1) * anchorsW + localKx + 1]) {
+                    copyable = true;
+                    for (int j = 0; j < 2 && copyable; j++) {
+                        for (int i = 0; i < 2; i++) {
+                            if (biomeDecidesFluid(pixelHeights[(2 * cz + j - heightBaseRow) * heightStride
+                                + 2 * cx + i - heightBaseCol])) {
+                                copyable = false;
+                                break;
+                            }
+                        }
+                    }
+                } else {
+                    /*
+                     * Deep-water variant: every water biome renders with the same tint and every
+                     * column this deep classifies as fluid from height alone, so a cell whose
+                     * corners are all water biomes and whose pixels all sit under the
+                     * fluid-decides band copies any corner regardless of which water biome it is.
+                     */
+                    copyable = allAnchorsWater(anchorBiomes, anchorsW, localKx, localKz)
+                        && pixelHeightsDeep(pixelHeights, heightStride, heightBaseRow, heightBaseCol,
+                            cz, cx);
+                }
+                if (copyable) {
+                    for (int z = 0; z < step; z++) {
+                        java.util.Arrays.fill(raw, (z0 + z) * rawW + x0, (z0 + z) * rawW + x0 + step, corner);
+                    }
+                    continue;
+                }
+                for (int z = 0; z < step; z++) {
+                    for (int x = 0; x < step; x++) {
+                        cellHeights[z * step + x] = pixelHeights[
+                            ((cz * step + z) / sub - heightBaseRow) * heightStride
+                                + (cx * step + x) / sub - heightBaseCol];
+                    }
+                }
+                requests.add(z0 * rawW + x0,
+                    blockX0 + cx * step * subStride,
+                    blockZ0 + cz * step * subStride,
+                    cellHeights);
+            }
+        }
+        return resolveCellRequests(sampler, requests, step, subStride, raw, rawW);
+    }
+
+    /**
+     * Executes collected cell requests with the same threshold/chunk/repair structure as the
+     * band: sub-threshold collections stay per cell, larger ones dispatch bounded sparse chunks
+     * whose failure repairs cell by cell in collection order, and the first failed repair cell
+     * returns null exactly where the per-cell loop would have.
+     */
+    private static int[] resolveCellRequests(
+        final BaselineSampler sampler,
+        final SparseCellRequests requests,
+        final int edge,
+        final int stride,
+        final int[] raw,
+        final int rawW
+    ) {
+        final int points = edge * edge;
+        if (requests.count == 0) {
+            return raw;
+        }
+        final int[] refined = new int[points];
+        if (requests.count < SPARSE_MIN_POINTS) {
+            final int[] heights = new int[points];
+            for (int k = 0; k < requests.count; k++) {
+                requests.copyHeights(k, heights);
+                if (!sampler.surfaceBiomes(
+                    requests.cellX(k), requests.cellZ(k), edge, edge, stride, heights, refined
+                )) {
+                    return null;
+                }
+                scatterCellRows(raw, rawW, requests.destRawOffset(k), refined, 0, edge);
+            }
+            return raw;
+        }
+        final int chunkCells = Math.min(requests.count, SPARSE_CHUNK_CELLS);
+        final int[] chunkX = new int[chunkCells];
+        final int[] chunkZ = new int[chunkCells];
+        final int[] chunkHeights = new int[chunkCells * points];
+        final int[] chunkBiomes = new int[chunkCells * points];
+        final int[] heights = new int[points];
+        for (int start = 0; start < requests.count; start += SPARSE_CHUNK_CELLS) {
+            final int n = Math.min(SPARSE_CHUNK_CELLS, requests.count - start);
+            for (int k = 0; k < n; k++) {
+                chunkX[k] = requests.cellX(start + k);
+                chunkZ[k] = requests.cellZ(start + k);
+            }
+            requests.copyHeightsRange(start, n, chunkHeights);
+            if (!sampler.surfaceBiomesSparse(chunkX, chunkZ, edge, stride, chunkHeights, n, chunkBiomes)) {
+                for (int k = 0; k < n; k++) {
+                    System.arraycopy(chunkHeights, k * points, heights, 0, points);
+                    if (!sampler.surfaceBiomes(chunkX[k], chunkZ[k], edge, edge, stride, heights, refined)) {
+                        return null;
+                    }
+                    scatterCellRows(raw, rawW, requests.destRawOffset(start + k), refined, 0, edge);
+                }
+                continue;
+            }
+            for (int k = 0; k < n; k++) {
+                scatterCellRows(raw, rawW, requests.destRawOffset(start + k), chunkBiomes, k * points, edge);
+            }
+        }
+        return raw;
+    }
+
+    /** Copies one cell's {@code edge x edge} points into the raw sweep at its collected offset. */
+    private static void scatterCellRows(
+        final int[] raw,
+        final int rawW,
+        final int destRawOffset,
+        final int[] src,
+        final int srcPos,
+        final int edge
+    ) {
+        for (int z = 0; z < edge; z++) {
+            System.arraycopy(src, srcPos + z * edge, raw, destRawOffset + z * rawW, edge);
+        }
+    }
+
+    /**
+     * Growable (destRawOffset, cellX, cellZ) triplets plus each cell's packed {@code edge*edge}
+     * height inputs, collected for one cells sweep. Triplets and heights share one capacity so
+     * both grow in lockstep with the cell count.
+     */
+    private static final class SparseCellRequests {
+        private final int pointsPerCell;
+        private int[] data = new int[3 * 64];
+        private int[] heights;
+        private int count;
+
+        SparseCellRequests(final int pointsPerCell) {
+            this.pointsPerCell = pointsPerCell;
+            this.heights = new int[pointsPerCell * 64];
+        }
+
+        void add(final int destRawOffset, final int cellX, final int cellZ, final int[] cellHeights) {
+            if (data.length < (count + 1) * 3) {
+                data = java.util.Arrays.copyOf(data, data.length * 2);
+                heights = java.util.Arrays.copyOf(heights, heights.length * 2);
+            }
+            data[count * 3] = destRawOffset;
+            data[count * 3 + 1] = cellX;
+            data[count * 3 + 2] = cellZ;
+            System.arraycopy(cellHeights, 0, heights, count * pointsPerCell, pointsPerCell);
+            count++;
+        }
+
+        int destRawOffset(final int i) {
+            return data[i * 3];
+        }
+
+        int cellX(final int i) {
+            return data[i * 3 + 1];
+        }
+
+        int cellZ(final int i) {
+            return data[i * 3 + 2];
+        }
+
+        void copyHeights(final int i, final int[] dst) {
+            System.arraycopy(heights, i * pointsPerCell, dst, 0, pointsPerCell);
+        }
+
+        void copyHeightsRange(final int first, final int n, final int[] dst) {
+            System.arraycopy(heights, first * pointsPerCell, dst, 0, n * pointsPerCell);
+        }
+    }
+
+    /**
+     * Sparse-lattice sub-biome sweep: {@link #solveSubBiomeAnchors} followed by {@link
+     * * runSubBiomeCells} over the requested cell range. Callers that already hold the band
+     * resolution's biome anchors call the two stages separately.
+     */
+    private static int[] sampleSubBiomeLatticeRange(
+        final BaselineSampler sampler,
+        final int lod,
+        final int tileOriginX,
+        final int tileOriginZ,
+        final int sub,
+        final int cellX0,
+        final int cellZ0,
+        final int cellsW,
+        final int cellsH,
+        final int[] pixelHeights,
+        final int heightBaseCol,
+        final int heightBaseRow,
+        final int heightStride
+    ) {
+        final int[] anchorBiomes = solveSubBiomeAnchors(
+            sampler, lod, tileOriginX, tileOriginZ, sub,
+            cellX0, cellZ0, cellsW, cellsH,
+            pixelHeights, heightBaseCol, heightBaseRow, heightStride
+        );
+        if (anchorBiomes == null) {
+            return null;
+        }
+        return runSubBiomeCells(
+            sampler, lod, tileOriginX, tileOriginZ, sub,
+            cellX0, cellZ0, cellsW, cellsH,
+            pixelHeights, heightBaseCol, heightBaseRow, heightStride,
+            anchorBiomes, cellsW + 1, cellX0, cellZ0
+        );
+    }
+
+    /**
+     * Scatters one raw sub-biome sweep into the grid. Every sub-sample lands in its pixel's slot,
+     * and each pixel's own biome id takes its first sub-sample - the sweep samples that exact
+     * position and height, so the value is the one a separate centre pass would have returned.
+     */
+    private static void scatterSubBiomes(final BaselineGrid grid, final int[] raw) {
+        final int sub = grid.subPerAxis;
+        final int width = BaselineGrid.SIZE * sub;
         for (int j = 0; j < width; j++) {
             for (int i = 0; i < width; i++) {
                 final int pixelIndex = (j / sub) * BaselineGrid.SIZE + i / sub;
-                grid.subBiomeId[grid.subIndex(pixelIndex, i % sub, j % sub)] = sampled
-                    ? raw[j * width + i]
-                    : grid.biomeId[pixelIndex];
+                grid.subBiomeId[grid.subIndex(pixelIndex, i % sub, j % sub)] = raw[j * width + i];
+                if (i % sub == 0 && j % sub == 0) {
+                    grid.biomeId[pixelIndex] = raw[j * width + i];
+                }
+            }
+        }
+    }
+
+    /**
+     * Fills the grid's biome sub-samples after a per-pixel pass. Reuses the same height-aware
+     * {@code surfaceBiomes} entry point, with each sub-sample handed its pixel's centre height,
+     * so the two agree on how a column's biome is chosen and only the sampled position differs.
+     *
+     * <p>Best-effort fallback path: a sampler that cannot resolve surface biomes (the interface's
+     * default, used by tests and by non-native samplers) leaves every sub-sample equal to its
+     * pixel, which is exactly the pre-supersampling behaviour.
+     */
+    private static void sampleSubBiomes(
+        final BaselineSampler sampler,
+        final int lod,
+        final int tileOriginX,
+        final int tileOriginZ,
+        final BaselineGrid grid
+    ) {
+        final int[] raw = sampleSubBiomeRaw(sampler, lod, tileOriginX, tileOriginZ, grid);
+        if (raw != null) {
+            scatterSubBiomes(grid, raw);
+            return;
+        }
+        if (!grid.supersampled()) {
+            return;
+        }
+        final int sub = grid.subPerAxis;
+        final int width = BaselineGrid.SIZE * sub;
+        for (int j = 0; j < width; j++) {
+            for (int i = 0; i < width; i++) {
+                final int pixelIndex = (j / sub) * BaselineGrid.SIZE + i / sub;
+                grid.subBiomeId[grid.subIndex(pixelIndex, i % sub, j % sub)]
+                    = grid.biomeId[pixelIndex];
             }
         }
     }
@@ -706,7 +2135,12 @@ public final class LodSampling {
         return true;
     }
 
-    /** Coarse Nether pixels use raw 3D-biome samples rather than Overworld surface-biome queries. */
+    /**
+     * Coarse sub-samples straight from the biome source: Nether pixels use raw 3D-biome samples
+     * rather than Overworld surface-biome queries, and the pre-1.18 biome-identity view calls it
+     * for any raw sub-samples its per-LOD config requests - its layer-stack queries need no
+     * heights to sub-sample. Dormant while every LOD runs one sample per pixel.
+     */
     private static void sampleRawSubBiomes(
         final BaselineSampler sampler,
         final int lod,

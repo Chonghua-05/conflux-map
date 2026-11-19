@@ -1,0 +1,4 @@
+// Version metadata lives next to this file; the shared NeoForge build logic is
+// kept at the repository root so every supported NeoForge version uses one
+// consistent source/resource/test layout.
+apply from: rootProject.file('neoforge.gradle')

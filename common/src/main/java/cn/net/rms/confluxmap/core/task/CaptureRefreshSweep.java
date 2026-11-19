@@ -1,6 +1,7 @@
 package cn.net.rms.confluxmap.core.task;
 
 import cn.net.rms.confluxmap.core.model.MapLayer;
+import cn.net.rms.confluxmap.core.util.ChunkKeys;
 import cn.net.rms.confluxmap.core.util.ChunkViewport;
 import java.util.HashSet;
 import java.util.List;
@@ -54,7 +55,7 @@ public final class CaptureRefreshSweep {
             budget, centerChunkX, centerChunkZ, readiness
         );
         for (final long[] chunk : chunks) {
-            completed.add(key((int) chunk[0], (int) chunk[1]));
+            completed.add(ChunkKeys.pack((int) chunk[0], (int) chunk[1]));
         }
         return new Batch(activeLayer, activePivotY, chunks);
     }
@@ -67,7 +68,7 @@ public final class CaptureRefreshSweep {
         if (activeViewport == null || !activeViewport.contains(chunkX, chunkZ)) {
             return;
         }
-        completed.remove(key(chunkX, chunkZ));
+        completed.remove(ChunkKeys.pack(chunkX, chunkZ));
         pending.mark(chunkX, chunkZ);
     }
 
@@ -115,30 +116,18 @@ public final class CaptureRefreshSweep {
         }
         activeViewport = viewport;
         pending.retain(viewport::contains);
-        completed.removeIf(chunk -> !viewport.contains(chunkX(chunk), chunkZ(chunk)));
+        completed.removeIf(chunk -> !viewport.contains(ChunkKeys.chunkX(chunk), ChunkKeys.chunkZ(chunk)));
         markViewport(viewport);
     }
 
     private void markViewport(final ChunkViewport viewport) {
         for (int chunkZ = viewport.minChunkZ(); chunkZ <= viewport.maxChunkZ(); chunkZ++) {
             for (int chunkX = viewport.minChunkX(); chunkX <= viewport.maxChunkX(); chunkX++) {
-                if (!completed.contains(key(chunkX, chunkZ))) {
+                if (!completed.contains(ChunkKeys.pack(chunkX, chunkZ))) {
                     pending.mark(chunkX, chunkZ);
                 }
             }
         }
-    }
-
-    private static long key(final int chunkX, final int chunkZ) {
-        return ((long) chunkX << 32) | (chunkZ & 0xFFFFFFFFL);
-    }
-
-    private static int chunkX(final long key) {
-        return (int) (key >> 32);
-    }
-
-    private static int chunkZ(final long key) {
-        return (int) key;
     }
 
     public record Batch(MapLayer layer, int pivotY, List<long[]> chunks) {

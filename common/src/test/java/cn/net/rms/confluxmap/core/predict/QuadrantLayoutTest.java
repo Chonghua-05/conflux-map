@@ -95,7 +95,8 @@ class QuadrantLayoutTest {
         assertEquals(5, grid.biomeId[i], "cleared quadrants keep their real sampled biome");
         assertEquals(BaselineGrid.NO_SURFACE, grid.terrainY[i]);
         assertEquals(SurfaceKind.VOID.ordinal(), derived.kind[i] & 0xFF);
-        assertEquals(0, derived.surfaceY[i]);
+        assertEquals(BaselineGrid.NO_SURFACE, derived.surfaceY[i],
+            "a cleared quadrant is known no-surface, matching the deriver's void contract");
     }
 
     @Test

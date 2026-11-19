@@ -54,6 +54,8 @@ public final class RegionDiskCache {
     private static final long FLUSH_INTERVAL_MS = 30_000L;
     private static final int EVICT_DISTANCE_REGIONS = 6;
     static final int MAX_PENDING_REGION_LOADS = 64;
+    /** Decoded regions per tile-invalidation flush: first tiles compose while the batch tail still decodes. */
+    static final int INVALIDATE_FLUSH_REGIONS = 8;
 
     private static final MapLayer.Type[] PERSISTENT_LAYER_TYPES = Arrays.stream(MapLayer.Type.values())
         .filter(MapLayer.Type::persistent)
@@ -223,6 +225,7 @@ public final class RegionDiskCache {
             final Map<MapLayer.Type, List<TileService.RegionUnit>> merged =
                 new EnumMap<>(MapLayer.Type.class);
             final Map<RegionSlot, RuntimeException> failures = new java.util.HashMap<>();
+            int unflushed = 0;
             for (final RegionSlot slot : batch) {
                 try {
                     if (loadRegion(slot.layer, slot.regionX, slot.regionZ)) {
@@ -232,13 +235,6 @@ public final class RegionDiskCache {
                 } catch (final RuntimeException e) {
                     failures.put(slot, e);
                 }
-            }
-            for (final Map.Entry<MapLayer.Type, List<TileService.RegionUnit>> entry : merged.entrySet()) {
-                tiles.markRegionsStored(
-                    token, dimension, new MapLayer(entry.getKey(), 0), entry.getValue()
-                );
-            }
-            for (final RegionSlot slot : batch) {
                 final CompletableFuture<Void> completion = regionLoadCompletions.get(slot);
                 final RuntimeException failure = failures.get(slot);
                 if (failure == null) {
@@ -247,8 +243,26 @@ public final class RegionDiskCache {
                     completion.completeExceptionally(failure);
                 }
                 pendingRegionLoads.decrementAndGet();
+                if (++unflushed >= INVALIDATE_FLUSH_REGIONS) {
+                    flushStoredRegions(merged);
+                    unflushed = 0;
+                }
             }
+            flushStoredRegions(merged);
         }
+    }
+
+    /** One tile-invalidation wave covering the regions decoded since the previous flush. */
+    private void flushStoredRegions(final Map<MapLayer.Type, List<TileService.RegionUnit>> merged) {
+        if (merged.isEmpty()) {
+            return;
+        }
+        for (final Map.Entry<MapLayer.Type, List<TileService.RegionUnit>> entry : merged.entrySet()) {
+            tiles.markRegionsStored(
+                token, dimension, new MapLayer(entry.getKey(), 0), entry.getValue()
+            );
+        }
+        merged.clear();
     }
 
     /** Waits for queue capacity when necessary, then completes after this region has loaded. */
@@ -345,17 +359,18 @@ public final class RegionDiskCache {
         for (int chunkLocalZ = 0; chunkLocalZ < RegionColumns.CHUNKS; chunkLocalZ++) {
             for (int chunkLocalX = 0; chunkLocalX < RegionColumns.CHUNKS; chunkLocalX++) {
                 final int chunkIndex = chunkLocalZ * RegionColumns.CHUNKS + chunkLocalX;
-                if (SampleSource.byOrdinal(data.chunkSourceOrdinal()[chunkIndex]) == SampleSource.UNKNOWN) {
+                final SampleSource stored = SampleSource.byOrdinal(data.chunkSourceOrdinal()[chunkIndex]);
+                if (!stored.isExplored()) {
                     continue;
                 }
                 final ChunkSnapshot snapshot = extractChunkSnapshot(data, chunkLocalX, chunkLocalZ, token);
-                if (world.put(layer, snapshot, SampleSource.REAL_CACHED)) {
+                if (world.put(layer, snapshot, stored)) {
                     merged++;
                 }
             }
         }
         if (merged > 0) {
-            logger.info("cache: loaded region r.{}.{} layer={} ({} chunks) as REAL_CACHED", regionX, regionZ, layerType.id(), merged);
+            logger.info("cache: loaded region r.{}.{} layer={} ({} chunks) from disk", regionX, regionZ, layerType.id(), merged);
             return true;
         }
         return false;
@@ -447,6 +462,31 @@ public final class RegionDiskCache {
         }
     }
 
+    /**
+     * Queues a flush of one region that may hold unwritten changes onto the IO
+     * thread; worker-thread callers (backfill scans, terrain import) must not
+     * race the sweep and session-end flush on the target file.
+     */
+    public void flushRegionIfDirty(final MapLayer.Type layerType, final int regionX, final int regionZ) {
+        try {
+            io.execute(() -> {
+                final MapWorld world = mapWorlds.ifCurrent(token);
+                if (world == null) {
+                    return;
+                }
+                final RegionColumns region =
+                    world.store(new MapLayer(layerType, 0)).region(regionX, regionZ);
+                if (region == null) {
+                    return;
+                }
+                flushIfDirty(region, layerType);
+            });
+        } catch (final RejectedExecutionException e) {
+            // Executors are shutting down (mod unload); an earlier sweep or session-end
+            // flush already persisted everything this session accepted.
+        }
+    }
+
     private FlushResult flushIfDirty(final RegionColumns region, final MapLayer.Type type) {
         final RegionSlot slot = new RegionSlot(type, region.regionX, region.regionZ);
         final int versionAtDecision = region.version();
@@ -523,32 +563,9 @@ public final class RegionDiskCache {
             surfaceY, fluidDepth, kind, biomeId,
             baseArgb, xaeroBaseArgb, tintArgb, overlayArgb, xaeroOverlayArgb, light
         );
-        return writeAtomic(regionFile(type, region.regionX, region.regionZ), data, type.ordinal()) ? copiedVersion : -1;
-    }
-
-    private boolean writeAtomic(final Path file, final RegionFileCodec.RegionData data, final int layerOrdinal) {
-        try {
-            Files.createDirectories(file.getParent());
-            final Path tmp = file.resolveSibling(file.getFileName() + ".tmp");
-            try (FileOutputStream fos = new FileOutputStream(tmp.toFile())) {
-                RegionFileCodec.encode(fos, layerOrdinal, data);
-                fos.flush();
-                fos.getChannel().force(true);
-            }
-            move(tmp, file);
-            return true;
-        } catch (final IOException e) {
-            logger.warn("cache: failed to write region file {} ({})", file, e.toString());
-            return false;
-        }
-    }
-
-    private static void move(final Path tmp, final Path file) throws IOException {
-        try {
-            Files.move(tmp, file, StandardCopyOption.ATOMIC_MOVE, StandardCopyOption.REPLACE_EXISTING);
-        } catch (final AtomicMoveNotSupportedException e) {
-            Files.move(tmp, file, StandardCopyOption.REPLACE_EXISTING);
-        }
+        return RegionFileWriter.writeAtomic(
+            regionFile(type, region.regionX, region.regionZ), data, type.ordinal(), logger
+        ) ? copiedVersion : -1;
     }
 
     private void quarantine(final Path file) {

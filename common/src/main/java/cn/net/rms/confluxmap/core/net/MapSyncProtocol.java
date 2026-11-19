@@ -203,6 +203,7 @@ public final class MapSyncProtocol {
             || typeId == Proto.MSG_POLICY_UPDATE_S2C
             || typeId == Proto.MSG_ERROR_S2C
             || typeId == Proto.MSG_FLAT_BASELINE_S2C
+            || typeId == Proto.MSG_FEATURE_RESTRICTIONS_S2C
             || typeId == Proto.MSG_LOAD_STATE_DELTA_S2C
             || typeId == Proto.MSG_MAP_INVALIDATE_S2C
             || typeId == Proto.MSG_MAP_REGION_PATCH_S2C
@@ -213,7 +214,8 @@ public final class MapSyncProtocol {
             || typeId == Proto.MSG_SERVER_INSTANCE_S2C
             || typeId == Proto.MSG_PLAYER_POSITIONS_S2C
             || typeId == Proto.MSG_QUADRA_LAYOUT_S2C
-            || typeId == Proto.MSG_BIOME_LANG_S2C;
+            || typeId == Proto.MSG_BIOME_LANG_S2C
+            || typeId == Proto.MSG_MAP_FULL_SYNC_MANIFEST_S2C;
     }
 
     public static Message decodeServerbound(final byte[] payload) throws ProtoException {

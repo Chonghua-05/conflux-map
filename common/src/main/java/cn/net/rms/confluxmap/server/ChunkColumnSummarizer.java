@@ -1,5 +1,8 @@
 package cn.net.rms.confluxmap.server;
 
+import cn.net.rms.confluxmap.core.color.OverlaySlotAssignment;
+import cn.net.rms.confluxmap.core.color.OverlayVisibility;
+import cn.net.rms.confluxmap.core.model.ChunkSnapshot;
 import cn.net.rms.confluxmap.core.model.SurfaceKind;
 import cn.net.rms.confluxmap.core.net.SummaryCodec;
 
@@ -70,6 +73,9 @@ public final class ChunkColumnSummarizer {
         final int z
     ) {
         final int groundY = source.motionBlockingHeight(x, z) - 1;
+        if (groundY < source.bottomY()) {
+            return voidColumn(source, x, z);
+        }
         int surfaceY = groundY;
         BlockInfo surface = blockAt(source, x, groundY, z);
         String overlayMaterial = "";
@@ -88,9 +94,10 @@ public final class ChunkColumnSummarizer {
             // The cover descent stops at the first non-cover block, and air is not one: a glass
             // roof or bridge with an air gap above real ground must keep descending through the
             // air like the client's authoritative scan, or the glass would be promoted over
-            // ground the client still renders beneath it.
+            // ground the client still renders beneath it. The air rule itself is the shared
+            // OverlaySlotAssignment one (air is nothing, never a surface or overlay).
             while (surfaceY > source.bottomY()
-                && isAir(source.blockNameAt(x, surfaceY, z))) {
+                && OverlaySlotAssignment.isAirMaterial(source.blockNameAt(x, surfaceY, z))) {
                 surfaceY--;
                 surface = blockAt(source, x, surfaceY, z);
             }
@@ -119,7 +126,7 @@ public final class ChunkColumnSummarizer {
                 fluidSurfaceY = surfaceY;
                 fluidSurface = surface;
                 promotedFluidCover = true;
-            } else if (isSurfaceCover(coverName)) {
+            } else if (OverlaySlotAssignment.isPromotedCoverMaterial(coverName)) {
                 surfaceY++;
                 surface = classify(coverName, mapColors);
             } else if (isOverlayDecoration(source, x, groundY + 1, z, coverName)) {
@@ -160,6 +167,32 @@ public final class ChunkColumnSummarizer {
             materialId(surface.kind, source.materialIdAt(x, surfaceY, z)),
             floorMaterial,
             overlayMaterial
+        );
+    }
+
+    /**
+     * A generated chunk column with no motion-blocking block anywhere (the End beyond the
+     * islands, a cleared quadra-gen quadrant, a void preset). The heightmap proves emptiness,
+     * so the column is authoritative VOID - clients erase the predicted underlay under it
+     * instead of falling back to it as they must for an unsummarizable UNKNOWN column. The
+     * biome is read at the first in-world Y because the column itself holds nothing to sample.
+     */
+    private static SummaryCodec.Column voidColumn(
+        final ChunkColumnSource source,
+        final int x,
+        final int z
+    ) {
+        return new SummaryCodec.Column(
+            source.biomeIdAt(x, source.bottomY(), z) & 255,
+            ChunkSnapshot.NO_SURFACE,
+            SurfaceKind.VOID.ordinal(),
+            MAP_COLOR_NONE,
+            0,
+            MAP_COLOR_NONE,
+            0,
+            "",
+            "",
+            ""
         );
     }
 
@@ -261,11 +294,6 @@ public final class ChunkColumnSummarizer {
         return "minecraft:kelp".equals(name) || "minecraft:kelp_plant".equals(name);
     }
 
-    private static boolean isSurfaceCover(final String name) {
-        return "minecraft:snow".equals(name) || "minecraft:powder_snow".equals(name)
-            || name != null && name.endsWith("_carpet");
-    }
-
     /**
      * Motion-blocking blocks that do not stop light, so the surface a viewer actually sees is
      * the one beneath them. Deliberately the glass family only: tinted glass blocks light
@@ -282,19 +310,11 @@ public final class ChunkColumnSummarizer {
     }
 
     /**
-     * Air never stops the authoritative scan, so the name-based scan must cross it too. Exact
-     * names only: a suffix match would swallow unrelated blocks whose id merely ends in "air".
-     */
-    private static boolean isAir(final String name) {
-        return "minecraft:air".equals(name) || "minecraft:cave_air".equals(name)
-            || "minecraft:void_air".equals(name);
-    }
-
-    /**
      * Non-colliding decoration standing on the surface (flowers, roses, mushrooms, fire, ...)
      * worth reporting as an overlay so the synced map composites it like the client does.
-     * Bulk foliage (the grass family) is excluded: its tint is visually absorbed by the block
-     * beneath it, and it would turn most vegetated columns into patch records.
+     * Exclusion follows the shared {@link OverlayVisibility} policy: bulk foliage never
+     * renders in any consumer, and reporting it would only turn most vegetated columns into
+     * patch records. Everything else is reported; per-style visibility is the consumer's call.
      */
     private static boolean isOverlayDecoration(
         final ChunkColumnSource source,
@@ -309,7 +329,7 @@ public final class ChunkColumnSummarizer {
         if (source.fluidKindAt(x, y, z) != SurfaceKind.UNKNOWN) {
             return false;
         }
-        return !name.contains("grass") && !name.contains("fern");
+        return OverlayVisibility.categorize(name) != OverlayVisibility.Category.BULK_FOLIAGE;
     }
 
     private static int clamp(final int value) {

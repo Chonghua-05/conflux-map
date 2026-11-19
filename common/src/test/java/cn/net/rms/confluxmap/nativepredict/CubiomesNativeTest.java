@@ -8,6 +8,7 @@ import static org.junit.jupiter.api.Assertions.assertNotSame;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.junit.jupiter.api.Assertions.fail;
 
 import java.io.IOException;
 import java.nio.file.Files;
@@ -167,20 +168,67 @@ class CubiomesNativeTest {
     }
 
     @Test
-    void scaleOneStridedBiomeRowsMatchDenseTileAtReportedStripeCoordinate() {
+    void scaleOneStridedBiomeRowsMatchIsolatedQueriesAtReportedStripeCoordinate() {
         final int w = 3;
         final int h = 3;
         try (CubiomesContext ctx = CubiomesContext.create(mc17(), 6512112982729996127L, OVERWORLD, 0)) {
             assertNotNull(ctx);
-            final int[] dense = new int[w * h];
             final int[] first = new int[w * h];
             final int[] second = new int[w * h];
-            assertEquals(0, ctx.biomes(1, -830, -438, w, h, dense));
             assertEquals(0, ctx.biomesStrided(1, -830, -438, w, h, 1, first));
             assertEquals(0, ctx.biomesStrided(1, -830, -438, w, h, 1, second));
             assertArrayEquals(first, second, "the row-wise result must be deterministic across calls");
-            assertArrayEquals(dense, first, "stride-one sampling must be identical to one dense scale-one query");
+            // The dense batch entry keeps cubiomes' raw query geometry, whose Voronoi
+            // final layer corrupts boundary cells at this 2/3-mod-4 origin; isolated
+            // single-column queries are the shape-independent reference the strided
+            // sampler must reproduce (see PredictionNativeBatchEdgeParityTest).
+            final int[] single = new int[1];
+            for (int z = 0; z < h; z++) {
+                for (int x = 0; x < w; x++) {
+                    assertEquals(0, ctx.biomes(1, -830 + x, -438 + z, 1, 1, single));
+                    assertEquals(single[0], first[z * w + x],
+                        "strided cell (" + x + "," + z + ") must match the isolated query");
+                }
+            }
         }
+    }
+
+    @Test
+    void gpuModeSetterServesBatchedSurfaceRowsFromTheCpuReferenceWhenOff() {
+        // Frozen from the OFF-mode strided query below (CPU reference, cubiomes
+        // 1a3386c, this seed) - it pins both the cfxSetGpuMode seam and the shim's
+        // batched-row narrowing, which OFF must serve from the exact CPU path even
+        // on machines with a working GPU engine.
+        final int[] offGolden = {
+            4, 4, 7, 1, 1, 132, 132, 132, 7, 132, 132, 132, 1, 1, 177, 177,
+            4, 4, 1, 185, 129, 7, 132, 132, 7, 132, 132, 132, 132, 1, 1, 4,
+            7, 1, 185, 185, 185, 129, 129, 7, 132, 132, 132, 132, 132, 35, 35, 4,
+            4, 185, 185, 185, 185, 129, 129, 129, 7, 7, 129, 35, 35, 36, 36, 1,
+        };
+        try (CubiomesContext ctx = CubiomesContext.create(mc21(), SEED, OVERWORLD, 0)) {
+            final int[] out = new int[4 * 16];
+            try {
+                CubiomesNative.cfxSetGpuMode(CubiomesNative.GPU_MODE_OFF);
+                assertEquals(0, ctx.biomesStrided(4, -1024, 512, 16, 4, 16, out));
+                assertArrayEquals(offGolden, out,
+                    "GPU_MODE_OFF must serve the batched surface rows from the CPU reference");
+            } finally {
+                // The engine mode is process-global: always hand the library default
+                // back so other tests keep the env-var-driven behavior.
+                CubiomesNative.cfxSetGpuMode(CubiomesNative.GPU_MODE_AUTO);
+            }
+        }
+    }
+
+    @Test
+    void gpuWarmupIsIdempotentAndReportsConsistentAvailability() {
+        // The warmup export must be callable before any dispatch and settled after one
+        // call: the second reads the latched engine state (a real GPU machine reports
+        // both program bits, a GPU-less CI reports 0) without rebuilding anything.
+        final int first = CubiomesNative.cfxGpuWarmup();
+        final int second = CubiomesNative.cfxGpuWarmup();
+        assertTrue(first == -1 || first >= 0, "warmup reports -1 or non-negative status bits");
+        assertEquals(first, second, "a settled engine must answer a second warmup identically");
     }
 
     @Test
@@ -619,5 +667,38 @@ class CubiomesNativeTest {
 
         assertTrue(NativeLib.init(freshBaseDir), "init must still succeed after finding a corrupt file on disk");
         assertTrue(Files.size(libFile) > 4, "corrupted file must be re-extracted back to its proper (much larger) content");
+    }
+
+    /**
+     * The stride-4 sibling of the position-purity contract: since LOD2's dense overview now runs
+     * through the adaptive macro grid, a window must return exactly the values the full tile
+     * returns for the same world columns. A phase or clamp bug here tears tiles at their seams.
+     * Offset 64 is a multiple of the stride so the two grids share sample columns.
+     */
+    @Test
+    void cfxOverviewHeightsStride4IsPositionPure() {
+        try (CubiomesContext ctx = CubiomesContext.create(mc21(), 146008555L, OVERWORLD, 0)) {
+            assertNotNull(ctx);
+            final int stride = 4;
+            final int fullW = 258;
+            final int winW = 130;
+            final int offsetPixels = 64 / stride;
+            final int[] full = new int[fullW * fullW];
+            final int[] window = new int[winW * winW];
+
+            assertEquals(0, ctx.overviewHeights(0, 0, fullW, fullW, stride, full));
+            assertEquals(0, ctx.overviewHeights(64, 64, winW, winW, stride, window));
+
+            for (int j = 0; j < winW; j++) {
+                for (int i = 0; i < winW; i++) {
+                    final int expected = full[(j + offsetPixels) * fullW + (i + offsetPixels)];
+                    final int actual = window[j * winW + i];
+                    if (expected != actual) {
+                        fail("stride-4 macro grid is not position pure at pixel (" + i + "," + j
+                            + "): full=" + expected + " window=" + actual);
+                    }
+                }
+            }
+        }
     }
 }

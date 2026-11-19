@@ -20,6 +20,129 @@ import org.junit.jupiter.params.provider.ValueSource;
  * another tile's data at all.
  */
 class LodSamplingTest {
+    @ParameterizedTest
+    @ValueSource(ints = {2, 3, 4})
+    void adjacentBiomeRefinementsShareOneBatchWithoutChangingPixelInputs(final int lod) {
+        final int blocksPerPixel = 1 << lod;
+        final int[] surfaceCalls = {0};
+        final int[] sparseCalls = {0};
+        final String[] firstCallAt = {""};
+        final BaselineSampler sampler = new BaselineSampler() {
+            @Override
+            public boolean interpolatableOverviewHeights() {
+                return true;
+            }
+
+            @Override
+            public boolean biomes(
+                final int scale, final int x, final int z, final int w, final int h,
+                final int[] out
+            ) {
+                throw new AssertionError("the height-aware biome sweep must succeed");
+            }
+
+            @Override
+            public boolean heights(
+                final int x4, final int z4, final int w, final int h, final int[] out
+            ) {
+                return false;
+            }
+
+            @Override
+            public boolean endHeights(
+                final int x4, final int z4, final int w, final int h, final int[] out
+            ) {
+                return false;
+            }
+
+            @Override
+            public boolean overviewHeights(
+                final int blockX, final int blockZ, final int w, final int h,
+                final int stride, final int[] out
+            ) {
+                for (int z = 0; z < h; z++) {
+                    for (int x = 0; x < w; x++) {
+                        out[z * w + x] = 100 + Math.floorMod(
+                            Math.floorDiv(blockX + x * stride, blocksPerPixel)
+                                + 3 * Math.floorDiv(blockZ + z * stride, blocksPerPixel),
+                            9
+                        );
+                    }
+                }
+                return true;
+            }
+
+            @Override
+            public boolean surfaceBiomes(
+                final int blockX, final int blockZ, final int w, final int h,
+                final int stride, final int[] terrainY, final int[] out
+            ) {
+                surfaceCalls[0]++;
+                for (int z = 0; z < h; z++) {
+                    for (int x = 0; x < w; x++) {
+                        out[z * w + x] = refinementBiome(
+                            blockX + x * stride, blockZ + z * stride,
+                            terrainY[z * w + x], blocksPerPixel
+                        );
+                    }
+                }
+                return true;
+            }
+
+            @Override
+            public boolean surfaceBiomesSparse(
+                final int[] cellX, final int[] cellZ, final int edge,
+                final int stride, final int[] terrainYPacked,
+                final int n, final int[] outBiomeIdsPacked
+            ) {
+                sparseCalls[0] += n;
+                final int points = edge * edge;
+                for (int c = 0; c < n; c++) {
+                    for (int p = 0; p < points; p++) {
+                        outBiomeIdsPacked[c * points + p] = refinementBiome(
+                            cellX[c] + (p % edge) * stride,
+                            cellZ[c] + (p / edge) * stride,
+                            terrainYPacked[c * points + p], blocksPerPixel
+                        );
+                    }
+                }
+                return true;
+            }
+        };
+        final int originX = -8192;
+        final int originZ = 4096;
+        final BaselineGrid grid = LodSampling.sample(sampler, false, lod, originX, originZ);
+        assertNotNull(grid);
+        for (int z = -1; z <= 256; z++) {
+            for (int x = -1; x <= 256; x++) {
+                final int pixel = BaselineGrid.index(x, z);
+                assertEquals(
+                    refinementBiome(originX + x * blocksPerPixel, originZ + z * blocksPerPixel,
+                        grid.terrainY[pixel], blocksPerPixel),
+                    grid.biomeId[pixel], "biome at " + x + "," + z
+                );
+            }
+        }
+        // The anchor sweep stays one plain rect query; every refining cell beyond it is
+        // collected and dispatched through the bounded sparse chunk transport, and the
+        // per-point entry only runs when a chunk fails (it did not here).
+        assertEquals(1, surfaceCalls[0],
+            "one anchor rect query plus chunked refinements, first call at " + firstCallAt[0]);
+        assertTrue(sparseCalls[0] > 0, "refining cells share sparse chunk dispatches");
+    }
+
+    private static int refinementBiome(
+        final int blockX, final int blockZ, final int height, final int blocksPerPixel
+    ) {
+        // Adjacent cell anchors differ by at least one id even when their heights differ,
+        // forcing refinement; the low bit makes an incorrectly packed height observable.
+        final int parity = Math.floorMod(
+            Math.floorDiv(blockX + blocksPerPixel, 2 * blocksPerPixel)
+                + Math.floorDiv(blockZ + blocksPerPixel, 2 * blocksPerPixel), 2
+        );
+        return 4 + 2 * parity + (height & 1);
+    }
+
     private static final PositionBasedFakeSampler SAMPLER = new PositionBasedFakeSampler();
 
     @ParameterizedTest
@@ -184,16 +307,6 @@ class LodSamplingTest {
                 assertEquals(fullDerived.surfaceY[pixel], windowDerived.surfaceY[pixel]);
                 assertEquals(fullDerived.kind[pixel], windowDerived.kind[pixel]);
                 assertEquals(fullDerived.fluidDepth[pixel], windowDerived.fluidDepth[pixel]);
-                if (full.supersampled()) {
-                    for (int subZ = 0; subZ < full.subPerAxis; subZ++) {
-                        for (int subX = 0; subX < full.subPerAxis; subX++) {
-                            final int sub = full.subIndex(pixel, subX, subZ);
-                            assertEquals(full.subBiomeId[sub], window.subBiomeId[sub]);
-                            assertEquals(fullDerived.subSurfaceY[sub], windowDerived.subSurfaceY[sub]);
-                            assertEquals(fullDerived.subKind[sub], windowDerived.subKind[sub]);
-                        }
-                    }
-                }
             }
         }
     }
@@ -254,8 +367,9 @@ class LodSamplingTest {
         assertNotNull(grid);
         assertEquals(1, overviewCells[0], "only the requested output pixel may run terrain prediction");
         assertEquals(
-            5, surfaceBiomeCells[0],
-            "LOD4 samples one center biome plus the requested pixel's four sub-samples"
+            1, surfaceBiomeCells[0],
+            "the pixel's own sample is the whole biome query; no sub-sample sweep and no "
+                + "separate centre query may run"
         );
     }
 
@@ -1153,28 +1267,6 @@ class LodSamplingTest {
         org.junit.jupiter.api.Assertions.assertFalse(grid.supersampled());
     }
 
-    @ParameterizedTest
-    @ValueSource(ints = {3, 4})
-    void coarseLodsSupersampleBiomesSoThinFeaturesSurviveBetweenPixelCentres(final int lod) {
-        final BaselineGrid grid = LodSampling.sample(new RiverStripeFakeSampler(1 << lod), false, lod, 0, 0);
-        assertNotNull(grid);
-        assertEquals(2, grid.subPerAxis);
-        assertEquals(4, grid.subCount());
-
-        final int idx = BaselineGrid.index(0, 0);
-        assertEquals(RiverStripeFakeSampler.PLAINS, grid.biomeId[idx], "the pixel centre must still miss the river");
-        assertEquals(0, grid.surfaceFlags[idx], "so the per-pixel classification stays dry land");
-
-        // The sub-sample half a pixel east lands on the stripe and reclassifies as water.
-        assertEquals(RiverStripeFakeSampler.RIVER, grid.subBiomeId[grid.subIndex(idx, 1, 0)]);
-        assertEquals(
-            BaselineGrid.SURFACE_FLUID, grid.subSurfaceFlags[grid.subIndex(idx, 1, 0)],
-            "a river sub-sample below sea level must resolve to fluid even though its pixel did not"
-        );
-        assertEquals(RiverStripeFakeSampler.PLAINS, grid.subBiomeId[grid.subIndex(idx, 0, 0)]);
-        assertEquals(0, grid.subSurfaceFlags[grid.subIndex(idx, 0, 0)]);
-    }
-
     @org.junit.jupiter.api.Test
     void endTilesAreNeverSupersampledBecauseTheirBiomesDoNotVaryWithinAPixel() {
         final BaselineGrid grid = LodSampling.sample(SAMPLER, true, 4, 0, 0);
@@ -1182,26 +1274,210 @@ class LodSamplingTest {
         assertEquals(BaselineGrid.NO_SUPERSAMPLING, grid.subPerAxis);
     }
 
-    @org.junit.jupiter.api.Test
-    void samplersWithoutSurfaceBiomeSupportFallBackToThePixelBiomeInEverySubSample() {
-        // PositionBasedFakeSampler leaves BaselineSampler#surfaceBiomes at its false default, so
-        // the supersampled fetch cannot run and must degrade to the pre-supersampling behaviour
-        // rather than failing the tile.
-        final BaselineGrid grid = LodSampling.sample(SAMPLER, false, 4, 0, 0);
-        assertNotNull(grid);
-        assertTrue(grid.supersampled());
-        for (int z = 0; z < 4; z++) {
-            for (int x = 0; x < 4; x++) {
-                final int idx = BaselineGrid.index(x, z);
-                for (int sz = 0; sz < 2; sz++) {
-                    for (int sx = 0; sx < 2; sx++) {
-                        assertEquals(
-                            grid.biomeId[idx], grid.subBiomeId[grid.subIndex(idx, sx, sz)],
-                            "sub-sample (" + sx + "," + sz + ") of pixel (" + x + "," + z + ")"
-                        );
+    @ParameterizedTest
+    @ValueSource(ints = {0, 1, 2, 3, 4})
+    void overworldBiomeViewClimateShapeSkipsEveryTerrainQuery(final int lod) {
+        final BaselineSampler sampler = new BaselineSampler() {
+            @Override
+            public int terrainFreeBiomeScale() {
+                return 16;
+            }
+
+            @Override
+            public boolean biomes(
+                final int scale, final int x, final int z, final int w, final int h,
+                final int[] out
+            ) {
+                if (scale != 16) {
+                    throw new AssertionError("climate shape must query scale 16, not " + scale);
+                }
+                for (int zz = 0; zz < h; zz++) {
+                    for (int xx = 0; xx < w; xx++) {
+                        out[zz * w + xx] = cellBiome(x + xx, z + zz);
                     }
                 }
+                return true;
+            }
+
+            @Override
+            public boolean heights(
+                final int x4, final int z4, final int w, final int h, final int[] outY
+            ) {
+                throw new AssertionError("biome view must not query heights");
+            }
+
+            @Override
+            public boolean surfaceBiomes(
+                final int blockX, final int blockZ, final int w, final int h,
+                final int stride, final int[] terrainY, final int[] outBiomeIds
+            ) {
+                throw new AssertionError("biome view must not query surface biomes with heights");
+            }
+
+            @Override
+            public boolean overviewHeights(
+                final int blockX, final int blockZ, final int w, final int h,
+                final int stride, final int[] outTerrainY
+            ) {
+                throw new AssertionError("biome view must not solve terrain");
+            }
+
+            @Override
+            public boolean endHeights(
+                final int x4, final int z4, final int w, final int h, final int[] outY
+            ) {
+                throw new AssertionError("biome view must not query End heights");
+            }
+        };
+
+        final int originX = 4096;
+        final int originZ = -8192;
+        final BaselineGrid grid = LodSampling.sampleOverworldBiomes(
+            sampler, lod, originX, originZ
+        );
+
+        assertNotNull(grid);
+        assertEquals(BaselineGrid.NO_SUPERSAMPLING, grid.subPerAxis);
+        final int blocksPerPixel = 1 << lod;
+        for (int pz = -BaselineGrid.MARGIN; pz < BaselineGrid.PIXELS + BaselineGrid.MARGIN; pz++) {
+            for (int px = -BaselineGrid.MARGIN; px < BaselineGrid.PIXELS + BaselineGrid.MARGIN; px++) {
+                final int idx = BaselineGrid.index(px, pz);
+                assertEquals(
+                    cellBiome(
+                        Math.floorDiv(originX + px * blocksPerPixel, 16),
+                        Math.floorDiv(originZ + pz * blocksPerPixel, 16)
+                    ),
+                    grid.biomeId[idx],
+                    "pixel (" + px + "," + pz + ") at LOD" + lod
+                );
+                assertEquals(BaselineDeriver.WATER_LEVEL, grid.terrainY[idx]);
+                assertEquals(BaselineDeriver.WATER_LEVEL, grid.baseSurfaceY[idx]);
             }
         }
+        final DerivedGrid derived = BaselineDeriver.derive(grid);
+        for (final byte kind : derived.kind) {
+            assertNotEquals(SurfaceKind.VOID.ordinal(), kind);
+            assertNotEquals(SurfaceKind.UNKNOWN.ordinal(), kind);
+        }
+    }
+
+    /**
+     * Deterministic distinct id per climate cell, drawn from the ids {@code
+     * PositionBasedFakeSampler} also uses, so a misaligned cell expansion cannot pass by
+     * accident while every id still derives a known surface kind.
+     */
+    private static int cellBiome(final int cellX, final int cellZ) {
+        final int[] ids = {1, 4, 21, 30, 35, 37};
+        return ids[Math.floorMod(cellX * 31 + cellZ * 17, ids.length)];
+    }
+
+    @ParameterizedTest
+    @ValueSource(ints = {0, 1, 2, 3, 4})
+    void overworldBiomeViewLayerStackShapeMatchesTheHeightAwarePipeline(final int lod) {
+        final PositionBasedFakeSampler terrainFree = new PositionBasedFakeSampler() {
+            @Override
+            public int terrainFreeBiomeScale() {
+                return 1;
+            }
+
+            @Override
+            public boolean surfaceBiomes(
+                final int blockX, final int blockZ, final int w, final int h,
+                final int stride, final int[] terrainY, final int[] outBiomeIds
+            ) {
+                // Pre-1.18 native semantics: the biome stack never reads the height column, and
+                // the shim's cfxSurfaceBiomes routes stride < 4 to scale 1 and multiples of 4
+                // to scale 4 - the same queries the terrain-free path issues directly.
+                if (stride < 4) {
+                    return biomesStrided(1, blockX, blockZ, w, h, stride, outBiomeIds);
+                }
+                if (stride % 4 != 0) {
+                    return false;
+                }
+                return biomesStrided(
+                    4, Math.floorDiv(blockX, 4), Math.floorDiv(blockZ, 4), w, h, stride / 4,
+                    outBiomeIds
+                );
+            }
+        };
+        final int originX = -4096;
+        final int originZ = 8192;
+
+        final BaselineGrid biomeView = LodSampling.sampleOverworldBiomes(
+            terrainFree, lod, originX, originZ
+        );
+        final BaselineGrid heightAware = LodSampling.sample(
+            terrainFree, false, lod, originX, originZ
+        );
+
+        assertNotNull(biomeView);
+        assertNotNull(heightAware);
+        // Pre-1.18 biome stacks need no heights, so the terrain-free view must be bit-identical
+        // to the full pipeline's biomes - only the height columns differ.
+        org.junit.jupiter.api.Assertions.assertArrayEquals(
+            heightAware.biomeId, biomeView.biomeId, "LOD" + lod + " pixel biomes"
+        );
+    }
+
+    @org.junit.jupiter.api.Test
+    void overworldBiomeViewWithoutTerrainFreeSamplingKeepsTheHeightAwarePipeline() {
+        // PositionBasedFakeSampler leaves terrainFreeBiomeScale at its 0 default: the biome view
+        // must fall back to the full pipeline rather than compose a tile without heights.
+        final BaselineGrid biomeView = LodSampling.sampleOverworldBiomes(SAMPLER, 3, 2048, 0);
+        final BaselineGrid heightAware = LodSampling.sample(SAMPLER, false, 3, 2048, 0);
+        assertNotNull(biomeView);
+        org.junit.jupiter.api.Assertions.assertArrayEquals(heightAware.biomeId, biomeView.biomeId);
+        org.junit.jupiter.api.Assertions.assertArrayEquals(heightAware.terrainY, biomeView.terrainY);
+    }
+
+    @org.junit.jupiter.api.Test
+    void overworldBiomeViewFallsBackToTheFullPipelineWhenTheClimateQueryFails() {
+        final PositionBasedFakeSampler delegate = new PositionBasedFakeSampler();
+        final BaselineSampler failingClimate = new BaselineSampler() {
+            @Override
+            public int terrainFreeBiomeScale() {
+                return 16;
+            }
+
+            @Override
+            public boolean biomes(
+                final int scale, final int x, final int z, final int w, final int h,
+                final int[] out
+            ) {
+                return scale != 16 && delegate.biomes(scale, x, z, w, h, out);
+            }
+
+            @Override
+            public boolean heights(
+                final int x4, final int z4, final int w, final int h, final int[] outY
+            ) {
+                return delegate.heights(x4, z4, w, h, outY);
+            }
+
+            @Override
+            public boolean surfaceColumns(
+                final int blockX, final int blockZ, final int w, final int h,
+                final int stride, final int[] outSolidY, final int[] outFluidY,
+                final int[] outSurfaceY, final int[] outFlags
+            ) {
+                return delegate.surfaceColumns(
+                    blockX, blockZ, w, h, stride, outSolidY, outFluidY, outSurfaceY, outFlags
+                );
+            }
+
+            @Override
+            public boolean endHeights(
+                final int x4, final int z4, final int w, final int h, final int[] outY
+            ) {
+                return delegate.endHeights(x4, z4, w, h, outY);
+            }
+        };
+
+        final BaselineGrid biomeView = LodSampling.sampleOverworldBiomes(failingClimate, 2, 0, 0);
+        assertNotNull(biomeView);
+        assertNotEquals(
+            BaselineDeriver.WATER_LEVEL, biomeView.terrainY[BaselineGrid.index(0, 0)],
+            "a failed terrain-free query must recompose through the height-aware pipeline"
+        );
     }
 }

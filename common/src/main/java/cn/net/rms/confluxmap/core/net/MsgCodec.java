@@ -112,6 +112,13 @@ public final class MsgCodec {
                 writeUtf(out, m.locale());
             } else if (msg instanceof final BiomeLangS2C m) {
                 encodeBiomeLangS2C(out, m);
+            } else if (msg instanceof final MapFullSyncManifestS2C m) {
+                encodeMapFullSyncManifestS2C(out, m);
+            } else if (msg instanceof final FeatureRestrictionsS2C m) {
+                out.writeByte(restrictionBits(m));
+                if (!m.message().isEmpty()) {
+                    writeUtf(out, m.message());
+                }
             } else {
                 throw new ProtoException("unknown message type: " + msg.getClass().getName());
             }
@@ -143,6 +150,7 @@ public final class MsgCodec {
             || typeId == Proto.MSG_POLICY_UPDATE_S2C
             || typeId == Proto.MSG_ERROR_S2C
             || typeId == Proto.MSG_FLAT_BASELINE_S2C
+            || typeId == Proto.MSG_FEATURE_RESTRICTIONS_S2C
             || typeId == Proto.MSG_LOAD_STATE_DELTA_S2C
             || typeId == Proto.MSG_MAP_INVALIDATE_S2C
             || typeId == Proto.MSG_MAP_REGION_PATCH_S2C
@@ -153,7 +161,8 @@ public final class MsgCodec {
             || typeId == Proto.MSG_SERVER_INSTANCE_S2C
             || typeId == Proto.MSG_PLAYER_POSITIONS_S2C
             || typeId == Proto.MSG_QUADRA_LAYOUT_S2C
-            || typeId == Proto.MSG_BIOME_LANG_S2C;
+            || typeId == Proto.MSG_BIOME_LANG_S2C
+            || typeId == Proto.MSG_MAP_FULL_SYNC_MANIFEST_S2C;
     }
 
     private static void encodeHelloC2S(final DataOutputStream out, final HelloC2S m) throws IOException, ProtoException {
@@ -329,6 +338,23 @@ public final class MsgCodec {
             out.writeByte(dimBits);
             out.writeLong(d.seed());
         }
+    }
+
+    private static int restrictionBits(final FeatureRestrictionsS2C m) {
+        int bits = 0;
+        if (m.minimapForbidden()) {
+            bits |= 1;
+        }
+        if (m.worldMapForbidden()) {
+            bits |= 2;
+        }
+        if (m.waypointsForbidden()) {
+            bits |= 4;
+        }
+        if (m.predictionForbidden()) {
+            bits |= 8;
+        }
+        return bits;
     }
 
     private static void encodeMapViewReqC2S(final DataOutputStream out, final MapViewReqC2S m) throws IOException, ProtoException {
@@ -690,6 +716,17 @@ public final class MsgCodec {
                     in, carriesTopMaterial(negotiated, MapSyncCapability.QUADRA_LAYOUT));
                 case Proto.MSG_BIOME_LANG_REQ_C2S -> new BiomeLangReqC2S(readUtf(in));
                 case Proto.MSG_BIOME_LANG_S2C -> decodeBiomeLangS2C(in);
+                case Proto.MSG_MAP_FULL_SYNC_MANIFEST_S2C -> decodeMapFullSyncManifestS2C(in);
+                case Proto.MSG_FEATURE_RESTRICTIONS_S2C -> {
+                    final int bits = in.readUnsignedByte();
+                    yield new FeatureRestrictionsS2C(
+                        (bits & 1) != 0,
+                        (bits & 2) != 0,
+                        (bits & 4) != 0,
+                        (bits & 8) != 0,
+                        in.available() == 0 ? "" : readUtf(in)
+                    );
+                }
                 default -> throw new ProtoException("unhandled message type id: 0x" + Integer.toHexString(typeId));
             };
             if (in.available() != 0) {
@@ -1350,6 +1387,85 @@ public final class MsgCodec {
     private static void requireUnsignedByte(final String field, final int value) throws ProtoException {
         if (value < 0 || value > 0xFF) {
             throw new ProtoException(field + " out of range: " + value);
+        }
+    }
+
+    private static void encodeMapFullSyncManifestS2C(
+        final DataOutputStream out, final MapFullSyncManifestS2C m
+    ) throws IOException, ProtoException {
+        validateManifest(m);
+        out.writeShort(m.syncId());
+        out.writeByte(m.dimIndex());
+        out.writeByte(m.lod());
+        out.writeByte(m.pageIndex());
+        out.writeByte(m.pageCount());
+        out.writeByte(m.cancel() ? 1 : 0);
+        out.writeShort(m.regions().size());
+        for (final MapFullSyncManifestS2C.RegionCoord coord : m.regions()) {
+            out.writeInt(coord.regionX());
+            out.writeInt(coord.regionZ());
+        }
+    }
+
+    private static MapFullSyncManifestS2C decodeMapFullSyncManifestS2C(
+        final DataInputStream in
+    ) throws IOException, ProtoException {
+        final int syncId = in.readUnsignedShort();
+        final int dimIndex = in.readUnsignedByte();
+        final int lod = in.readUnsignedByte();
+        final int pageIndex = in.readUnsignedByte();
+        final int pageCount = in.readUnsignedByte();
+        final boolean cancel = (in.readUnsignedByte() & 1) != 0;
+        final int count = in.readUnsignedShort();
+        if (count > Proto.MAX_FULL_SYNC_PAGE_REGIONS) {
+            throw new ProtoException(
+                "full sync manifest page region count " + count
+                    + " above cap " + Proto.MAX_FULL_SYNC_PAGE_REGIONS
+            );
+        }
+        final List<MapFullSyncManifestS2C.RegionCoord> regions = new ArrayList<>(count);
+        for (int i = 0; i < count; i++) {
+            regions.add(new MapFullSyncManifestS2C.RegionCoord(in.readInt(), in.readInt()));
+        }
+        final MapFullSyncManifestS2C manifest =
+            new MapFullSyncManifestS2C(syncId, dimIndex, lod, pageIndex, pageCount, cancel, regions);
+        validateManifest(manifest);
+        return manifest;
+    }
+
+    /** Range checks shared by both directions; every untrusted field is bounded here. */
+    private static void validateManifest(final MapFullSyncManifestS2C m) throws ProtoException {
+        if (m.syncId() < 0 || m.syncId() > 0xFFFF) {
+            throw new ProtoException("full sync manifest sync id out of range: " + m.syncId());
+        }
+        if (m.dimIndex() < 0 || m.dimIndex() >= Proto.MAX_DIM_ENTRIES) {
+            throw new ProtoException("full sync manifest dimension out of range: " + m.dimIndex());
+        }
+        if (m.lod() < 0 || m.lod() > cn.net.rms.confluxmap.core.util.TileMath.MAX_LOD) {
+            throw new ProtoException("full sync manifest LOD out of range: " + m.lod());
+        }
+        if (m.cancel()) {
+            if (m.pageCount() != 1 || m.pageIndex() != 0 || !m.regions().isEmpty()) {
+                throw new ProtoException("full sync cancel page must be a single empty page");
+            }
+            return;
+        }
+        if (m.pageCount() < 1 || m.pageCount() > Proto.MAX_FULL_SYNC_PAGES) {
+            throw new ProtoException("full sync manifest page count out of range: " + m.pageCount());
+        }
+        if (m.pageIndex() < 0 || m.pageIndex() >= m.pageCount()) {
+            throw new ProtoException("full sync manifest page index out of range: " + m.pageIndex());
+        }
+        if (m.regions().size() > Proto.MAX_FULL_SYNC_PAGE_REGIONS) {
+            throw new ProtoException(
+                "full sync manifest page region count " + m.regions().size()
+                    + " above cap " + Proto.MAX_FULL_SYNC_PAGE_REGIONS
+            );
+        }
+        for (final MapFullSyncManifestS2C.RegionCoord coord : m.regions()) {
+            if (coord == null) {
+                throw new ProtoException("null region coordinate in full sync manifest");
+            }
         }
     }
 

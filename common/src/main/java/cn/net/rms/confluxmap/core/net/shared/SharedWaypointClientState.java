@@ -2,6 +2,7 @@ package cn.net.rms.confluxmap.core.net.shared;
 
 import cn.net.rms.confluxmap.core.model.DimensionId;
 import cn.net.rms.confluxmap.core.shared.SharedWaypoint;
+import cn.net.rms.confluxmap.core.shared.SharedWaypointGroup;
 import java.util.ArrayList;
 import java.util.HashSet;
 import java.util.List;
@@ -47,17 +48,20 @@ public final class SharedWaypointClientState {
         String worldId,
         int maxWorld,
         int maxPlayer,
-        boolean synchronizedSnapshot
+        boolean synchronizedSnapshot,
+        List<SharedWaypointGroup> groups
     ) {
         public View {
             Objects.requireNonNull(state, "state");
             Objects.requireNonNull(list, "list");
             Objects.requireNonNull(worldId, "worldId");
+            Objects.requireNonNull(groups, "groups");
             list = List.copyOf(list);
+            groups = List.copyOf(groups);
         }
 
         private static View empty(final State state) {
-            return new View(state, List.of(), false, -1L, "", 0, 0, false);
+            return new View(state, List.of(), false, -1L, "", 0, 0, false, List.of());
         }
     }
 
@@ -152,7 +156,8 @@ public final class SharedWaypointClientState {
                 status.worldId(),
                 status.maxWorld(),
                 status.maxPlayer(),
-                false
+                false,
+                List.of()
             ));
             return new Action(false, notify, false);
         }
@@ -170,7 +175,8 @@ public final class SharedWaypointClientState {
                 status.worldId(),
                 status.maxWorld(),
                 status.maxPlayer(),
-                true
+                true,
+                current.groups()
             ));
             return Action.NONE;
         }
@@ -183,7 +189,8 @@ public final class SharedWaypointClientState {
             status.worldId(),
             status.maxWorld(),
             status.maxPlayer(),
-            false
+            false,
+            List.of()
         ));
         subscriptionRetryTicks = 0;
         return Action.SUBSCRIBE;
@@ -197,14 +204,23 @@ public final class SharedWaypointClientState {
         }
         if (snapshot.revision() < 0L
             || snapshot.list().size() > current.maxWorld()
+            || snapshot.groups().size() > SharedWaypointProto.MAX_SNAPSHOT_GROUPS
             || snapshot.revision() < current.revision()) {
             return rejectProtocol();
         }
 
+        final List<SharedWaypointGroup> groups = new ArrayList<>(snapshot.groups().size());
+        final Set<UUID> groupIds = new HashSet<>();
+        for (final SharedWaypointGroup group : snapshot.groups()) {
+            if (!validGroup(group, snapshot.revision()) || !groupIds.add(group.id())) {
+                return rejectProtocol();
+            }
+            groups.add(group);
+        }
         final List<SharedWaypoint> replacement = new ArrayList<>(snapshot.list().size());
         final Set<UUID> ids = new HashSet<>();
         for (final SharedWaypoint waypoint : snapshot.list()) {
-            if (!validWaypoint(waypoint, snapshot.revision()) || !ids.add(waypoint.id())) {
+            if (!validWaypoint(waypoint, snapshot.revision(), groupIds) || !ids.add(waypoint.id())) {
                 return rejectProtocol();
             }
             replacement.add(waypoint);
@@ -217,7 +233,8 @@ public final class SharedWaypointClientState {
             current.worldId(),
             current.maxWorld(),
             current.maxPlayer(),
-            true
+            true,
+            groups
         ));
         subscriptionRetryTicks = 0;
         return Action.NONE;
@@ -239,7 +256,8 @@ public final class SharedWaypointClientState {
             invalidateSnapshot(current);
             return Action.RESYNC;
         }
-        if (!validWaypoint(upsert.waypoint(), upsert.revision())
+        final Set<UUID> groupIds = groupIds(current.groups());
+        if (!validWaypoint(upsert.waypoint(), upsert.revision(), groupIds)
             || upsert.waypoint().revision() != upsert.revision()) {
             return rejectProtocol();
         }
@@ -268,7 +286,8 @@ public final class SharedWaypointClientState {
             current.worldId(),
             current.maxWorld(),
             current.maxPlayer(),
-            true
+            true,
+            current.groups()
         ));
         return Action.NONE;
     }
@@ -300,7 +319,96 @@ public final class SharedWaypointClientState {
             current.worldId(),
             current.maxWorld(),
             current.maxPlayer(),
-            true
+            true,
+            current.groups()
+        ));
+        return Action.NONE;
+    }
+
+    /** Applies one group create/rename delta and resubscribes on a revision gap. */
+    public synchronized Action onGroupUpsert(final GroupUpsertS2C upsert) {
+        final View current = view.get();
+        if (current.state() != State.ENABLED || upsert == null) {
+            return Action.NONE;
+        }
+        if (!current.synchronizedSnapshot()) {
+            return Action.NONE;
+        }
+        if (upsert.revision() <= current.revision()) {
+            return Action.NONE;
+        }
+        if (!isNextRevision(current.revision(), upsert.revision())) {
+            invalidateSnapshot(current);
+            return Action.RESYNC;
+        }
+        if (!validGroup(upsert.group(), upsert.revision())) {
+            return rejectProtocol();
+        }
+        final List<SharedWaypointGroup> groups = new ArrayList<>(current.groups());
+        boolean replaced = false;
+        for (int i = 0; i < groups.size(); i++) {
+            if (groups.get(i).id().equals(upsert.group().id())) {
+                groups.set(i, upsert.group());
+                replaced = true;
+                break;
+            }
+        }
+        if (!replaced) {
+            if (groups.size() >= SharedWaypointProto.MAX_SNAPSHOT_GROUPS) {
+                return rejectProtocol();
+            }
+            groups.add(upsert.group());
+        }
+        view.set(new View(
+            State.ENABLED,
+            current.list(),
+            current.operator(),
+            upsert.revision(),
+            current.worldId(),
+            current.maxWorld(),
+            current.maxPlayer(),
+            true,
+            groups
+        ));
+        return Action.NONE;
+    }
+
+    /** Applies one group removal: the group disappears and its members become ungrouped. */
+    public synchronized Action onGroupRemove(final GroupRemoveS2C remove) {
+        final View current = view.get();
+        if (current.state() != State.ENABLED || remove == null) {
+            return Action.NONE;
+        }
+        if (!current.synchronizedSnapshot()) {
+            return Action.NONE;
+        }
+        if (remove.revision() <= current.revision()) {
+            return Action.NONE;
+        }
+        if (!isNextRevision(current.revision(), remove.revision())) {
+            invalidateSnapshot(current);
+            return Action.RESYNC;
+        }
+        final List<SharedWaypointGroup> groups = new ArrayList<>(current.groups());
+        groups.removeIf(group -> group.id().equals(remove.groupId()));
+        final List<SharedWaypoint> replacement = new ArrayList<>(current.list().size());
+        for (final SharedWaypoint waypoint : current.list()) {
+            replacement.add(
+                remove.groupId().equals(waypoint.groupId())
+                    ? waypoint.withGroupId(null)
+                    : waypoint
+            );
+        }
+        view.set(new View(
+            State.ENABLED,
+            replacement,
+            current.operator(),
+            remove.revision(),
+            current.worldId(),
+            current.maxWorld(),
+            current.maxPlayer(),
+            true,
+            groups
         ));
         return Action.NONE;
     }
@@ -355,7 +463,8 @@ public final class SharedWaypointClientState {
             current.worldId(),
             current.maxWorld(),
             current.maxPlayer(),
-            false
+            false,
+            List.of()
         ));
     }
 
@@ -369,7 +478,11 @@ public final class SharedWaypointClientState {
             && validText(status.worldId(), false);
     }
 
-    private static boolean validWaypoint(final SharedWaypoint waypoint, final long snapshotRevision) {
+    private static boolean validWaypoint(
+        final SharedWaypoint waypoint,
+        final long snapshotRevision,
+        final Set<UUID> groupIds
+    ) {
         if (waypoint == null
             || waypoint.revision() < 1L
             || waypoint.revision() > snapshotRevision
@@ -377,12 +490,29 @@ public final class SharedWaypointClientState {
             || (waypoint.colorArgb() & 0xFF000000) != 0xFF000000
             || !validText(waypoint.name(), false)
             || !validText(waypoint.publisherName(), false)
-            || !validDimension(waypoint.dimensionId())) {
+            || !validDimension(waypoint.dimensionId())
+            || (waypoint.groupId() != null && !groupIds.contains(waypoint.groupId()))) {
             return false;
         }
         return validCoordinate(waypoint.x())
             && validCoordinate(waypoint.y())
             && validCoordinate(waypoint.z());
+    }
+
+    private static boolean validGroup(final SharedWaypointGroup group, final long snapshotRevision) {
+        return group != null
+            && group.revision() >= 1L
+            && group.revision() <= snapshotRevision
+            && group.createdAtEpochMs() >= 0L
+            && validText(group.name(), false);
+    }
+
+    private static Set<UUID> groupIds(final List<SharedWaypointGroup> groups) {
+        final Set<UUID> ids = new HashSet<>(groups.size());
+        for (final SharedWaypointGroup group : groups) {
+            ids.add(group.id());
+        }
+        return ids;
     }
 
     private static boolean validDimension(final DimensionId dimensionId) {

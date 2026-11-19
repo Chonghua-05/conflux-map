@@ -1,5 +1,6 @@
 package cn.net.rms.confluxmap.neoforge;
 
+import cn.net.rms.confluxmap.ConfluxMapMod;
 import cn.net.rms.confluxmap.nativepredict.NativeLib;
 import cn.net.rms.confluxmap.core.net.Proto;
 import cn.net.rms.confluxmap.core.net.shared.SharedWaypointProto;
@@ -26,7 +27,10 @@ public final class ConfluxMapNeoForge {
         PlayNetworking.declareChannel(Identifier.parse(SharedWaypointProto.CHANNEL_ID));
         modEventBus.addListener(PlayNetworking::registerPayloads);
         modEventBus.addListener(ConfluxMapNeoForge::initialize);
-        new ConfluxMapCompanion(ServerConfigIo.atDefault(FMLPaths.CONFIGDIR.get())).initialize();
+        new ConfluxMapCompanion(new ServerConfigIo(
+            FMLPaths.CONFIGDIR.get().resolve(ConfluxMapMod.ID).resolve("server.json"),
+            ConfluxMapMod.LOGGER
+        )).initialize();
         LOGGER.info("Conflux Map {} NeoForge adapter loaded", modContainer.getModInfo().getVersion());
     }
 

@@ -18,6 +18,8 @@ export function createMapRenderer(manifest) {
     kind: 'LAND', waterBiome: false, surfaceColor: 0x49763b,
     canopyColor: 0x2f6d1b, waterTint: 0x3f76e4
   };
+  const biomeAt = (predicted, index) =>
+    predictionBiomes.get(predicted.biomes[index]) ?? fallbackPredictionBiome;
   function renderPredictedArgb(predicted, lod, netherRoof, blockX = 0, blockZ = 0) {
     const output = new Uint32Array(256 * 256);
     const size = 258;
@@ -56,45 +58,13 @@ export function createMapRenderer(manifest) {
     const kind = predictionKind(
       biome, water, water ? 62 : predicted.heights[index], worldX, worldZ
     );
-    let color = predicted.subBiomes.length
-      ? averagedSubColor(predicted, index, worldX, worldZ, lod)
-      : kind === 'WATER' ? predictedWaterColor(biome, depth, predicted, index, lod)
-        : kind === 'FOLIAGE' || predicted.canopies[index] > 0
-          && kind !== 'ICE' && kind !== 'VOID'
-          ? biome.canopyColor
-          : kindColor(kind, biome);
+    let color = kind === 'WATER' ? predictedWaterColor(biome, depth, predicted, index, lod, worldX, worldZ)
+      : kind === 'FOLIAGE' || predicted.canopies[index] > 0
+        && kind !== 'ICE' && kind !== 'VOID'
+        ? biome.canopyColor
+        : kindColor(kind, biome);
     color = applyHeightShade(color, surfaceHeight);
-    return applyBrightness(color, reliefMultiplier(predicted, index, lod, false));
-  }
-
-  function averagedSubColor(predicted, index, worldX, worldZ, lod) {
-    let red = 0, green = 0, blue = 0;
-    const subStride = 1 << Math.max(0, lod - 1);
-    for (let sample = 0; sample < 4; sample++) {
-      const subIndex = index * 4 + sample;
-      const biome = predictionBiomes.get(predicted.subBiomes[subIndex])
-        ?? fallbackPredictionBiome;
-      const surface = predicted.subSurfaces[subIndex];
-      const water = (surface & 1) !== 0;
-      const subSurfaceHeight = water ? 62 : predicted.heights[index];
-      const subKind = predictionKind(
-        biome, water, subSurfaceHeight,
-        worldX + (sample & 1) * subStride,
-        worldZ + (sample >> 1) * subStride
-      );
-      const color = subKind === 'WATER'
-        ? predictedWaterBaseColor(biome, surface >>> 8, 1)
-        : subKind === 'FOLIAGE'
-          || predicted.subCanopies[subIndex] > 0
-            && subKind !== 'ICE' && subKind !== 'VOID'
-          ? biome.canopyColor
-          : kindColor(subKind, biome);
-      red += color >> 16;
-      green += color >> 8 & 255;
-      blue += color & 255;
-    }
-    return Math.floor(red / 4) << 16 | Math.floor(green / 4) << 8
-      | Math.floor(blue / 4);
+    return applyBrightness(color, reliefMultiplier(predicted, index, lod, false, biomeAt, worldX, worldZ));
   }
 
   function predictionKind(biome, water, surfaceHeight, worldX, worldZ) {
@@ -115,9 +85,9 @@ export function createMapRenderer(manifest) {
     return biome.surfaceColor;
   }
 
-  function predictedWaterColor(biome, depth, predicted, index, lod) {
+  function predictedWaterColor(biome, depth, predicted, index, lod, worldX, worldZ) {
     return predictedWaterBaseColor(
-      biome, depth, reliefMultiplier(predicted, index, lod, true)
+      biome, depth, reliefMultiplier(predicted, index, lod, true, biomeAt, worldX, worldZ)
     );
   }
 
@@ -185,16 +155,12 @@ export function createMapRenderer(manifest) {
       const kind = kinds[grid];
       if (kind === 0 || kind === 9) continue;
       const biome = predictionBiomes.get(biomes[grid]) ?? fallbackPredictionBiome;
-      const worldX = blockX + (x << lod);
-      const worldZ = blockZ + (z << lod);
       let color;
       if (corrected[pixel]) {
         color = correctedBaseColor(
           kind, biome, fluids[grid], colors[pixel], floorColors[pixel],
           surface, kinds, fluids, grid, lod
         );
-      } else if (predicted.subBiomes.length) {
-        color = averagedSubColor(predicted, grid, worldX, worldZ, lod);
       } else if (kind === 2) {
         color = predictedWaterBaseColor(
           biome, fluids[grid], planeRelief(surface, kinds, fluids, grid, lod, true)
@@ -257,8 +223,7 @@ export function createMapRenderer(manifest) {
     const output = new Uint32Array(256 * 256);
     const transparentPrediction = {
       biomes: new Int32Array(258 * 258), heights: new Int32Array(258 * 258),
-      surfaces: new Int32Array(258 * 258).fill(2), canopies: new Int32Array(258 * 258),
-      subBiomes: new Int32Array(), subSurfaces: new Int32Array(), subCanopies: new Int32Array()
+      surfaces: new Int32Array(258 * 258).fill(2), canopies: new Int32Array(258 * 258)
     };
     const composed = renderCorrectedArgb(
       transparentPrediction, patch, lod, netherRoof, blockX, blockZ
@@ -530,25 +495,38 @@ class Reader {
   }
 }
 
-function reliefMultiplier(predicted, index, lod, floorPlane) {
+function reliefMultiplier(predicted, index, lod, floorPlane, biomeAt, worldX, worldZ) {
+  // Mirror BaselineDeriver's floor plane: only WATER columns drop to the seafloor
+  // height; frozen ICE columns keep their surface at sea level, so a frozen
+  // neighbor must not pull the water floor relief down with the terrain beneath.
+  const floorHeight = (sample, dx, dz) => {
+    const water = (predicted.surfaces[sample] & 1) !== 0;
+    if (!water) return predictionHeight(predicted, sample, true);
+    if (!floorPlane) return 62;
+    const biome = biomeAt(predicted, sample);
+    const coldSurface = biome.kind === 'ICE' || biome.kind === 'SNOW';
+    return coldSurface
+      && frozenOceanFreezesAtSeaLevel(biome.id, worldX + (dx << lod), worldZ + (dz << lod))
+      ? 62 : predicted.heights[sample];
+  };
   if (lod === 0) {
     if (predictionVoid(predicted, index + 257) || predictionVoid(predicted, index)) return 1;
-    const lit = predictionHeight(predicted, index + 257, floorPlane);
-    const center = predictionHeight(predicted, index, floorPlane);
+    const lit = floorHeight(index + 257, -1, 1);
+    const center = floorHeight(index, 0, 0);
     return 1 + 0.3 * Math.max(-1, Math.min(1, (lit - center) / 2));
   }
-  const neighbors = [index - 1, index + 258, index + 257,
-    index + 1, index - 258, index - 257];
-  if (neighbors.some(neighbor => predictionVoid(predicted, neighbor))) return 1;
+  const neighbors = [[index - 1, -1, 0], [index + 258, 0, 1], [index + 257, -1, 1],
+    [index + 1, 1, 0], [index - 258, 0, -1], [index - 257, 1, -1]];
+  if (neighbors.some(([neighbor]) => predictionVoid(predicted, neighbor))) return 1;
   const lit = (
-    predictionHeight(predicted, index - 1, floorPlane)
-    + predictionHeight(predicted, index + 258, floorPlane)
-    + predictionHeight(predicted, index + 257, floorPlane)
+    floorHeight(index - 1, -1, 0)
+    + floorHeight(index + 258, 0, 1)
+    + floorHeight(index + 257, -1, 1)
   ) / 3;
   const dark = (
-    predictionHeight(predicted, index + 1, floorPlane)
-    + predictionHeight(predicted, index - 258, floorPlane)
-    + predictionHeight(predicted, index - 257, floorPlane)
+    floorHeight(index + 1, 1, 0)
+    + floorHeight(index - 258, 0, -1)
+    + floorHeight(index - 257, 1, -1)
   ) / 3;
   const rise = (lit - dark) / (2 * (1 << lod));
   return 1 + 0.3 * Math.max(-1, Math.min(1, rise));

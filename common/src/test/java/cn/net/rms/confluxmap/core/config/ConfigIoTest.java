@@ -8,6 +8,7 @@ import cn.net.rms.confluxmap.core.color.MapColorStyle;
 import cn.net.rms.confluxmap.core.model.DimensionId;
 import cn.net.rms.confluxmap.core.predict.StructureIndex;
 import cn.net.rms.confluxmap.core.survey.SurveyReminderSchedule;
+import cn.net.rms.confluxmap.nativepredict.PredictionBackend;
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
@@ -23,6 +24,32 @@ import org.junit.jupiter.api.io.TempDir;
 class ConfigIoTest {
 
     private static final Logger LOGGER = LogManager.getLogger("ConfigIoTest");
+
+    @Test
+    void predictionBackendDefaultsToGpuAndRoundTrips(@TempDir final Path tmp)
+        throws IOException {
+        final Path file = tmp.resolve("config.json");
+        final ConfigIo io = new ConfigIo(file, LOGGER);
+
+        assertEquals(PredictionBackend.GPU, new ConfluxConfig().predictionBackend);
+
+        final ConfluxConfig config = new ConfluxConfig();
+        config.predictionBackend = PredictionBackend.CPU;
+        io.save(config);
+        assertEquals(PredictionBackend.CPU, io.load().predictionBackend);
+
+        // A stale file without the field upgrades to the default; an explicit null
+        // (hand-edited) is restored by normalize() instead of sticking as null.
+        Files.writeString(file, "{\"schemaVersion\":8}", StandardCharsets.UTF_8);
+        assertEquals(PredictionBackend.GPU, io.load().predictionBackend);
+
+        Files.writeString(
+            file,
+            "{\"schemaVersion\":8,\"predictionBackend\":null}",
+            StandardCharsets.UTF_8
+        );
+        assertEquals(PredictionBackend.GPU, io.load().predictionBackend);
+    }
 
     @Test
     void radarDisplayModeDefaultsToPortraitsAndRoundTrips(@TempDir final Path tmp)
@@ -63,6 +90,26 @@ class ConfigIoTest {
         final ConfluxConfig loaded = io.load();
         assertFalse(loaded.radarPlayerIconOutlineEnabled);
         assertEquals(3, loaded.radarIconOutlineThickness);
+    }
+
+    @Test
+    void radarEntityTypeVisibilityRoundTripsCopiesAndNormalizes(@TempDir final Path tmp)
+        throws IOException {
+        final ConfigIo io = new ConfigIo(tmp.resolve("config.json"), LOGGER);
+        final ConfluxConfig config = new ConfluxConfig();
+        config.radarEntityTypeVisibility.put("minecraft:creeper", true);
+        config.radarEntityTypeVisibility.put("minecraft:bat", false);
+
+        io.save(config);
+
+        final ConfluxConfig loaded = io.load();
+        assertEquals(Boolean.TRUE, loaded.radarEntityTypeVisibility.get("minecraft:creeper"));
+        assertEquals(Boolean.FALSE, loaded.radarEntityTypeVisibility.get("minecraft:bat"));
+        assertEquals(2, config.copy().radarEntityTypeVisibility.size());
+
+        loaded.radarEntityTypeVisibility = null;
+        loaded.normalize();
+        assertTrue(loaded.radarEntityTypeVisibility.isEmpty());
     }
 
     @Test
@@ -297,6 +344,29 @@ class ConfigIoTest {
             StandardCharsets.UTF_8
         );
         assertEquals(ConfluxConfig.MAX_RADAR_ICON_SIZE, io.load().radarIconSize);
+    }
+
+    @Test
+    void teleportAndWaypointListDefaultsRoundTripAndSurviveStaleFiles(@TempDir final Path tmp) throws IOException {
+        final Path file = tmp.resolve("config.json");
+        final ConfigIo io = new ConfigIo(file, LOGGER);
+        final ConfluxConfig config = new ConfluxConfig();
+        config.teleportCloseMap = true;
+        config.waypointListDefaultTab = ConfluxConfig.WaypointListTab.PUBLIC;
+        config.waypointListDefaultDimension = ConfluxConfig.WaypointListDefaultDimension.ALL;
+
+        io.save(config);
+        final ConfluxConfig loaded = io.load();
+        assertTrue(loaded.teleportCloseMap);
+        assertEquals(ConfluxConfig.WaypointListTab.PUBLIC, loaded.waypointListDefaultTab);
+        assertEquals(ConfluxConfig.WaypointListDefaultDimension.ALL, loaded.waypointListDefaultDimension);
+
+        // A file from before these fields exists keeps the shipped defaults.
+        Files.writeString(file, "{\"schemaVersion\":2}", StandardCharsets.UTF_8);
+        final ConfluxConfig stale = io.load();
+        assertFalse(stale.teleportCloseMap);
+        assertEquals(ConfluxConfig.WaypointListTab.LOCAL, stale.waypointListDefaultTab);
+        assertEquals(ConfluxConfig.WaypointListDefaultDimension.CURRENT, stale.waypointListDefaultDimension);
     }
 
     @Test

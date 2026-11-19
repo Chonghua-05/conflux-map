@@ -3,6 +3,7 @@ package cn.net.rms.confluxmap.core.waypoint;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import cn.net.rms.confluxmap.core.model.DimensionId;
 import cn.net.rms.confluxmap.core.model.WorldIdentity;
@@ -151,6 +152,35 @@ class WaypointStoreTest {
     }
 
     @Test
+    void setCollapsedNotifiesOncePersistsThroughStateAndSurvivesRename() {
+        final Waypoint home = waypoint("Home", "Bases", 1.0);
+        final WaypointStore store = new WaypointStore(WORLD, List.of(home));
+        final AtomicInteger notifications = new AtomicInteger();
+        store.addListener(ignored -> notifications.incrementAndGet());
+
+        assertEquals(WaypointStore.MutationResult.SET_NOT_FOUND, store.setCollapsed("Missing", true));
+        assertEquals(WaypointStore.MutationResult.SET_NOT_FOUND, store.setCollapsed(null, true));
+        assertEquals(WaypointStore.MutationResult.NO_CHANGE, store.setCollapsed("Bases", false));
+        assertEquals(0, notifications.get());
+
+        assertEquals(WaypointStore.MutationResult.APPLIED, store.setCollapsed("Bases", true));
+        assertEquals(WaypointStore.MutationResult.APPLIED, store.setCollapsed(WaypointSet.DEFAULT_NAME, true));
+
+        assertEquals(2, notifications.get());
+        assertEquals(
+            List.of(new WaypointSet("", true), new WaypointSet("Bases", true)),
+            store.state().sets()
+        );
+
+        assertEquals(WaypointStore.MutationResult.APPLIED, store.renameSet("Bases", "Mining"));
+
+        assertEquals(
+            List.of(new WaypointSet("", true), new WaypointSet("Mining", true)),
+            store.sets()
+        );
+    }
+
+    @Test
     void readOnlyFutureSchemaStateRejectsEveryMutation() {
         final Waypoint original = waypoint("Original", "", 1.0);
         final WaypointStore store = new WaypointStore(
@@ -166,12 +196,50 @@ class WaypointStoreTest {
         assertEquals(WaypointStore.MutationResult.READ_ONLY, store.createSet("Other"));
         assertEquals(WaypointStore.MutationResult.READ_ONLY, store.renameSet("Missing", "Other"));
         assertEquals(WaypointStore.MutationResult.READ_ONLY, store.deleteSet("Missing").result());
+        assertEquals(WaypointStore.MutationResult.READ_ONLY, store.setCollapsed(WaypointSet.DEFAULT_NAME, true));
         assertEquals(
             WaypointStore.MutationResult.READ_ONLY,
             store.moveToSet(List.of(original.id), WaypointSet.DEFAULT_NAME).result()
         );
         assertEquals(List.of("Original"), names(store));
         assertFalse(store.persistenceWritable());
+    }
+
+    @Test
+    void temporaryWaypointsStayInMemoryButNeverEnterThePersistenceSnapshot() {
+        final Waypoint home = waypoint("Home", "", 1.0);
+        final WaypointStore store = new WaypointStore(WORLD, List.of(home));
+        final Waypoint stop = waypoint("Stop", "", 2.0);
+        stop.type = Waypoint.Type.TEMPORARY;
+        store.add(stop);
+
+        assertEquals(List.of("Home", "Stop"), names(store));
+        assertEquals(List.of("Home"), stateNames(store));
+    }
+
+    @Test
+    void convertingBetweenNormalAndTemporaryMovesTheWaypointAcrossThePersistenceBoundary() {
+        final Waypoint home = waypoint("Home", "", 1.0);
+        final WaypointStore store = new WaypointStore(WORLD, List.of(home));
+
+        final Waypoint toTemporary = store.list().get(0);
+        toTemporary.type = Waypoint.Type.TEMPORARY;
+        store.update(toTemporary);
+        assertTrue(store.state().waypoints().isEmpty());
+
+        final Waypoint toNormal = store.list().get(0);
+        toNormal.type = Waypoint.Type.NORMAL;
+        store.update(toNormal);
+        assertEquals(List.of("Home"), stateNames(store));
+    }
+
+    @Test
+    void temporaryWaypointsInAnInitialListNeverMaterialize() {
+        final Waypoint stop = waypoint("Stop", "Bases", 1.0);
+        stop.type = Waypoint.Type.TEMPORARY;
+        final WaypointStore store = new WaypointStore(WORLD, List.of(stop));
+
+        assertTrue(store.list().isEmpty());
     }
 
     @Test
@@ -201,5 +269,9 @@ class WaypointStoreTest {
 
     private static List<String> names(final WaypointStore store) {
         return store.list().stream().map(waypoint -> waypoint.name).toList();
+    }
+
+    private static List<String> stateNames(final WaypointStore store) {
+        return store.state().waypoints().stream().map(waypoint -> waypoint.name).toList();
     }
 }

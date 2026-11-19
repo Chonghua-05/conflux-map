@@ -1,11 +1,13 @@
 package cn.net.rms.confluxmap.core.cache;
 
+import cn.net.rms.confluxmap.core.model.SampleSource;
 import cn.net.rms.confluxmap.core.store.RegionColumns;
 import java.io.DataInputStream;
 import java.io.DataOutputStream;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStream;
+import java.nio.ByteBuffer;
 import java.util.Arrays;
 import java.util.LinkedHashMap;
 import java.util.Map;
@@ -16,7 +18,7 @@ import java.util.zip.InflaterInputStream;
 
 /**
  * Binary format for {@code r.<rx>.<rz>.cfr} region cache files (see the plan's
- * 磁盘缓存 decision and S6). A file is three back-to-back sections written to the
+ * disk-cache decision and S6). A file is three back-to-back sections written to the
  * same stream, uncompressed header/table followed by a compressed body:
  *
  * <pre>
@@ -26,13 +28,15 @@ import java.util.zip.InflaterInputStream;
  * </pre>
  *
  * <p>The compressed body starts with a UTF biome-identifier dictionary, followed by fixed-width
- * column records: {@code i16 surfaceY, u8 fluidDepth, u8 kind, u16 biomeIndex, i32 baseArgb,
+ * column records: {@code i16 surfaceY, u8 fluidDepth, u8 kind, u16 biomeIdx, i32 baseArgb,
  * i32 xaeroBaseArgb, i32 biomeTint, i32 overlayArgb, i32 xaeroOverlayArgb, u8 light}.
  * Biome index 0 means unknown; other values are
  * one-based dictionary indexes. Schema 3 introduced this stable identity plane; schema 4 adds
  * each chunk's world source revision to the uncompressed table. Schema 5 retains the raw texture
  * average needed by Xaero rendering. Schema 6 separates Xaero-filtered overlays so decorative
- * plants hidden by Xaero do not inherit Conflux detail noise. Older schemas remain readable;
+ * plants hidden by Xaero do not inherit Conflux detail noise. Schema 7 renumbers the source
+ * ordinals to make room for {@link SampleSource#IMPORTED} between PREDICTED and REAL_CACHED;
+ * schemas 3-6 store the old numbering and are remapped on decode. Older schemas remain readable;
  * schemas 3/4 fall back to baseArgb and schemas 3-5 start with an empty Xaero overlay plane.
  *
  * <p>All multi-byte integers are big-endian (plain {@link DataOutputStream}/
@@ -42,7 +46,7 @@ import java.util.zip.InflaterInputStream;
 public final class RegionFileCodec {
     public static final byte[] MAGIC = {'C', 'F', 'R', 'M'};
     public static final int FORMAT_VERSION = 1;
-    public static final int SCHEMA_VERSION = 6;
+    public static final int SCHEMA_VERSION = 7;
     private static final int MIN_SUPPORTED_SCHEMA_VERSION = 3;
     /** Discriminates the on-disk record family; 0 = the fixed-width column layout described above. */
     public static final int SOURCE_CLASS = 0;
@@ -287,6 +291,10 @@ public final class RegionFileCodec {
             if (schemaVersion >= 4) {
                 chunkSourceRevision[i] = header.readLong();
             }
+            if (schemaVersion < 7) {
+                // Schemas 3-6 predate SampleSource.IMPORTED: 2 was REAL_CACHED, 3 was REAL_LIVE.
+                chunkSourceOrdinal[i] = remapLegacySourceOrdinal(chunkSourceOrdinal[i]);
+            }
         }
 
         final short[] surfaceY = new short[COLUMN_COUNT];
@@ -313,23 +321,47 @@ public final class RegionFileCodec {
                     throw new RegionFileException("empty biome identifier at palette index " + i);
                 }
             }
-            for (int i = 0; i < COLUMN_COUNT; i++) {
-                surfaceY[i] = columns.readShort();
-                fluidDepth[i] = columns.readByte();
-                kind[i] = columns.readByte();
-                final int biomeIndex = columns.readUnsignedShort();
+            // Bulk-inflate then parse by offset: per-field stream reads cost ~91 ms/region vs ~3 ms for the inflate.
+            int cursor = 2 + 1 + 1 + 2; // surfaceY, fluidDepth, kind, biomeIndex
+            final int baseArgbOff = cursor;
+            cursor += 4;
+            final boolean hasXaeroBase = schemaVersion >= 5;
+            final int xaeroBaseArgbOff = hasXaeroBase ? cursor : -1;
+            if (hasXaeroBase) {
+                cursor += 4;
+            }
+            final int biomeTintOff = cursor;
+            cursor += 4;
+            final int overlayArgbOff = cursor;
+            cursor += 4;
+            final boolean hasXaeroOverlay = schemaVersion >= 6;
+            final int xaeroOverlayArgbOff = hasXaeroOverlay ? cursor : -1;
+            if (hasXaeroOverlay) {
+                cursor += 4;
+            }
+            final int lightOff = cursor;
+            final int recordSize = lightOff + 1;
+            final byte[] records = new byte[COLUMN_COUNT * recordSize];
+            columns.readFully(records);
+            // ByteBuffer is big-endian by default, matching the on-disk field order.
+            final ByteBuffer recordBuffer = ByteBuffer.wrap(records);
+            for (int i = 0, off = 0; i < COLUMN_COUNT; i++, off += recordSize) {
+                surfaceY[i] = recordBuffer.getShort(off);
+                fluidDepth[i] = records[off + 2];
+                kind[i] = records[off + 3];
+                final int biomeIndex = recordBuffer.getShort(off + 4) & 0xFFFF;
                 if (biomeIndex > biomePaletteSize) {
                     throw new RegionFileException(
                         "biome index " + biomeIndex + " exceeds palette size " + biomePaletteSize
                     );
                 }
                 biomeId[i] = biomePalette[biomeIndex];
-                baseArgb[i] = columns.readInt();
-                xaeroBaseArgb[i] = schemaVersion >= 5 ? columns.readInt() : baseArgb[i];
-                biomeTint[i] = columns.readInt();
-                overlayArgb[i] = columns.readInt();
-                xaeroOverlayArgb[i] = schemaVersion >= 6 ? columns.readInt() : 0;
-                light[i] = columns.readByte();
+                baseArgb[i] = recordBuffer.getInt(off + baseArgbOff);
+                xaeroBaseArgb[i] = hasXaeroBase ? recordBuffer.getInt(off + xaeroBaseArgbOff) : baseArgb[i];
+                biomeTint[i] = recordBuffer.getInt(off + biomeTintOff);
+                overlayArgb[i] = recordBuffer.getInt(off + overlayArgbOff);
+                xaeroOverlayArgb[i] = hasXaeroOverlay ? recordBuffer.getInt(off + xaeroOverlayArgbOff) : 0;
+                light[i] = records[off + lightOff];
             }
         } finally {
             inflater.end();
@@ -340,6 +372,18 @@ public final class RegionFileCodec {
             surfaceY, fluidDepth, kind, biomeId, baseArgb, xaeroBaseArgb,
             biomeTint, overlayArgb, xaeroOverlayArgb, light
         );
+    }
+
+    /**
+     * Legacy chunk tables store the pre-IMPORTED enum numbering; shift cached/live
+     * sources up so ordinal decoding matches the current enum.
+     */
+    private static byte remapLegacySourceOrdinal(final byte stored) {
+        return switch (stored) {
+            case 2 -> (byte) SampleSource.REAL_CACHED.ordinal();
+            case 3 -> (byte) SampleSource.REAL_LIVE.ordinal();
+            default -> stored;
+        };
     }
 
     private static long[] unknownRevisions() {

@@ -796,8 +796,11 @@ static int cfxIsAir(const char *name) {
         || strcmp(name, "minecraft:void_air") == 0);
 }
 
-/* Mirrors ChunkColumnSummarizer.isOverlayDecoration: non-colliding surface decoration worth
- * an overlay, with air/fluid and bulk foliage (grass, fern) excluded. */
+/* Mirrors the shared OverlayVisibility policy (common/src/main/java/cn/net/rms/confluxmap/
+ * core/color/OverlayVisibility.java) the same way ChunkColumnSummarizer.isOverlayDecoration
+ * applies it: non-colliding surface decoration worth an overlay, with air/fluid and bulk
+ * foliage (BULK_FOLIAGE_SUBSTRINGS: grass, fern) excluded. OverlayVisibilitySourceParityTest
+ * reads this function and fails if the substrings drift from the Java policy. */
 static int cfxIsOverlayDecoration(const CfxBlockEntry *block) {
     const char *name = block->name;
     if (name == NULL || cfxEndsWith(name, "air"))

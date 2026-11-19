@@ -7,7 +7,7 @@ package cn.net.rms.confluxmap.core.predict;
  * PredictedTileComposerTest}'s determinism check need: two different tiles (or two calls for the
  * same tile) must see bit-identical values for the same absolute position.
  */
-final class PositionBasedFakeSampler implements BaselineSampler {
+class PositionBasedFakeSampler implements BaselineSampler {
     /** Void below this Z (in blockZ terms) when {@link #voidBeyond} is set - lets tests exercise the End's void branch. */
     private final Integer voidBeyondBlockZ;
 

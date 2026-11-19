@@ -159,14 +159,13 @@ public final class PatchBuilder {
                     expected = uniformPixel;
                 } else {
                     final int baseIndex = BaselineGrid.index(x, z);
-                    expected = new MapPixel(
+                    expected = baselinePixel(
                         baseline.biomeId[baseIndex],
                         derived.surfaceY[baseIndex],
                         derived.kind[baseIndex] & 255,
                         mapColorOverride != null && mapColorOverride[pixel] != Proto.MAP_COLOR_NONE
                             ? mapColorOverride[pixel] : baselineMapColorId,
-                        derived.fluidDepth[baseIndex],
-                        MapPixel.MAP_COLOR_NONE
+                        derived.fluidDepth[baseIndex]
                     );
                 }
                 if (absolute || !expected.sameTerrainSemantics(column.pixel())) {
@@ -472,6 +471,28 @@ public final class PatchBuilder {
 
     private static PatchCodec.Sample toSample(final int pixelX, final int pixelZ, final SummaryCodec.Column column) {
         return new PatchCodec.Sample(pixelZ * SummaryTile.PIXELS + pixelX, column.pixel());
+    }
+
+    /**
+     * Wire-domain pixel for one baseline sample. A predicted void column carries
+     * {@link BaselineGrid#NO_SURFACE}, which {@link MapPixel}'s short surfaceY domain rejects;
+     * the replacement value is irrelevant because two void pixels compare equal by kind.
+     */
+    static MapPixel baselinePixel(
+        final int biomeId,
+        final int surfaceY,
+        final int kind,
+        final int mapColorId,
+        final int fluidDepth
+    ) {
+        return new MapPixel(
+            biomeId,
+            surfaceY == BaselineGrid.NO_SURFACE ? 0 : surfaceY,
+            kind,
+            mapColorId,
+            fluidDepth,
+            MapPixel.MAP_COLOR_NONE
+        );
     }
 
     private static Result result(

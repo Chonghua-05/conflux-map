@@ -9,10 +9,15 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 import cn.net.rms.confluxmap.core.model.DimensionId;
 import cn.net.rms.confluxmap.core.net.shared.CreateC2S;
 import cn.net.rms.confluxmap.core.net.shared.DeleteC2S;
+import cn.net.rms.confluxmap.core.net.shared.GroupCreateC2S;
+import cn.net.rms.confluxmap.core.net.shared.GroupRemoveS2C;
+import cn.net.rms.confluxmap.core.net.shared.GroupRenameC2S;
+import cn.net.rms.confluxmap.core.net.shared.GroupUpsertS2C;
 import cn.net.rms.confluxmap.core.net.shared.HelloC2S;
 import cn.net.rms.confluxmap.core.net.shared.LockC2S;
 import cn.net.rms.confluxmap.core.net.shared.ResultS2C;
 import cn.net.rms.confluxmap.core.net.shared.RemoveS2C;
+import cn.net.rms.confluxmap.core.net.shared.SetWaypointGroupC2S;
 import cn.net.rms.confluxmap.core.net.shared.SharedWaypointProto;
 import cn.net.rms.confluxmap.core.net.shared.SnapshotS2C;
 import cn.net.rms.confluxmap.core.net.shared.StatusS2C;
@@ -102,7 +107,7 @@ class SharedWaypointSessionHandlerTest {
         assertEquals(operationId, result.operationId());
         assertEquals(SharedWaypointProto.RESULT_STATUS_APPLIED, result.statusCode());
         assertEquals(SharedWaypointProto.RESULT_ERROR_NONE, result.errorCode());
-        final UpsertS2C upsert = assertInstanceOf(UpsertS2C.class, dispatch.broadcast());
+        final UpsertS2C upsert = assertInstanceOf(UpsertS2C.class, dispatch.broadcasts().get(0));
         assertEquals(1L, upsert.revision());
         assertEquals("Spawn", upsert.waypoint().name());
         assertEquals("minecraft:compass", upsert.waypoint().iconItemId());
@@ -160,7 +165,7 @@ class SharedWaypointSessionHandlerTest {
         final SharedWaypointSessionHandler.Dispatch first = fixture.handler.handle(
             PLAYER, request, fixture.environment
         );
-        final UpsertS2C created = assertInstanceOf(UpsertS2C.class, first.broadcast());
+        final UpsertS2C created = assertInstanceOf(UpsertS2C.class, first.broadcasts().get(0));
 
         fixture.handler.disconnect(PLAYER.id());
         compatibleHello(fixture, PLAYER);
@@ -168,7 +173,7 @@ class SharedWaypointSessionHandlerTest {
             PLAYER, request, fixture.environment
         );
         assertInstanceOf(ResultS2C.class, replay.direct().get(0));
-        assertNull(replay.broadcast());
+        assertTrue(replay.broadcasts().isEmpty());
         assertEquals(1L, fixture.service.snapshot().revision());
 
         compatibleHello(fixture, OPERATOR);
@@ -180,7 +185,7 @@ class SharedWaypointSessionHandlerTest {
         final ResultS2C result = assertInstanceOf(ResultS2C.class, legacyLock.direct().get(0));
         assertEquals(SharedWaypointProto.RESULT_STATUS_REJECTED, result.statusCode());
         assertEquals(SharedWaypointProto.RESULT_ERROR_INVALID_REQUEST, result.errorCode());
-        assertNull(legacyLock.broadcast());
+        assertTrue(legacyLock.broadcasts().isEmpty());
         assertEquals(1L, fixture.service.snapshot().revision());
     }
 
@@ -195,7 +200,7 @@ class SharedWaypointSessionHandlerTest {
             UpsertS2C.class,
             fixture.handler.handle(
                 PLAYER, create(uuid(115), 0L, "Spawn"), fixture.environment
-            ).broadcast()
+            ).broadcasts().get(0)
         );
 
         final ResultS2C forbiddenDelete = assertInstanceOf(
@@ -214,7 +219,7 @@ class SharedWaypointSessionHandlerTest {
                 OPERATOR,
                 new DeleteC2S(uuid(119), created.waypoint().id(), created.waypoint().revision()),
                 fixture.environment
-            ).broadcast()
+            ).broadcasts().get(0)
         );
         assertEquals(created.waypoint().id(), removed.id());
         assertEquals(2L, removed.revision());
@@ -228,7 +233,7 @@ class SharedWaypointSessionHandlerTest {
             UpsertS2C.class,
             fixture.handler.handle(
                 PLAYER, create(uuid(120), 0L, "Spawn"), fixture.environment
-            ).broadcast()
+            ).broadcasts().get(0)
         );
 
         final SharedWaypointSessionHandler.Dispatch dispatch = fixture.handler.handle(
@@ -240,7 +245,7 @@ class SharedWaypointSessionHandlerTest {
             fixture.environment
         );
 
-        final UpsertS2C updated = assertInstanceOf(UpsertS2C.class, dispatch.broadcast());
+        final UpsertS2C updated = assertInstanceOf(UpsertS2C.class, dispatch.broadcasts().get(0));
         assertEquals("Updated", updated.waypoint().name());
         assertEquals(DimensionId.OVERWORLD, updated.waypoint().dimensionId());
         assertEquals(2L, updated.revision());
@@ -269,7 +274,7 @@ class SharedWaypointSessionHandlerTest {
         assertEquals(SharedWaypointProto.RESULT_STATUS_REJECTED, result.statusCode());
         assertEquals(SharedWaypointProto.RESULT_ERROR_DISABLED, result.errorCode());
         assertInstanceOf(StatusS2C.class, rejected.direct().get(1));
-        assertNull(rejected.broadcast());
+        assertTrue(rejected.broadcasts().isEmpty());
         assertEquals(0L, fixture.service.snapshot().revision());
     }
 
@@ -404,6 +409,113 @@ class SharedWaypointSessionHandlerTest {
         }
     }
 
+    @Test
+    void subscribeDeliversGroupsAndCommandDeltasMapToGroupMessages() {
+        final Fixture fixture = fixture(true);
+        final SharedWaypointService.MutationResult created = fixture.service.createGroup(
+            actorOf(PLAYER),
+            new SharedWaypointService.GroupCreateRequest(uuid(400), 0L, "Villages")
+        );
+        assertTrue(created.applied());
+
+        compatibleHello(fixture, PLAYER);
+        final SnapshotS2C snapshot = assertInstanceOf(
+            SnapshotS2C.class,
+            fixture.handler.handle(PLAYER, new SubscribeC2S(), fixture.environment).direct().get(0)
+        );
+        assertEquals(1, snapshot.groups().size());
+        assertEquals("Villages", snapshot.groups().get(0).name());
+        assertEquals(1L, snapshot.revision());
+
+        final GroupUpsertS2C upsert = assertInstanceOf(
+            GroupUpsertS2C.class,
+            SharedWaypointSessionHandler.deltaMessages(created).get(0)
+        );
+        assertEquals(1L, upsert.revision());
+        assertEquals("Villages", upsert.group().name());
+
+        final SharedWaypointService.MutationResult deleted = fixture.service.deleteGroup(
+            actorOf(PLAYER),
+            new SharedWaypointService.GroupDeleteRequest(
+                uuid(401), snapshot.groups().get(0).revision(), snapshot.groups().get(0).id()
+            )
+        );
+        assertTrue(deleted.applied());
+        final GroupRemoveS2C remove = assertInstanceOf(
+            GroupRemoveS2C.class,
+            SharedWaypointSessionHandler.deltaMessages(deleted).get(0)
+        );
+        assertEquals(2L, remove.revision());
+        assertEquals(snapshot.groups().get(0).id(), remove.groupId());
+    }
+
+    @Test
+    void clientOriginatedGroupMutationsRouteThroughTheProtocolChannel() {
+        final Fixture fixture = fixture(true);
+        compatibleHello(fixture, PLAYER);
+        compatibleHello(fixture, OPERATOR);
+        final SharedWaypointSessionHandler.Peer other = peer(3, "Other", false);
+        compatibleHello(fixture, other);
+
+        final SharedWaypointSessionHandler.Dispatch groupCreated = fixture.handler.handle(
+            PLAYER,
+            new GroupCreateC2S(uuid(500), 0L, "Villages"),
+            fixture.environment
+        );
+        final ResultS2C groupResult = assertInstanceOf(ResultS2C.class, groupCreated.direct().get(0));
+        assertEquals(SharedWaypointProto.RESULT_STATUS_APPLIED, groupResult.statusCode());
+        final GroupUpsertS2C groupUpsert = assertInstanceOf(GroupUpsertS2C.class, groupCreated.broadcasts().get(0));
+        final UUID groupId = groupUpsert.group().id();
+        assertEquals("Villages", groupUpsert.group().name());
+
+        final UpsertS2C waypoint = assertInstanceOf(
+            UpsertS2C.class,
+            fixture.handler.handle(PLAYER, create(uuid(501), 1L, "Spawn"), fixture.environment).broadcasts().get(0)
+        );
+
+        final SharedWaypointSessionHandler.Dispatch assigned = fixture.handler.handle(
+            PLAYER,
+            new SetWaypointGroupC2S(
+                uuid(502), waypoint.waypoint().id(), waypoint.waypoint().revision(), groupId
+            ),
+            fixture.environment
+        );
+        assertEquals(
+            SharedWaypointProto.RESULT_STATUS_APPLIED,
+            assertInstanceOf(ResultS2C.class, assigned.direct().get(0)).statusCode()
+        );
+        final UpsertS2C assignedDelta = assertInstanceOf(UpsertS2C.class, assigned.broadcasts().get(0));
+        assertEquals(groupId, assignedDelta.waypoint().groupId());
+
+        final ResultS2C forbidden = assertInstanceOf(
+            ResultS2C.class,
+            fixture.handler.handle(
+                other,
+                new GroupRenameC2S(uuid(503), groupUpsert.group().revision(), groupId, "Farms"),
+                fixture.environment
+            ).direct().get(0)
+        );
+        assertEquals(SharedWaypointProto.RESULT_ERROR_FORBIDDEN, forbidden.errorCode());
+
+        final SharedWaypointSessionHandler.Dispatch renamed = fixture.handler.handle(
+            OPERATOR,
+            new GroupRenameC2S(uuid(504), groupUpsert.group().revision(), groupId, "Farms"),
+            fixture.environment
+        );
+        final GroupUpsertS2C renamedDelta = assertInstanceOf(GroupUpsertS2C.class, renamed.broadcasts().get(0));
+        assertEquals("Farms", renamedDelta.group().name());
+
+        final Fixture disabled = fixture(false);
+        compatibleHello(disabled, PLAYER);
+        final ResultS2C disabledResult = assertInstanceOf(
+            ResultS2C.class,
+            disabled.handler.handle(
+                PLAYER, new GroupCreateC2S(uuid(505), 0L, "Nope"), disabled.environment
+            ).direct().get(0)
+        );
+        assertEquals(SharedWaypointProto.RESULT_ERROR_DISABLED, disabledResult.errorCode());
+    }
+
     private static SharedWaypointSessionHandler.Dispatch compatibleHello(
         final Fixture fixture,
         final SharedWaypointSessionHandler.Peer peer
@@ -455,6 +567,10 @@ class SharedWaypointSessionHandlerTest {
             service,
             new SharedWaypointSessionHandler.Environment(enabled, "world-id", 20, 10, service)
         );
+    }
+
+    private static SharedWaypointService.Actor actorOf(final SharedWaypointSessionHandler.Peer peer) {
+        return new SharedWaypointService.Actor(peer.id(), peer.name(), peer.operator());
     }
 
     private static SharedWaypointSessionHandler.Peer peer(

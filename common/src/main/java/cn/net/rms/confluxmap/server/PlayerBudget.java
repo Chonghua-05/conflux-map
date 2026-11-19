@@ -5,7 +5,7 @@ import cn.net.rms.confluxmap.core.net.TokenBucket;
 
 /**
  * Per-player request and bandwidth budget. Queue-occupancy limits live in
- * {@link PatchDispatcher}; this class owns only request spacing and the byte token bucket.
+ * {@link CorrectionSlotQueue}; this class owns only request spacing and the byte token bucket.
  */
 public final class PlayerBudget {
     /** Compressed patch body plus the fixed MAP_PATCH envelope. */
