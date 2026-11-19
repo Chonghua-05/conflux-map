@@ -49,7 +49,7 @@ public final class GuiShapes {
 
 
     public static void rotateZ(final PoseStack matrices, final float degrees) {
-        matrices.multiply(new Quaternionf().rotationZ((float) Math.toRadians(degrees)));
+        matrices.mulPose(new Quaternionf().rotationZ((float) Math.toRadians(degrees)));
     }
 
     /**

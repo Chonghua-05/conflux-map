@@ -7,9 +7,9 @@ import net.minecraft.client.Minecraft;
 import com.mojang.blaze3d.pipeline.RenderTarget;
 import com.mojang.blaze3d.pipeline.TextureTarget;
 import com.mojang.blaze3d.platform.Window;
-import net.minecraft.client.gl.PostEffectProcessor;
-import net.minecraft.client.render.DefaultFramebufferSet;
-import net.minecraft.client.util.memory.ObjectAllocator;
+import com.mojang.blaze3d.resource.GraphicsResourceAllocator;
+import net.minecraft.client.renderer.LevelTargetBundle;
+import net.minecraft.client.renderer.PostChain;
 
 import com.mojang.blaze3d.ProjectionType;
 import net.minecraft.client.renderer.ProjectionMatrixBuffer;
@@ -137,14 +137,14 @@ public final class OffscreenCanvas {
 
     /** Applies Minecraft's menu-style separable box blur to this canvas in place. */
     public boolean applyMenuBlur(final Minecraft client) throws IOException {
-        final PostEffectProcessor blur = client.getShaderLoader().loadPostEffect(
-            Ids.of("minecraft", "blur"), DefaultFramebufferSet.MAIN_ONLY
+        final PostChain blur = client.getShaderManager().getPostChain(
+            Ids.of("minecraft", "blur"), LevelTargetBundle.MAIN_TARGETS
         );
         if (blur == null) {
             return false;
         }
-        final float radius = client.options.getMenuBackgroundBlurrinessValue();
-        blur.render(framebuffer, ObjectAllocator.TRIVIAL);
+        // 26.1.2 reads the blur radius from the options render state inside the chain.
+        blur.process(framebuffer, GraphicsResourceAllocator.UNPOOLED);
         return true;
     }
 

@@ -36,7 +36,7 @@ public final class RenderTargetState {
     }
 
     static RenderTarget drawTarget() {
-        return drawTarget == null ? Minecraft.getInstance().getFramebuffer() : drawTarget;
+        return drawTarget == null ? Minecraft.getInstance().getMainRenderTarget() : drawTarget;
     }
     
     static void setDrawTarget(final RenderTarget target) {

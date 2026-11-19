@@ -1,5 +1,6 @@
 package cn.net.rms.confluxmap.mc.render;
 
+import com.mojang.blaze3d.systems.GpuDevice;
 import com.mojang.blaze3d.buffers.GpuBuffer;
 import com.mojang.blaze3d.pipeline.RenderPipeline;
 import com.mojang.blaze3d.systems.RenderPass;
@@ -123,7 +124,9 @@ public final class Mesh {
             pending[2] = position.z;
             return this;
         }
-        buffer.vertex(model, x, y, z);
+        // 26.1.2's vertex consumer only takes a pose, so the matrix is applied here.
+        final Vector3f position = model.transformPosition(x, y, z, new Vector3f());
+        buffer.addVertex(position.x, position.y, position.z);
         return this;
     }
 
@@ -133,7 +136,7 @@ public final class Mesh {
             pending[4] = v;
             return this;
         }
-        buffer.texture(u, v);
+        buffer.setUv(u, v);
         return this;
     }
 
@@ -145,7 +148,7 @@ public final class Mesh {
             pending[8] = a;
             return this;
         }
-        buffer.color(r, g, b, a);
+        buffer.setColor(r, g, b, a);
         return this;
     }
 
@@ -224,7 +227,7 @@ public final class Mesh {
                 () -> "Conflux Map immediate " + pipeline.getLocation(),
                 target.getColorTextureView(),
                 OptionalInt.empty(),
-                target.useDepthAttachment ? target.getDepthTextureView() : null,
+                target.useDepth ? target.getDepthTextureView() : null,
                 OptionalDouble.empty()
             )) {
                 pass.setPipeline(pipeline);

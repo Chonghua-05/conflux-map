@@ -5,9 +5,9 @@ import cn.net.rms.confluxmap.mc.render.WorldMatrices;
 import java.util.HashMap;
 import java.util.Locale;
 import java.util.Map;
-import cn.net.rms.confluxmap.neoforge.compat.FabricOrderedSubmitNodeCollector;
-import cn.net.rms.confluxmap.neoforge.compat.LevelRenderContext;
-import cn.net.rms.confluxmap.neoforge.compat.LevelRenderEvents;
+import net.minecraft.client.renderer.MultiBufferSource;
+import net.neoforged.neoforge.client.event.RenderLevelStageEvent;
+import net.neoforged.neoforge.common.NeoForge;
 import net.minecraft.client.Minecraft;
 // Camera exists on every line (relocated on 26.x); MultiBufferSource is pre-26.2 only.
 import net.minecraft.client.Camera;
@@ -79,12 +79,24 @@ public final class WorldOverlayEvents {
      * beam pass must draw before the label pass wherever both share one phase.
      */
     public static void register(final WaypointWorldRenderer renderer) {
-        LevelRenderEvents.COLLECT_SUBMITS.register(context ->
-            captureWorldView());
-        LevelRenderEvents.COLLECT_SUBMITS.register(context ->
-            renderer.renderBeams(beamFrame(context)));
-        LevelRenderEvents.COLLECT_SUBMITS.register(context ->
-            renderer.renderHud(labelFrame(context)));
+        NeoForge.EVENT_BUS.addListener((final RenderLevelStageEvent.AfterTranslucentBlocks event) -> {
+            captureWorldView();
+            final Minecraft client = client();
+            final MultiBufferSource.BufferSource buffers = client.renderBuffers().bufferSource();
+            final Camera camera = client.gameRenderer.getMainCamera();
+            final OverlayFrame frame = new OverlayFrame(
+                event.getPoseStack(),
+                camera.position(),
+                camera,
+                buffers,
+                camera.yRot(),
+                camera.xRot(),
+                client.getDeltaTracker().getGameTimeDeltaPartialTick(false)
+            );
+            renderer.renderBeams(frame);
+            renderer.renderHud(frame);
+            buffers.endBatch();
+        });
     }
 
     /**
@@ -103,33 +115,7 @@ public final class WorldOverlayEvents {
 
     // 26.x is unobfuscated and this region is uncommented verbatim: identifiers here
     // are official names - do not write Yarn names.
-    private static OverlayFrame beamFrame(final LevelRenderContext context) {
-        final Camera camera = client().gameRenderer.mainCamera();
-        return new OverlayFrame(
-            context.poseStack(),
-            camera.position(),
-            null,
-            null,
-            FabricOrderedSubmitNodeCollector.of(context.submitNodeCollector()),
-            camera.yRot(),
-            camera.xRot(),
-            tickDelta()
-        );
-    }
     
-    private static OverlayFrame labelFrame(final LevelRenderContext context) {
-        final var cameraState = context.levelState().cameraRenderState;
-        return new OverlayFrame(
-            context.poseStack(),
-            cameraState.pos,
-            context.submitNodeCollector(),
-            cameraState.orientation,
-            FabricOrderedSubmitNodeCollector.of(context.submitNodeCollector()),
-            cameraState.yRot,
-            cameraState.xRot,
-            tickDelta()
-        );
-    }
 
     private static float tickDelta() {
         return client().getDeltaTracker().getGameTimeDeltaPartialTick(false);

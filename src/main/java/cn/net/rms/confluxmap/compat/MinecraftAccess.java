@@ -83,12 +83,12 @@ public final class MinecraftAccess {
 
     /** The active screen, whose owner moved from Minecraft to Gui in 26.2. */
     public static Screen screen(final Minecraft client) {
-        return client.gui.screen();
+        return client.screen;
     }
 
     /** Changes the active screen through the version-appropriate owner. */
     public static void setScreen(final Minecraft client, final Screen screen) {
-        client.gui.setScreen(screen);
+        client.setScreen(screen);
     }
 
     /** Inventory-style screens also host JEI/REI overlays, so the minimap HUD must yield to them. */
@@ -107,7 +107,7 @@ public final class MinecraftAccess {
      * HUD-side mods must hide with it — Fabric's HUD callbacks keep firing either way.
      */
     public static boolean isHudHidden(final Minecraft client) {
-        return client.gui.hud.isHidden();
+        return client.options.hideGui;
     }
 
     public static void sendChat(final Minecraft client, final String message) {

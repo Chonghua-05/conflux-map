@@ -75,7 +75,7 @@ final class LabelPass implements WaypointLabelPainter.Sink {
      */
     @Override
     public void billboard(final PoseStack matrices, final float scale) {
-        matrices.multiply(frame.camera.getRotation());
+        matrices.mulPose(frame.camera.rotation());
         matrices.scale(scale, -scale, scale);
     }
 
@@ -104,13 +104,13 @@ final class LabelPass implements WaypointLabelPainter.Sink {
     @Override
     public void text(final PoseStack matrices, final String text, final float x, final float y, final int color) {
         drawSeeThroughText(
-            client.font, text, x, y, color, matrices, frame.immediate,
+            client.font, text, x, y, color, matrices, frame.buffers,
             WaypointLabelStyle.LABEL_LIGHT
         );
     }
 
     void endLabels() {
-        frame.immediate.draw();
+        frame.buffers.endBatch();
     }
 
     void endPass() {
@@ -121,18 +121,18 @@ final class LabelPass implements WaypointLabelPainter.Sink {
 
     /** Draws fully-lit marker text through the versioned text-layer argument. */
     private static void drawSeeThroughText(
-        final Font font,
+        final Font textRenderer,
         final String text,
         final float x,
         final float y,
         final int color,
         final PoseStack matrices,
-        final MultiBufferSource.Immediate immediate,
+        final MultiBufferSource.BufferSource immediate,
         final int light
     ) {
-        font.draw(
+        textRenderer.drawInBatch(
             text, x, y, color, false, matrices.last().pose(), immediate,
-            Font.TextLayerType.SEE_THROUGH, 0, light
+            Font.DisplayMode.SEE_THROUGH, 0, light
         );
     }
 }
